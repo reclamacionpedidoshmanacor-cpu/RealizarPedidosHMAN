@@ -130,7 +130,7 @@ export default function Navbar() {
               priority
             />
             <p className="text-[10px] font-medium text-slate-500 leading-none pl-0.5 tracking-wide">
-              Farmacia Oncológica &mdash; Gestión de Pedidos y Consumo
+              Servicio de Farmacia &mdash; Gestión de Pedidos y Consumo
             </p>
           </div>
 
