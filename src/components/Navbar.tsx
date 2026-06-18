@@ -117,8 +117,9 @@ export default function Navbar() {
 
   return (
     <nav className="sticky top-0 z-50 border-b border-slate-200/80 bg-white/80 backdrop-blur-lg">
-      <div className="mx-auto max-w-[1400px] px-4 sm:px-6 lg:px-8">
-        <div className="flex h-16 items-center justify-between gap-4">
+      <div className="w-full px-4 sm:px-6 lg:px-8">
+        <div className="flex h-16 items-center gap-3">
+
           {/* Logo + título */}
           <div className="flex flex-col items-start gap-0.5 shrink-0">
             <Image
@@ -134,10 +135,10 @@ export default function Navbar() {
             </p>
           </div>
 
-          {/* Área activa + logout */}
+          {/* Área activa + logout — pegados al logo */}
           <div className="flex items-center gap-2 shrink-0">
             {area && (
-              <span className="hidden md:inline-flex items-center gap-1.5 rounded-full bg-teal-50 border border-teal-200 px-3 py-1 text-xs font-semibold text-teal-700">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-teal-50 border border-teal-200 px-3 py-1 text-xs font-semibold text-teal-700">
                 <span className="h-1.5 w-1.5 rounded-full bg-teal-500" />
                 {AREA_LABELS[area] ?? area}
               </span>
@@ -153,8 +154,11 @@ export default function Navbar() {
             </button>
           </div>
 
-          {/* Pestañas */}
-          <div className="flex items-center gap-0.5 rounded-xl bg-slate-100 p-1 overflow-x-auto">
+          {/* Separador vertical */}
+          <div className="h-6 w-px bg-slate-200 shrink-0" />
+
+          {/* Pestañas — ocupan el ancho restante, sin recuadro */}
+          <div className="flex items-center flex-1 gap-1">
             {tabs.map(tab => {
               const isActive = pathname === tab.href || (pathname === '/' && tab.href === '/inicio');
               return (
@@ -164,8 +168,8 @@ export default function Navbar() {
                   className={cn(
                     'flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200 whitespace-nowrap',
                     isActive
-                      ? 'bg-white text-teal-700 shadow-sm ring-1 ring-slate-200/50'
-                      : 'text-slate-500 hover:text-slate-700'
+                      ? 'bg-teal-50 text-teal-700 ring-1 ring-teal-200'
+                      : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
                   )}
                 >
                   {tab.icon}
@@ -174,6 +178,7 @@ export default function Navbar() {
               );
             })}
           </div>
+
         </div>
       </div>
     </nav>
