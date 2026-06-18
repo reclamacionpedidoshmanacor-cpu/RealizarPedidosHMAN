@@ -6,6 +6,42 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 
 ---
 
+## [0.2.0] — Junio 2026 *(flujo Stock → Propuesta → Tramitada)*
+
+### Añadido
+
+#### Pestaña Pedidos y nueva pestaña Propuesta
+- La vista anterior de `Propuesta` se mueve a nueva pestaña `Pedidos` (consulta de PedidosPendientes)
+- Nueva pestaña `Propuesta` basada en catálogo + recuento pendiente
+- Cálculo automático de cajas propuestas usando `stockActual <= puntoPedido` y reposición hasta `stockMaximo`
+- Edición manual de cantidad propuesta con motivo obligatorio cuando hay ajuste
+- Motivos soportados: Previsión aumento de consumo, Rotura proveedor, Caducidad < 6 meses, Exceso de stock, Sustitución y Otro (texto libre)
+
+#### Gestión de recuentos en Stock
+- API `GET/POST /api/stock/recuentos` para crear y listar recuentos por área
+- API `PATCH /api/stock/recuentos/[id]` para editar líneas del recuento pendiente
+- Soporte de importación Excel desde origen `SAP` y `Manual`
+- Restricción de un único recuento `pendiente` por área para evitar errores operativos
+
+#### Tramitación y exportación de propuesta
+- API `GET /api/propuestas/actual` para crear o recuperar borrador ligado al recuento pendiente
+- API `PATCH /api/propuestas/lineas/[id]` para guardar ajustes y motivos
+- API `POST /api/propuestas/tramitar` para cerrar propuesta y marcar recuento como `generado`
+- API `GET /api/propuestas/[id]/excel` para exportar Excel descargable con:
+  - Código SAP (`14 + CN`)
+  - Descripción de medicamento
+  - Cantidad en unidades (`cajas * unidades_por_caja`)
+
+### Cambiado
+
+#### Modelo de datos reutilizando tablas existentes
+- Se mantienen las tablas actuales (sin crear nuevas), ampliando campos para estados y trazabilidad:
+  - `importaciones_stock`: `area`, `estado`, `generado_en`, `propuesta_id`
+  - `propuestas`: `area`, `tramitada_en`, `excel_generado_en`
+  - `propuestas_lineas`: snapshots de stock min/punto/max, `unidades_por_caja`, `motivo_ajuste`, `motivo_ajuste_otro`, `nombre_medicamento`
+
+---
+
 ## [0.1.1] — Junio 2026 *(hardening de integridad y seguridad API)*
 
 ### Añadido

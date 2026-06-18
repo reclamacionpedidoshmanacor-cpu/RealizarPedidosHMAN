@@ -54,9 +54,13 @@ export const preciosHistorial = sqliteTable('precios_historial', {
 // ---------------------------------------------------------------------------
 export const importacionesStock = sqliteTable('importaciones_stock', {
   id:             integer('id').primaryKey({ autoIncrement: true }),
+  area:           text('area').notNull().default('oncologia'),
   origen:         text('origen').notNull(),                          // 'SAP' | 'Manual'
+  estado:         text('estado').notNull().default('pendiente'),     // 'pendiente' | 'validado' | 'generado'
   fechaRecuento:  text('fecha_recuento').notNull(),                  // fecha declarada del stock
   importadoEn:    text('importado_en').notNull().default(sql`(datetime('now'))`),
+  generadoEn:     text('generado_en'),
+  propuestaId:    integer('propuesta_id'),
   ficheroNombre:  text('fichero_nombre'),
   totalLineas:    integer('total_lineas').notNull().default(0),
   observaciones:  text('observaciones'),
@@ -82,10 +86,13 @@ export const stockRegistros = sqliteTable('stock_registros', {
 // ---------------------------------------------------------------------------
 export const propuestas = sqliteTable('propuestas', {
   id:                integer('id').primaryKey({ autoIncrement: true }),
+  area:              text('area').notNull().default('oncologia'),
   fechaGeneracion:   text('fecha_generacion').notNull().default(sql`(datetime('now'))`),
-  estado:            text('estado').notNull().default('borrador'),   // 'borrador' | 'validada' | 'emitida'
+  estado:            text('estado').notNull().default('borrador'),   // 'borrador' | 'tramitada'
   validadaEn:        text('validada_en'),
+  tramitadaEn:       text('tramitada_en'),
   emitidaEn:         text('emitida_en'),
+  excelGeneradoEn:   text('excel_generado_en'),
   importacionStockId: integer('importacion_stock_id').references(() => importacionesStock.id),
   observaciones:     text('observaciones'),
 });
@@ -97,10 +104,17 @@ export const propuestasLineas = sqliteTable('propuestas_lineas', {
   id:                integer('id').primaryKey({ autoIncrement: true }),
   propuestaId:       integer('propuesta_id').notNull().references(() => propuestas.id),
   cn:                text('cn').notNull().references(() => medicamentos.cn),
+  nombreMedicamento: text('nombre_medicamento'),
+  unidadesPorCaja:   integer('unidades_por_caja').notNull().default(1),
   stockActual:       real('stock_actual').notNull(),                 // cajas en el momento de generar
+  stockMinimoSnap:   integer('stock_minimo_snap').notNull().default(0),
+  puntoPedidoSnap:   integer('punto_pedido_snap').notNull().default(0),
+  stockMaximoSnap:   integer('stock_maximo_snap').notNull().default(0),
   stockObjetivoSnap: integer('stock_objetivo_snap').notNull(),       // stock óptimo snapshot
   cajasPropuestas:   integer('cajas_propuestas').notNull(),          // calculado por sistema
   cajasValidadas:    integer('cajas_validadas'),                     // modificado por farmacéutico
+  motivoAjuste:      text('motivo_ajuste'),
+  motivoAjusteOtro:  text('motivo_ajuste_otro'),
   unidadesFinal:     integer('unidades_final'),                      // cajas_validadas × unidades_por_caja
   precioRefCaja:     real('precio_ref_caja'),                        // precio snapshot
   importeEstimado:   real('importe_estimado'),
