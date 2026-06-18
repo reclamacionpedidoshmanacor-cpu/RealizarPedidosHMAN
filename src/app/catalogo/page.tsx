@@ -57,6 +57,7 @@ export default function CatalogoPage() {
   const [sortKey, setSortKey] = useState<SortKey>('principioActivo');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [showNuevo, setShowNuevo] = useState(false);
+  const [omitidos, setOmitidos] = useState<Array<{ cn: string; nombre: string; areaExistente: string }>>([]);
   const [nuevoData, setNuevoData] = useState({ ...NUEVO_EMPTY });
   const [savingNuevo, setSavingNuevo] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -104,7 +105,8 @@ export default function CatalogoPage() {
       const data = await res.json();
       if (!res.ok) { toast.error(data.error ?? 'Error al importar'); return; }
       toast.success(`Importado: ${data.insertados} nuevos, ${data.actualizados} actualizados (${data.via})`);
-      if (data.errores?.length) toast.warning(`${data.errores.length} advertencias — revisa la consola`);
+      if (data.errores?.length) toast.warning(`${data.errores.length} advertencias de formato — revisa la consola`);
+      if (data.omitidos?.length) setOmitidos(data.omitidos);
       fetchMeds();
     } catch { toast.error('Error de conexión'); }
     finally { setImporting(false); if (fileRef.current) fileRef.current.value = ''; }
@@ -406,6 +408,41 @@ export default function CatalogoPage() {
         <p className="mt-3 text-xs text-slate-400 text-right">
           Mostrando {filtered.length} de {meds.length} medicamentos
         </p>
+      )}
+
+      {/* Panel de medicamentos omitidos — cierre manual */}
+      {omitidos.length > 0 && (
+        <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <svg className="h-5 w-5 mt-0.5 text-amber-500 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+              </svg>
+              <div>
+                <p className="text-sm font-semibold text-amber-800 mb-1">
+                  {omitidos.length} medicamento{omitidos.length > 1 ? 's' : ''} no importado{omitidos.length > 1 ? 's' : ''} — CN ya existe en otra área
+                </p>
+                <p className="text-xs text-amber-700 mb-2">Toma nota antes de cerrar este aviso.</p>
+                <ul className="space-y-1">
+                  {omitidos.map(o => (
+                    <li key={o.cn} className="text-xs text-amber-900 font-mono bg-amber-100 rounded px-2 py-1">
+                      <span className="font-semibold">{o.cn}</span>
+                      {' — '}
+                      <span>{o.nombre}</span>
+                      <span className="ml-2 text-amber-600">(registrado en: {o.areaExistente})</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+            <button
+              onClick={() => setOmitidos([])}
+              className="shrink-0 rounded-lg border border-amber-300 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100 transition-colors"
+            >
+              Cerrar aviso
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Modal Nuevo medicamento */}

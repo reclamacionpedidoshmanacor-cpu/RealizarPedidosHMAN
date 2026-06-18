@@ -36,31 +36,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No se encontraron filas válidas.', errors }, { status: 400 });
     }
 
-    const conflictosArea: Array<{ cn: string; areaExistente: string }> = [];
+    let insertados = 0;
+    let actualizados = 0;
+    const omitidos: Array<{ cn: string; nombre: string; areaExistente: string }> = [];
+
     for (const row of rows) {
       const existing = await getMedicamentoByCn(row.cn);
 
       if (existing && existing.area !== area) {
-        conflictosArea.push({ cn: existing.cn, areaExistente: existing.area });
+        omitidos.push({ cn: existing.cn, nombre: row.nombre, areaExistente: existing.area });
+        continue;
       }
-    }
-
-    if (conflictosArea.length > 0) {
-      return NextResponse.json(
-        {
-          error: 'Se detectaron CN ya existentes en otra area. Importacion cancelada.',
-          conflictos: conflictosArea,
-        },
-        { status: 409 }
-      );
-    }
-
-    let insertados = 0;
-    let actualizados = 0;
-
-    for (const row of rows) {
-      // Upsert medicamento
-      const existing = await getMedicamentoByCn(row.cn);
 
       if (existing) {
         await updateMedicamento({
@@ -107,6 +93,7 @@ export async function POST(req: NextRequest) {
       total: rows.length,
       insertados,
       actualizados,
+      omitidos,
       errores: errors,
     });
   } catch (err) {
