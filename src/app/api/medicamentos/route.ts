@@ -1,13 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { medicamentos, stockObjetivo } from '@/db/schema';
-import { eq, and, asc } from 'drizzle-orm';
+import { eq, asc } from 'drizzle-orm';
 import { isMSE } from '@/lib/utils';
+import { isValidArea } from '@/lib/areas';
+import { requireApiSession } from '@/lib/api-auth';
 
 export const runtime = 'nodejs';
 
 export async function GET(req: NextRequest) {
-  const area = req.nextUrl.searchParams.get('area') ?? 'oncologia';
+  const session = requireApiSession(req);
+  if (!session.ok) return session.response;
+
+  const queryArea = req.nextUrl.searchParams.get('area');
+  if (queryArea && !isValidArea(queryArea)) {
+    return NextResponse.json({ error: 'Area no valida.' }, { status: 400 });
+  }
+
+  const area = queryArea ?? session.area;
+  if (area !== session.area) {
+    return NextResponse.json({ error: 'No autorizado para otra area.' }, { status: 403 });
+  }
+
   const rows = await db
     .select({
       cn:              medicamentos.cn,
@@ -36,16 +50,46 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const session = requireApiSession(req);
+  if (!session.ok) return session.response;
+
   const body = await req.json();
   const cn = String(body.cn ?? '').trim();
   if (!cn) return NextResponse.json({ error: 'CN requerido.' }, { status: 400 });
+
+  const area = body.area ?? session.area;
+  if (!isValidArea(area)) {
+    return NextResponse.json({ error: 'Area no valida.' }, { status: 400 });
+  }
+  if (area !== session.area) {
+    return NextResponse.json({ error: 'No autorizado para crear en otra area.' }, { status: 403 });
+  }
+
+  const existing = await db
+    .select({ cn: medicamentos.cn, area: medicamentos.area })
+    .from(medicamentos)
+    .where(eq(medicamentos.cn, cn))
+    .get();
+
+  if (existing) {
+    if (existing.area !== area) {
+      return NextResponse.json(
+        { error: `El CN ${cn} ya existe en el area ${existing.area} y no puede reasignarse.` },
+        { status: 409 }
+      );
+    }
+    return NextResponse.json(
+      { error: `El CN ${cn} ya existe en el catalogo del area ${area}.` },
+      { status: 409 }
+    );
+  }
 
   await db.insert(medicamentos).values({
     cn,
     nombre:          body.nombre,
     principioActivo: body.principioActivo ?? null,
     via:             body.via ?? null,
-    area:            body.area ?? 'oncologia',
+    area,
     ubicacion:       body.ubicacion ?? null,
     unidadesPorCaja: Number(body.unidadesPorCaja),
     activo:          body.activo ?? true,

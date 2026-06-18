@@ -6,6 +6,41 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 
 ---
 
+## [0.1.1] — Junio 2026 *(hardening de integridad y seguridad API)*
+
+### Añadido
+
+#### Seguridad y validación de sesión en backend
+- Nuevo helper `src/lib/api-auth.ts` para exigir sesión válida en API (`auth_session` + `area_session`)
+- Validación de área de sesión frente a catálogo permitido (`oncologia`, `upe`, `iv`, `nutricion`, `almacen`)
+- Restricción de acceso por área de sesión en:
+  - `GET /api/medicamentos`
+  - `POST /api/medicamentos`
+  - `PATCH /api/medicamentos/[cn]`
+  - `DELETE /api/medicamentos/[cn]`
+  - `POST /api/catalogo/importar`
+- Respuestas de autorización explícitas:
+  - `401` sesión inválida
+  - `403` intento de operar sobre área distinta
+
+#### Integridad de datos CN ↔ área
+- Nuevo helper `src/lib/areas.ts` como fuente única de áreas válidas
+- `POST /api/medicamentos` ahora:
+  - bloquea alta de CN duplicado en la misma área (`409`)
+  - bloquea CN existente en otra área con mensaje de conflicto (`409`)
+- `PATCH /api/medicamentos/[cn]` ahora bloquea la reasignación de un CN a otra área (`409`)
+- `POST /api/catalogo/importar` ahora:
+  - valida que el área de importación coincida con la sesión activa
+  - cancela la importación completa si detecta CN existentes en otra área (`409`)
+  - devuelve detalle de conflictos detectados
+
+### Cambiado
+
+#### Login y normalización de área
+- `POST /api/auth` valida el área recibida y solo persiste un valor permitido en `area_session` (fallback a `oncologia` si no es válida)
+
+---
+
 ## [0.1.0] — Junio 2026 *(implantación inicial local)*
 
 ### Añadido

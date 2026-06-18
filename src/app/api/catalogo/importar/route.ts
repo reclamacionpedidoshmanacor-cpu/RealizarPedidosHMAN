@@ -2,23 +2,58 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { medicamentos, stockObjetivo } from '@/db/schema';
 import { parseCatalogoExcel } from '@/lib/catalogo-parser';
-import { eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
+import { isValidArea } from '@/lib/areas';
+import { requireApiSession } from '@/lib/api-auth';
 
 export const runtime = 'nodejs';
 
 export async function POST(req: NextRequest) {
   try {
+    const session = requireApiSession(req);
+    if (!session.ok) return session.response;
+
     const formData = await req.formData();
     const file = formData.get('file') as File | null;
-    const area = (formData.get('area') as string) || 'oncologia';
+    const areaValue = formData.get('area') as string | null;
+    const area = areaValue ?? session.area;
 
     if (!file) return NextResponse.json({ error: 'Falta el archivo.' }, { status: 400 });
+    if (!isValidArea(area)) {
+      return NextResponse.json({ error: 'Area no valida.' }, { status: 400 });
+    }
+    if (area !== session.area) {
+      return NextResponse.json({ error: 'No autorizado para importar en otra area.' }, { status: 403 });
+    }
 
     const buffer = Buffer.from(await file.arrayBuffer());
     const { rows, errors, via } = parseCatalogoExcel(buffer);
 
     if (rows.length === 0) {
       return NextResponse.json({ error: 'No se encontraron filas válidas.', errors }, { status: 400 });
+    }
+
+    const conflictosArea: Array<{ cn: string; areaExistente: string }> = [];
+    for (const row of rows) {
+      const existing = await db
+        .select({ cn: medicamentos.cn, area: medicamentos.area })
+        .from(medicamentos)
+        .where(eq(medicamentos.cn, row.cn))
+        .get();
+
+      if (existing && existing.area !== area) {
+        conflictosArea.push({ cn: existing.cn, areaExistente: existing.area });
+      }
+    }
+
+    if (conflictosArea.length > 0) {
+      return NextResponse.json(
+        {
+          error: 'Se detectaron CN ya existentes en otra area. Importacion cancelada.',
+          conflictos: conflictosArea,
+        },
+        { status: 409 }
+      );
     }
 
     let insertados = 0;
@@ -34,7 +69,6 @@ export async function POST(req: NextRequest) {
           nombre:          row.nombre,
           principioActivo: row.principioActivo,
           via:             row.via,
-          area,
           ubicacion:       row.ubicacion,
           unidadesPorCaja: row.unidadesPorCaja,
           activo:          row.activo,

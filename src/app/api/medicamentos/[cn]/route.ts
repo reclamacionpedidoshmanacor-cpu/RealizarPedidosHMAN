@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { medicamentos, stockObjetivo } from '@/db/schema';
 import { eq } from 'drizzle-orm';
+import { isValidArea } from '@/lib/areas';
+import { requireApiSession } from '@/lib/api-auth';
 
 export const runtime = 'nodejs';
 
@@ -9,8 +11,35 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ cn: string }> }
 ) {
+  const session = requireApiSession(req);
+  if (!session.ok) return session.response;
+
   const { cn } = await params;
   const body = await req.json();
+  const existing = await db
+    .select({ cn: medicamentos.cn, area: medicamentos.area })
+    .from(medicamentos)
+    .where(eq(medicamentos.cn, cn))
+    .get();
+
+  if (!existing) {
+    return NextResponse.json({ error: 'Medicamento no encontrado.' }, { status: 404 });
+  }
+  if (existing.area !== session.area) {
+    return NextResponse.json({ error: 'No autorizado para esta area.' }, { status: 403 });
+  }
+  if ('area' in body) {
+    if (!isValidArea(body.area)) {
+      return NextResponse.json({ error: 'Area no valida.' }, { status: 400 });
+    }
+    if (body.area !== existing.area) {
+      return NextResponse.json(
+        { error: `El CN ${cn} pertenece al area ${existing.area} y no puede reasignarse.` },
+        { status: 409 }
+      );
+    }
+    delete body.area;
+  }
 
   const medUpdate: Record<string, unknown> = { actualizadoEn: new Date().toISOString() };
   const objUpdate: Record<string, unknown> = { actualizadoEn: new Date().toISOString() };
@@ -39,10 +68,26 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ cn: string }> }
 ) {
+  const session = requireApiSession(req);
+  if (!session.ok) return session.response;
+
   const { cn } = await params;
+  const existing = await db
+    .select({ cn: medicamentos.cn, area: medicamentos.area })
+    .from(medicamentos)
+    .where(eq(medicamentos.cn, cn))
+    .get();
+
+  if (!existing) {
+    return NextResponse.json({ error: 'Medicamento no encontrado.' }, { status: 404 });
+  }
+  if (existing.area !== session.area) {
+    return NextResponse.json({ error: 'No autorizado para esta area.' }, { status: 403 });
+  }
+
   await db.delete(stockObjetivo).where(eq(stockObjetivo.cn, cn));
   await db.delete(medicamentos).where(eq(medicamentos.cn, cn));
   return NextResponse.json({ ok: true });

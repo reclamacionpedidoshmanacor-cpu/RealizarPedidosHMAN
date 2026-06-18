@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { isValidArea } from '@/lib/areas';
 
 export async function POST(req: NextRequest) {
   const { password, area } = await req.json();
@@ -8,11 +9,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Contraseña incorrecta.' }, { status: 401 });
   }
 
+  const areaId = isValidArea(area) ? area : 'oncologia';
+
   const res = NextResponse.json({ ok: true });
   res.cookies.set('auth_session', 'authenticated', {
     httpOnly: true, sameSite: 'lax', path: '/', maxAge: 60 * 60 * 12, // 12h
   });
-  res.cookies.set('area_session', area ?? 'oncologia', {
+  res.cookies.set('area_session', areaId, {
     httpOnly: false, sameSite: 'lax', path: '/', maxAge: 60 * 60 * 12,
   });
   return res;
