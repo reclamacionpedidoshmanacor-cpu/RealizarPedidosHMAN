@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
 import { cn, formatEuro } from '@/lib/utils';
 
@@ -13,11 +13,37 @@ interface Medicamento {
   stockMinimo: number | null; puntoPedido: number | null; stockMaximo: number | null;
 }
 
+type SortKey = 'principioActivo' | 'nombre' | 'cn' | 'ubicacion' | 'puntoPedido';
+type SortDir = 'asc' | 'desc';
+
 const VIA_BADGE: Record<string, string> = {
   IV:   'bg-blue-100 text-blue-700',
   ORAL: 'bg-teal-100 text-teal-700',
   OTRO: 'bg-slate-100 text-slate-600',
 };
+
+const NUEVO_EMPTY = {
+  cn: '', nombre: '', principioActivo: '', via: 'IV' as string,
+  ubicacion: '', unidadesPorCaja: 1, comprable: true,
+  stockMinimo: 0, puntoPedido: 0, stockMaximo: '' as number | '',
+};
+
+function SortIcon({ dir }: { dir: SortDir | null }) {
+  if (!dir) return (
+    <svg className="h-3 w-3 ml-1 text-slate-300" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l4-4 4 4M16 15l-4 4-4-4" />
+    </svg>
+  );
+  return dir === 'asc' ? (
+    <svg className="h-3 w-3 ml-1 text-teal-600" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5" />
+    </svg>
+  ) : (
+    <svg className="h-3 w-3 ml-1 text-teal-600" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+    </svg>
+  );
+}
 
 export default function CatalogoPage() {
   const [meds, setMeds] = useState<Medicamento[]>([]);
@@ -28,6 +54,11 @@ export default function CatalogoPage() {
   const [importing, setImporting] = useState(false);
   const [editingCn, setEditingCn] = useState<string | null>(null);
   const [editData, setEditData] = useState<Partial<Medicamento>>({});
+  const [sortKey, setSortKey] = useState<SortKey>('principioActivo');
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
+  const [showNuevo, setShowNuevo] = useState(false);
+  const [nuevoData, setNuevoData] = useState({ ...NUEVO_EMPTY });
+  const [savingNuevo, setSavingNuevo] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const getArea = () => {
@@ -46,6 +77,20 @@ export default function CatalogoPage() {
   }, []);
 
   useEffect(() => { fetchMeds(); }, [fetchMeds]);
+
+  const ubicacionesUnicas = useMemo(() =>
+    Array.from(new Set(meds.map(m => m.ubicacion).filter(Boolean) as string[])).sort(),
+    [meds]
+  );
+
+  const handleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  };
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -102,16 +147,72 @@ export default function CatalogoPage() {
     else { toast.error('Error al guardar'); }
   };
 
-  const filtered = meds.filter(m => {
+  const handleNuevoSubmit = async () => {
+    if (!nuevoData.cn.trim() || !nuevoData.nombre.trim()) {
+      toast.error('CN y Nombre son obligatorios.');
+      return;
+    }
+    setSavingNuevo(true);
+    try {
+      const res = await fetch('/api/medicamentos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...nuevoData,
+          area: getArea(),
+          stockMaximo: nuevoData.stockMaximo === '' ? null : nuevoData.stockMaximo,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { toast.error(data.error ?? 'Error al crear medicamento'); return; }
+      toast.success('Medicamento creado correctamente.');
+      setShowNuevo(false);
+      setNuevoData({ ...NUEVO_EMPTY });
+      fetchMeds();
+    } catch { toast.error('Error de conexión'); }
+    finally { setSavingNuevo(false); }
+  };
+
+  const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    const matchSearch = !q || m.principioActivo?.toLowerCase().includes(q) || m.nombre.toLowerCase().includes(q) || m.cn.includes(q);
-    const matchVia = !filterVia || m.via === filterVia;
-    const matchActivo = !filterActivo || (filterActivo === 'si' ? m.activo : !m.activo);
-    return matchSearch && matchVia && matchActivo;
-  });
+    const base = meds.filter(m => {
+      const matchSearch = !q || m.principioActivo?.toLowerCase().includes(q) || m.nombre.toLowerCase().includes(q) || m.cn.includes(q);
+      const matchVia = !filterVia || m.via === filterVia;
+      const matchActivo = !filterActivo || (filterActivo === 'si' ? m.activo : !m.activo);
+      return matchSearch && matchVia && matchActivo;
+    });
+
+    return [...base].sort((a, b) => {
+      let av: string | number | null = null;
+      let bv: string | number | null = null;
+      if (sortKey === 'principioActivo') { av = a.principioActivo ?? ''; bv = b.principioActivo ?? ''; }
+      else if (sortKey === 'nombre') { av = a.nombre; bv = b.nombre; }
+      else if (sortKey === 'cn') { av = a.cn; bv = b.cn; }
+      else if (sortKey === 'ubicacion') { av = a.ubicacion ?? ''; bv = b.ubicacion ?? ''; }
+      else if (sortKey === 'puntoPedido') { av = a.puntoPedido ?? 0; bv = b.puntoPedido ?? 0; }
+
+      if (typeof av === 'number' && typeof bv === 'number') {
+        return sortDir === 'asc' ? av - bv : bv - av;
+      }
+      const cmp = String(av).localeCompare(String(bv), 'es', { sensitivity: 'base' });
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+  }, [meds, search, filterVia, filterActivo, sortKey, sortDir]);
 
   const activos = meds.filter(m => m.activo).length;
   const mseCount = meds.filter(m => m.mse).length;
+
+  const thSort = (key: SortKey, label: string, align: 'left' | 'center' = 'left') => (
+    <th
+      className={`px-4 py-3 text-${align} cursor-pointer select-none group`}
+      onClick={() => handleSort(key)}
+    >
+      <span className="inline-flex items-center gap-0.5 text-xs font-semibold text-slate-500 uppercase tracking-wide group-hover:text-teal-700 transition-colors">
+        {label}
+        <SortIcon dir={sortKey === key ? sortDir : null} />
+      </span>
+    </th>
+  );
 
   return (
     <div>
@@ -125,6 +226,15 @@ export default function CatalogoPage() {
         </div>
         <div className="flex items-center gap-2">
           <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImport} />
+          <button
+            onClick={() => setShowNuevo(true)}
+            className="flex items-center gap-2 rounded-lg border border-teal-600 px-4 py-2 text-sm font-medium text-teal-700 hover:bg-teal-50 transition-colors"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+            Nuevo medicamento
+          </button>
           <button
             onClick={() => fileRef.current?.click()}
             disabled={importing}
@@ -174,19 +284,19 @@ export default function CatalogoPage() {
         ) : (
           <table className="min-w-full text-sm">
             <thead>
-              <tr className="border-b border-slate-100 bg-slate-50 text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                <th className="px-4 py-3 text-left">CN</th>
-                <th className="px-4 py-3 text-left">Principio activo</th>
-                <th className="px-4 py-3 text-left">Nombre / Marca</th>
-                <th className="px-4 py-3 text-left">Vía</th>
-                <th className="px-4 py-3 text-left">Ubicación</th>
-                <th className="px-4 py-3 text-center">Uds/caja</th>
-                <th className="px-4 py-3 text-center">Mín</th>
-                <th className="px-4 py-3 text-center">Pto.Ped</th>
-                <th className="px-4 py-3 text-center">Máx</th>
-                <th className="px-4 py-3 text-center">Precio/caja</th>
-                <th className="px-4 py-3 text-center">Activo</th>
-                <th className="px-4 py-3 text-center">Acciones</th>
+              <tr className="border-b border-slate-100 bg-slate-50">
+                {thSort('cn', 'CN')}
+                {thSort('principioActivo', 'Principio activo')}
+                {thSort('nombre', 'Nombre / Marca')}
+                <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Vía</th>
+                {thSort('ubicacion', 'Ubicación')}
+                <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">Uds/caja</th>
+                <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">Mín</th>
+                {thSort('puntoPedido', 'Pto.Ped', 'center')}
+                <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">Máx</th>
+                <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">Precio/caja</th>
+                <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">Activo</th>
+                <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -202,7 +312,11 @@ export default function CatalogoPage() {
                     </td>
                     <td className="px-4 py-2 text-xs text-slate-500">{med.via}</td>
                     <td className="px-4 py-2">
-                      <input className="w-full rounded border border-slate-300 px-2 py-1 text-xs" value={editData.ubicacion ?? ''} onChange={e => setEditData(p => ({ ...p, ubicacion: e.target.value }))} />
+                      <UbicacionSelect
+                        value={editData.ubicacion ?? ''}
+                        onChange={v => setEditData(p => ({ ...p, ubicacion: v }))}
+                        opciones={ubicacionesUnicas}
+                      />
                     </td>
                     <td className="px-4 py-2 text-center">
                       <input type="number" className="w-16 rounded border border-slate-300 px-2 py-1 text-xs text-center" value={editData.unidadesPorCaja ?? ''} onChange={e => setEditData(p => ({ ...p, unidadesPorCaja: Number(e.target.value) }))} />
@@ -287,12 +401,181 @@ export default function CatalogoPage() {
         )}
       </div>
 
-      {/* Pie con totales */}
+      {/* Pie */}
       {filtered.length > 0 && (
         <p className="mt-3 text-xs text-slate-400 text-right">
           Mostrando {filtered.length} de {meds.length} medicamentos
         </p>
       )}
+
+      {/* Modal Nuevo medicamento */}
+      {showNuevo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+              <h2 className="text-base font-semibold text-slate-800">Nuevo medicamento</h2>
+              <button onClick={() => setShowNuevo(false)} className="text-slate-400 hover:text-slate-600">
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="px-6 py-4 space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="CN *">
+                  <input
+                    className="field-input"
+                    placeholder="Código Nacional"
+                    value={nuevoData.cn}
+                    onChange={e => setNuevoData(p => ({ ...p, cn: e.target.value.trim() }))}
+                  />
+                </Field>
+                <Field label="Vía">
+                  <select
+                    className="field-input bg-white"
+                    value={nuevoData.via}
+                    onChange={e => setNuevoData(p => ({ ...p, via: e.target.value }))}
+                  >
+                    <option value="IV">IV</option>
+                    <option value="ORAL">ORAL</option>
+                    <option value="OTRO">OTRO</option>
+                  </select>
+                </Field>
+              </div>
+              <Field label="Nombre / Marca *">
+                <input
+                  className="field-input"
+                  placeholder="Nombre comercial"
+                  value={nuevoData.nombre}
+                  onChange={e => setNuevoData(p => ({ ...p, nombre: e.target.value }))}
+                />
+              </Field>
+              <Field label="Principio activo">
+                <input
+                  className="field-input"
+                  placeholder="Principio activo"
+                  value={nuevoData.principioActivo}
+                  onChange={e => setNuevoData(p => ({ ...p, principioActivo: e.target.value }))}
+                />
+              </Field>
+              <Field label="Ubicación">
+                <UbicacionSelect
+                  value={nuevoData.ubicacion}
+                  onChange={v => setNuevoData(p => ({ ...p, ubicacion: v }))}
+                  opciones={ubicacionesUnicas}
+                />
+              </Field>
+              <div className="grid grid-cols-4 gap-3">
+                <Field label="Uds/caja">
+                  <input type="number" min={1} className="field-input text-center" value={nuevoData.unidadesPorCaja} onChange={e => setNuevoData(p => ({ ...p, unidadesPorCaja: Number(e.target.value) }))} />
+                </Field>
+                <Field label="Stock mín.">
+                  <input type="number" min={0} className="field-input text-center" value={nuevoData.stockMinimo} onChange={e => setNuevoData(p => ({ ...p, stockMinimo: Number(e.target.value) }))} />
+                </Field>
+                <Field label="Pto. pedido">
+                  <input type="number" min={0} className="field-input text-center" value={nuevoData.puntoPedido} onChange={e => setNuevoData(p => ({ ...p, puntoPedido: Number(e.target.value) }))} />
+                </Field>
+                <Field label="Stock máx.">
+                  <input type="number" min={0} className="field-input text-center" value={nuevoData.stockMaximo} onChange={e => setNuevoData(p => ({ ...p, stockMaximo: e.target.value === '' ? '' : Number(e.target.value) }))} />
+                </Field>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 px-6 py-4 border-t border-slate-100">
+              <button
+                onClick={() => { setShowNuevo(false); setNuevoData({ ...NUEVO_EMPTY }); }}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleNuevoSubmit}
+                disabled={savingNuevo}
+                className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-medium text-white hover:bg-teal-800 disabled:opacity-50 transition-colors"
+              >
+                {savingNuevo ? 'Guardando…' : 'Crear medicamento'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        .field-input {
+          width: 100%;
+          border-radius: 0.375rem;
+          border: 1px solid #cbd5e1;
+          padding: 0.375rem 0.5rem;
+          font-size: 0.8125rem;
+          outline: none;
+        }
+        .field-input:focus {
+          ring: 2px solid #14b8a6;
+          border-color: #14b8a6;
+        }
+      `}</style>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-xs font-medium text-slate-600 mb-1">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+function UbicacionSelect({
+  value, onChange, opciones,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  opciones: string[];
+}) {
+  const [modo, setModo] = useState<'select' | 'input'>('select');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (modo === 'input') inputRef.current?.focus();
+  }, [modo]);
+
+  if (modo === 'input' || opciones.length === 0) {
+    return (
+      <div className="flex gap-1">
+        <input
+          ref={inputRef}
+          className="field-input flex-1"
+          placeholder="Nueva ubicación…"
+          value={value}
+          onChange={e => onChange(e.target.value)}
+        />
+        {opciones.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setModo('select')}
+            className="rounded border border-slate-300 px-2 text-xs text-slate-500 hover:bg-slate-100"
+            title="Ver existentes"
+          >↩</button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex gap-1">
+      <select
+        className="field-input flex-1 bg-white"
+        value={opciones.includes(value) ? value : ''}
+        onChange={e => {
+          if (e.target.value === '__nueva__') { setModo('input'); onChange(''); }
+          else onChange(e.target.value);
+        }}
+      >
+        <option value="">— sin ubicación —</option>
+        {opciones.map(o => <option key={o} value={o}>{o}</option>)}
+        <option value="__nueva__">✏ Nueva ubicación…</option>
+      </select>
     </div>
   );
 }
