@@ -27,8 +27,31 @@ function normalizeCn(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const digits = raw.replace(/\D/g, '');
   if (!digits) return null;
-  const withoutSapPrefix = digits.startsWith('14') && digits.length > 7 ? digits.slice(2) : digits;
-  return withoutSapPrefix.replace(/^0+/, '') || withoutSapPrefix;
+  return digits;
+}
+
+function cnVariants(raw: string | null | undefined): string[] {
+  const base = normalizeCn(raw);
+  if (!base) return [];
+
+  const set = new Set<string>();
+  const addVariants = (value: string) => {
+    if (!value) return;
+    set.add(value);
+    set.add(value.replace(/^0+/, '') || '0');
+    if (value.length >= 7) set.add(value.slice(-7));
+    if (value.length >= 6) set.add(value.slice(-6));
+    if (value.startsWith('14') && value.length > 7) {
+      const trimmed = value.slice(2);
+      set.add(trimmed);
+      set.add(trimmed.replace(/^0+/, '') || '0');
+      if (trimmed.length >= 7) set.add(trimmed.slice(-7));
+      if (trimmed.length >= 6) set.add(trimmed.slice(-6));
+    }
+  };
+
+  addVariants(base);
+  return [...set];
 }
 
 function extractCnCandidates(pedido: PedidoPendienteRow): string[] {
@@ -36,13 +59,11 @@ function extractCnCandidates(pedido: PedidoPendienteRow): string[] {
   const set = new Set<string>();
 
   for (const value of values) {
-    const direct = normalizeCn(value);
-    if (direct) set.add(direct);
+    for (const v of cnVariants(value)) set.add(v);
 
-    const chunks = value.match(/\d{6,10}/g) ?? [];
+    const chunks = value.match(/\d{6,18}/g) ?? [];
     for (const chunk of chunks) {
-      const cn = normalizeCn(chunk);
-      if (cn) set.add(cn);
+      for (const v of cnVariants(chunk)) set.add(v);
     }
   }
 
@@ -68,16 +89,24 @@ export async function GET(req: NextRequest) {
       loadPedidosConRespuestas({ estado, soloReclamados, limit }),
     ]);
 
-    const medsByCn = new Map(
-      catalogo.map((med) => [
-        normalizeCn(med.cn),
-        {
-          cn: normalizeCn(med.cn) ?? med.cn,
+    const medsByCn = new Map<
+      string,
+      {
+        cn: string;
+        nombre: string;
+        principioActivo: string;
+      }
+    >();
+    for (const med of catalogo) {
+      const canonical = med.cn.replace(/\D/g, '') || med.cn;
+      for (const key of cnVariants(med.cn)) {
+        medsByCn.set(key, {
+          cn: canonical,
           nombre: med.nombre,
           principioActivo: med.principioActivo ?? '',
-        },
-      ])
-    );
+        });
+      }
+    }
 
     const twoMonthsAgo = new Date();
     twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
