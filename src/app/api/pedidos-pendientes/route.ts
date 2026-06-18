@@ -23,51 +23,12 @@ function parseLimit(value: string | null): number {
   return Math.min(Math.trunc(num), 1000);
 }
 
-function normalizeCn(raw: string | null | undefined): string | null {
+function toCn6(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const digits = raw.replace(/\D/g, '');
   if (!digits) return null;
-  return digits;
-}
-
-function cnVariants(raw: string | null | undefined): string[] {
-  const base = normalizeCn(raw);
-  if (!base) return [];
-
-  const set = new Set<string>();
-  const addVariants = (value: string) => {
-    if (!value) return;
-    set.add(value);
-    set.add(value.replace(/^0+/, '') || '0');
-    if (value.length >= 7) set.add(value.slice(-7));
-    if (value.length >= 6) set.add(value.slice(-6));
-    if (value.startsWith('14') && value.length > 7) {
-      const trimmed = value.slice(2);
-      set.add(trimmed);
-      set.add(trimmed.replace(/^0+/, '') || '0');
-      if (trimmed.length >= 7) set.add(trimmed.slice(-7));
-      if (trimmed.length >= 6) set.add(trimmed.slice(-6));
-    }
-  };
-
-  addVariants(base);
-  return [...set];
-}
-
-function extractCnCandidates(pedido: PedidoPendienteRow): string[] {
-  const values = [pedido.cnRaw, pedido.textoBreve].filter(Boolean) as string[];
-  const set = new Set<string>();
-
-  for (const value of values) {
-    for (const v of cnVariants(value)) set.add(v);
-
-    const chunks = value.match(/\d{6,18}/g) ?? [];
-    for (const chunk of chunks) {
-      for (const v of cnVariants(chunk)) set.add(v);
-    }
-  }
-
-  return [...set];
+  if (digits.length > 6) return digits.slice(-6);
+  return digits.padStart(6, '0');
 }
 
 function parseSearch(value: string | null): string {
@@ -98,16 +59,14 @@ export async function GET(req: NextRequest) {
       }
     >();
     for (const med of catalogo) {
-      const canonical = med.cn.replace(/\D/g, '') || med.cn;
-      for (const key of cnVariants(med.cn)) {
-        medsByCn.set(key, {
-          cn: canonical,
-          nombre: med.nombre,
-          principioActivo: med.principioActivo ?? '',
-        });
-      }
+      const cn6 = toCn6(med.cn);
+      if (!cn6) continue;
+      medsByCn.set(cn6, {
+        cn: cn6,
+        nombre: med.nombre,
+        principioActivo: med.principioActivo ?? '',
+      });
     }
-
     const twoMonthsAgo = new Date();
     twoMonthsAgo.setMonth(twoMonthsAgo.getMonth() - 2);
     const groupsMap = new Map<
@@ -126,19 +85,21 @@ export async function GET(req: NextRequest) {
     >();
 
     for (const pedido of pedidos) {
-      const cnMatch = extractCnCandidates(pedido).find((cn) => medsByCn.has(cn));
-      if (!cnMatch) continue;
-
-      const med = medsByCn.get(cnMatch);
+      const cnPedido = toCn6(pedido.cnRaw);
+      if (!cnPedido) continue;
+      const med = medsByCn.get(cnPedido);
       if (!med) continue;
 
       if (search) {
         const hayMatch =
-          med.cn.toLowerCase().includes(search) || med.principioActivo.toLowerCase().includes(search);
+          med.cn.toLowerCase().includes(search) ||
+          med.principioActivo.toLowerCase().includes(search) ||
+          med.nombre.toLowerCase().includes(search);
         if (!hayMatch) continue;
       }
 
-      let group = groupsMap.get(cnMatch);
+      const groupKey = med.cn;
+      let group = groupsMap.get(groupKey);
       if (!group) {
         group = {
           cn: med.cn,
@@ -151,7 +112,7 @@ export async function GET(req: NextRequest) {
           detallePendientes: [],
           detalleRecibidos: [],
         };
-        groupsMap.set(cnMatch, group);
+        groupsMap.set(groupKey, group);
       }
 
       if (pedido.anulado) group.anulados += 1;

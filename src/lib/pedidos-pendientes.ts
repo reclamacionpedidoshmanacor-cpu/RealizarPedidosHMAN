@@ -96,96 +96,49 @@ export async function loadPedidosConRespuestas(params: LoadPedidosParams): Promi
     historial_registrado_at: string | null;
   };
 
-  let rows: PedidoRaw[] = [];
-  try {
-    rows = (await sql`
-      SELECT
-        o.id,
-        o.material::text AS cn_raw,
-        o.documento_compras,
-        o.posicion,
-        o.fecha_documento::text,
-        o.proveedor_nombre,
-        o.texto_breve,
-        o.por_entregar_cantidad::text,
-        o.cantidad_pedido::text,
-        o.recibido,
-        o.anulado,
-        o.reclamado,
-        rp.id AS respuesta_id,
-        rl.estado_actual::text AS estado_respuesta,
-        rl.texto_libre AS texto_respuesta,
-        rh.estado::text AS historial_estado,
-        rh.texto_libre AS historial_texto,
-        rh.registrado_at::text AS historial_registrado_at
-      FROM public.orders o
-      LEFT JOIN public.respuestas_proveedor rp
-        ON rp.documento_compras = o.documento_compras
-      LEFT JOIN public.respuestas_lineas rl
-        ON rl.respuesta_id = rp.id
-      AND rl.posicion = o.posicion
-      LEFT JOIN LATERAL (
-        SELECT h.estado, h.texto_libre, h.registrado_at
-        FROM public.respuestas_historial h
-        WHERE h.respuesta_linea_id = rl.id
-        ORDER BY h.registrado_at DESC
-        LIMIT 1
-      ) rh ON true
-      WHERE (
-        (${params.estado} = 'pendientes' AND o.recibido = false AND o.anulado = false)
-        OR (${params.estado} = 'recibidos' AND o.recibido = true)
-        OR (${params.estado} = 'anulados' AND o.anulado = true)
-        OR (${params.estado} = 'todos')
-      )
-      AND (${params.soloReclamados} = false OR o.reclamado = true)
-      ORDER BY o.fecha_documento DESC, o.documento_compras DESC, o.posicion ASC
-      LIMIT ${params.limit};
-    `) as PedidoRaw[];
-  } catch {
-    rows = (await sql`
-      SELECT
-        o.id,
-        NULL::text AS cn_raw,
-        o.documento_compras,
-        o.posicion,
-        o.fecha_documento::text,
-        o.proveedor_nombre,
-        o.texto_breve,
-        o.por_entregar_cantidad::text,
-        o.cantidad_pedido::text,
-        o.recibido,
-        o.anulado,
-        o.reclamado,
-        rp.id AS respuesta_id,
-        rl.estado_actual::text AS estado_respuesta,
-        rl.texto_libre AS texto_respuesta,
-        rh.estado::text AS historial_estado,
-        rh.texto_libre AS historial_texto,
-        rh.registrado_at::text AS historial_registrado_at
-      FROM public.orders o
-      LEFT JOIN public.respuestas_proveedor rp
-        ON rp.documento_compras = o.documento_compras
-      LEFT JOIN public.respuestas_lineas rl
-        ON rl.respuesta_id = rp.id
-      AND rl.posicion = o.posicion
-      LEFT JOIN LATERAL (
-        SELECT h.estado, h.texto_libre, h.registrado_at
-        FROM public.respuestas_historial h
-        WHERE h.respuesta_linea_id = rl.id
-        ORDER BY h.registrado_at DESC
-        LIMIT 1
-      ) rh ON true
-      WHERE (
-        (${params.estado} = 'pendientes' AND o.recibido = false AND o.anulado = false)
-        OR (${params.estado} = 'recibidos' AND o.recibido = true)
-        OR (${params.estado} = 'anulados' AND o.anulado = true)
-        OR (${params.estado} = 'todos')
-      )
-      AND (${params.soloReclamados} = false OR o.reclamado = true)
-      ORDER BY o.fecha_documento DESC, o.documento_compras DESC, o.posicion ASC
-      LIMIT ${params.limit};
-    `) as PedidoRaw[];
-  }
+  const rows = (await sql`
+    SELECT
+      o.id,
+      o.n_mate_prov::text AS cn_raw,
+      o.documento_compras,
+      o.posicion,
+      o.fecha_documento::text,
+      o.proveedor_nombre,
+      o.texto_breve,
+      o.por_entregar_cantidad::text,
+      o.cantidad_pedido::text,
+      o.recibido,
+      o.anulado,
+      o.reclamado,
+      rp.id AS respuesta_id,
+      rl.estado_actual::text AS estado_respuesta,
+      rl.texto_libre AS texto_respuesta,
+      rh.estado::text AS historial_estado,
+      rh.texto_libre AS historial_texto,
+      rh.registrado_at::text AS historial_registrado_at
+    FROM public.orders o
+    LEFT JOIN public.respuestas_proveedor rp
+      ON rp.documento_compras = o.documento_compras
+    LEFT JOIN public.respuestas_lineas rl
+      ON rl.respuesta_id = rp.id
+    AND rl.posicion = o.posicion
+    LEFT JOIN LATERAL (
+      SELECT h.estado, h.texto_libre, h.registrado_at
+      FROM public.respuestas_historial h
+      WHERE h.respuesta_linea_id = rl.id
+      ORDER BY h.registrado_at DESC
+      LIMIT 1
+    ) rh ON true
+    WHERE (
+      (${params.estado} = 'pendientes' AND o.recibido = false AND o.anulado = false)
+      OR (${params.estado} = 'recibidos' AND o.recibido = true)
+      OR (${params.estado} = 'anulados' AND o.anulado = true)
+      OR (${params.estado} = 'todos')
+    )
+    AND (${params.soloReclamados} = false OR o.reclamado = true)
+    ORDER BY o.fecha_documento DESC, o.documento_compras DESC, o.posicion ASC
+    LIMIT ${params.limit};
+  `) as PedidoRaw[];
 
   return rows.map((row) => ({
     id: row.id,
