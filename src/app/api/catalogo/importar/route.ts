@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/db';
-import { medicamentos, stockObjetivo } from '@/db/schema';
 import { parseCatalogoExcel } from '@/lib/catalogo-parser';
-import { eq } from 'drizzle-orm';
 import { isValidArea } from '@/lib/areas';
 import { requireApiSession } from '@/lib/api-auth';
+import {
+  getMedicamentoByCn,
+  insertMedicamento,
+  updateMedicamento,
+  upsertStockObjetivo,
+} from '@/lib/catalogo-neon';
 
 export const runtime = 'nodejs';
 
@@ -35,11 +38,7 @@ export async function POST(req: NextRequest) {
 
     const conflictosArea: Array<{ cn: string; areaExistente: string }> = [];
     for (const row of rows) {
-      const existing = await db
-        .select({ cn: medicamentos.cn, area: medicamentos.area })
-        .from(medicamentos)
-        .where(eq(medicamentos.cn, row.cn))
-        .get();
+      const existing = await getMedicamentoByCn(row.cn);
 
       if (existing && existing.area !== area) {
         conflictosArea.push({ cn: existing.cn, areaExistente: existing.area });
@@ -61,23 +60,22 @@ export async function POST(req: NextRequest) {
 
     for (const row of rows) {
       // Upsert medicamento
-      const existing = await db.select({ cn: medicamentos.cn }).from(medicamentos)
-        .where(eq(medicamentos.cn, row.cn)).get();
+      const existing = await getMedicamentoByCn(row.cn);
 
       if (existing) {
-        await db.update(medicamentos).set({
-          nombre:          row.nombre,
+        await updateMedicamento({
+          ...existing,
+          nombre: row.nombre,
           principioActivo: row.principioActivo,
-          via:             row.via,
-          ubicacion:       row.ubicacion,
+          via: row.via,
+          ubicacion: row.ubicacion,
           unidadesPorCaja: row.unidadesPorCaja,
-          activo:          row.activo,
-          mse:             row.mse,
-          actualizadoEn:   new Date().toISOString(),
-        }).where(eq(medicamentos.cn, row.cn));
+          activo: row.activo,
+          mse: row.mse,
+        });
         actualizados++;
       } else {
-        await db.insert(medicamentos).values({
+        await insertMedicamento({
           cn:              row.cn,
           nombre:          row.nombre,
           principioActivo: row.principioActivo,
@@ -88,29 +86,19 @@ export async function POST(req: NextRequest) {
           activo:          row.activo,
           comprable:       true,
           mse:             row.mse,
+          tipoMse:         null,
+          precioUnidad:    null,
+          precioCaja:      null,
         });
         insertados++;
       }
 
-      // Upsert stock objetivo
-      const objExisting = await db.select({ id: stockObjetivo.id }).from(stockObjetivo)
-        .where(eq(stockObjetivo.cn, row.cn)).get();
-
-      if (objExisting) {
-        await db.update(stockObjetivo).set({
-          stockMinimo:   row.stockMinimo,
-          puntoPedido:   row.puntoPedido,
-          stockMaximo:   row.stockMaximo ?? undefined,
-          actualizadoEn: new Date().toISOString(),
-        }).where(eq(stockObjetivo.cn, row.cn));
-      } else {
-        await db.insert(stockObjetivo).values({
-          cn:          row.cn,
-          stockMinimo: row.stockMinimo,
-          puntoPedido: row.puntoPedido,
-          stockMaximo: row.stockMaximo ?? undefined,
-        });
-      }
+      await upsertStockObjetivo(
+        row.cn,
+        row.stockMinimo,
+        row.puntoPedido,
+        row.stockMaximo ?? null
+      );
     }
 
     return NextResponse.json({

@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/db';
-import { medicamentos, stockObjetivo } from '@/db/schema';
-import { eq, asc } from 'drizzle-orm';
 import { isMSE } from '@/lib/utils';
 import { isValidArea } from '@/lib/areas';
 import { requireApiSession } from '@/lib/api-auth';
+import {
+  getMedicamentoByCn,
+  insertMedicamento,
+  listMedicamentosByArea,
+  upsertStockObjetivo,
+} from '@/lib/catalogo-neon';
 
 export const runtime = 'nodejs';
 
@@ -22,30 +25,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'No autorizado para otra area.' }, { status: 403 });
   }
 
-  const rows = await db
-    .select({
-      cn:              medicamentos.cn,
-      nombre:          medicamentos.nombre,
-      principioActivo: medicamentos.principioActivo,
-      via:             medicamentos.via,
-      area:            medicamentos.area,
-      ubicacion:       medicamentos.ubicacion,
-      unidadesPorCaja: medicamentos.unidadesPorCaja,
-      activo:          medicamentos.activo,
-      comprable:       medicamentos.comprable,
-      mse:             medicamentos.mse,
-      tipoMse:         medicamentos.tipoMse,
-      precioUnidad:    medicamentos.precioUnidad,
-      precioCaja:      medicamentos.precioCaja,
-      stockMinimo:     stockObjetivo.stockMinimo,
-      puntoPedido:     stockObjetivo.puntoPedido,
-      stockMaximo:     stockObjetivo.stockMaximo,
-    })
-    .from(medicamentos)
-    .leftJoin(stockObjetivo, eq(medicamentos.cn, stockObjetivo.cn))
-    .where(eq(medicamentos.area, area))
-    .orderBy(asc(medicamentos.principioActivo));
-
+  const rows = await listMedicamentosByArea(area);
   return NextResponse.json(rows);
 }
 
@@ -65,11 +45,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'No autorizado para crear en otra area.' }, { status: 403 });
   }
 
-  const existing = await db
-    .select({ cn: medicamentos.cn, area: medicamentos.area })
-    .from(medicamentos)
-    .where(eq(medicamentos.cn, cn))
-    .get();
+  const existing = await getMedicamentoByCn(cn);
 
   if (existing) {
     if (existing.area !== area) {
@@ -84,7 +60,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  await db.insert(medicamentos).values({
+  await insertMedicamento({
     cn,
     nombre:          body.nombre,
     principioActivo: body.principioActivo ?? null,
@@ -96,15 +72,17 @@ export async function POST(req: NextRequest) {
     comprable:       body.comprable ?? true,
     mse:             isMSE(cn),
     tipoMse:         body.tipoMse ?? null,
+    precioUnidad:    body.precioUnidad != null ? Number(body.precioUnidad) : null,
+    precioCaja:      body.precioCaja != null ? Number(body.precioCaja) : null,
   });
 
   if (body.stockMinimo != null || body.puntoPedido != null) {
-    await db.insert(stockObjetivo).values({
+    await upsertStockObjetivo(
       cn,
-      stockMinimo: Number(body.stockMinimo ?? 0),
-      puntoPedido: Number(body.puntoPedido ?? 0),
-      stockMaximo: body.stockMaximo != null ? Number(body.stockMaximo) : undefined,
-    });
+      Number(body.stockMinimo ?? 0),
+      Number(body.puntoPedido ?? 0),
+      body.stockMaximo != null ? Number(body.stockMaximo) : null
+    );
   }
 
   return NextResponse.json({ ok: true });

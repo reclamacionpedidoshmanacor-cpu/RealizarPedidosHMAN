@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/db';
-import { medicamentos, stockObjetivo } from '@/db/schema';
-import { eq } from 'drizzle-orm';
 import { isValidArea } from '@/lib/areas';
 import { requireApiSession } from '@/lib/api-auth';
+import {
+  deleteMedicamentoByCn,
+  getMedicamentoByCn,
+  getStockObjetivoByCn,
+  updateMedicamento,
+  upsertStockObjetivo,
+} from '@/lib/catalogo-neon';
 
 export const runtime = 'nodejs';
 
@@ -16,11 +20,7 @@ export async function PATCH(
 
   const { cn } = await params;
   const body = await req.json();
-  const existing = await db
-    .select({ cn: medicamentos.cn, area: medicamentos.area })
-    .from(medicamentos)
-    .where(eq(medicamentos.cn, cn))
-    .get();
+  const existing = await getMedicamentoByCn(cn);
 
   if (!existing) {
     return NextResponse.json({ error: 'Medicamento no encontrado.' }, { status: 404 });
@@ -42,7 +42,7 @@ export async function PATCH(
   }
 
   const medUpdate: Record<string, unknown> = { actualizadoEn: new Date().toISOString() };
-  const objUpdate: Record<string, unknown> = { actualizadoEn: new Date().toISOString() };
+  const objUpdate: Record<string, unknown> = {};
 
   const medFields = ['nombre','principioActivo','via','area','ubicacion','unidadesPorCaja','activo','comprable','tipoMse'];
   const objFields = ['stockMinimo','puntoPedido','stockMaximo'];
@@ -51,17 +51,31 @@ export async function PATCH(
   for (const f of objFields) if (f in body) objUpdate[f] = body[f];
 
   if (Object.keys(medUpdate).length > 1) {
-    await db.update(medicamentos).set(medUpdate as never).where(eq(medicamentos.cn, cn));
+    await updateMedicamento({
+      cn,
+      nombre: (medUpdate.nombre as string | undefined) ?? existing.nombre,
+      principioActivo: (medUpdate.principioActivo as string | null | undefined) ?? existing.principioActivo,
+      via: (medUpdate.via as string | null | undefined) ?? existing.via,
+      area: existing.area,
+      ubicacion: (medUpdate.ubicacion as string | null | undefined) ?? existing.ubicacion,
+      unidadesPorCaja: Number((medUpdate.unidadesPorCaja as number | undefined) ?? existing.unidadesPorCaja),
+      activo: (medUpdate.activo as boolean | undefined) ?? existing.activo,
+      comprable: (medUpdate.comprable as boolean | undefined) ?? existing.comprable,
+      mse: existing.mse,
+      tipoMse: (medUpdate.tipoMse as string | null | undefined) ?? existing.tipoMse,
+      precioUnidad: existing.precioUnidad,
+      precioCaja: existing.precioCaja,
+    });
   }
 
-  if (Object.keys(objUpdate).length > 1) {
-    const existing = await db.select({ id: stockObjetivo.id }).from(stockObjetivo)
-      .where(eq(stockObjetivo.cn, cn)).get();
-    if (existing) {
-      await db.update(stockObjetivo).set(objUpdate as never).where(eq(stockObjetivo.cn, cn));
-    } else {
-      await db.insert(stockObjetivo).values({ cn, stockMinimo: 0, puntoPedido: 0, ...objUpdate });
-    }
+  if (Object.keys(objUpdate).length > 0) {
+    const current = await getStockObjetivoByCn(cn);
+    await upsertStockObjetivo(
+      cn,
+      Number((objUpdate.stockMinimo as number | undefined) ?? current?.stockMinimo ?? 0),
+      Number((objUpdate.puntoPedido as number | undefined) ?? current?.puntoPedido ?? 0),
+      (objUpdate.stockMaximo as number | null | undefined) ?? current?.stockMaximo ?? null
+    );
   }
 
   return NextResponse.json({ ok: true });
@@ -75,11 +89,7 @@ export async function DELETE(
   if (!session.ok) return session.response;
 
   const { cn } = await params;
-  const existing = await db
-    .select({ cn: medicamentos.cn, area: medicamentos.area })
-    .from(medicamentos)
-    .where(eq(medicamentos.cn, cn))
-    .get();
+  const existing = await getMedicamentoByCn(cn);
 
   if (!existing) {
     return NextResponse.json({ error: 'Medicamento no encontrado.' }, { status: 404 });
@@ -88,7 +98,6 @@ export async function DELETE(
     return NextResponse.json({ error: 'No autorizado para esta area.' }, { status: 403 });
   }
 
-  await db.delete(stockObjetivo).where(eq(stockObjetivo.cn, cn));
-  await db.delete(medicamentos).where(eq(medicamentos.cn, cn));
+  await deleteMedicamentoByCn(cn);
   return NextResponse.json({ ok: true });
 }
