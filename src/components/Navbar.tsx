@@ -61,6 +61,15 @@ const tabs = [
     ),
   },
   {
+    href: '/pedidos',
+    label: 'Pedidos',
+    icon: (
+      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 3.75h19.5M4.5 3.75v16.5A2.25 2.25 0 006.75 22.5h10.5A2.25 2.25 0 0019.5 20.25V3.75M8.25 7.5h7.5m-7.5 4.5h7.5m-7.5 4.5h4.5" />
+      </svg>
+    ),
+  },
+  {
     href: '/consumo',
     label: 'Consumo',
     icon: (
@@ -97,7 +106,7 @@ export default function Navbar() {
   useEffect(() => {
     const a = document.cookie.split(';').find(c => c.trim().startsWith('area_session='))?.split('=')[1] ?? '';
     setArea(a);
-  }, []);
+  }, [pathname]);
 
   const handleLogout = async () => {
     await fetch('/api/auth', { method: 'DELETE' });
