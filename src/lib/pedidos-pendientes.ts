@@ -46,13 +46,7 @@ function getPedidosReadonlyClient() {
 
 export async function loadPedidosResumen(): Promise<PedidosPendientesResumen> {
   const sql = getPedidosReadonlyClient();
-  const rows = await sql<{
-    total_orders: string;
-    pendientes: string;
-    recibidos: string;
-    anulados: string;
-    reclamados: string;
-  }[]>`
+  const rows = (await sql`
     SELECT
       COUNT(*)::text AS total_orders,
       COUNT(*) FILTER (WHERE recibido = false AND anulado = false)::text AS pendientes,
@@ -60,7 +54,13 @@ export async function loadPedidosResumen(): Promise<PedidosPendientesResumen> {
       COUNT(*) FILTER (WHERE anulado = true)::text AS anulados,
       COUNT(*) FILTER (WHERE reclamado = true)::text AS reclamados
     FROM public.orders;
-  `;
+  `) as {
+    total_orders: string;
+    pendientes: string;
+    recibidos: string;
+    anulados: string;
+    reclamados: string;
+  }[];
 
   const row = rows[0];
   return {
@@ -74,25 +74,7 @@ export async function loadPedidosResumen(): Promise<PedidosPendientesResumen> {
 
 export async function loadPedidosConRespuestas(params: LoadPedidosParams): Promise<PedidoPendienteRow[]> {
   const sql = getPedidosReadonlyClient();
-  const rows = await sql<{
-    id: number;
-    documento_compras: string;
-    posicion: string;
-    fecha_documento: string;
-    proveedor_nombre: string | null;
-    texto_breve: string | null;
-    por_entregar_cantidad: string | null;
-    cantidad_pedido: string | null;
-    recibido: boolean;
-    anulado: boolean;
-    reclamado: boolean;
-    respuesta_id: number | null;
-    estado_respuesta: string | null;
-    texto_respuesta: string | null;
-    historial_estado: string | null;
-    historial_texto: string | null;
-    historial_registrado_at: string | null;
-  }[]>`
+  const rows = (await sql`
     SELECT
       o.id,
       o.documento_compras,
@@ -133,7 +115,25 @@ export async function loadPedidosConRespuestas(params: LoadPedidosParams): Promi
     AND (${params.soloReclamados} = false OR o.reclamado = true)
     ORDER BY o.fecha_documento DESC, o.documento_compras DESC, o.posicion ASC
     LIMIT ${params.limit};
-  `;
+  `) as {
+    id: number;
+    documento_compras: string;
+    posicion: string;
+    fecha_documento: string;
+    proveedor_nombre: string | null;
+    texto_breve: string | null;
+    por_entregar_cantidad: string | null;
+    cantidad_pedido: string | null;
+    recibido: boolean;
+    anulado: boolean;
+    reclamado: boolean;
+    respuesta_id: number | null;
+    estado_respuesta: string | null;
+    texto_respuesta: string | null;
+    historial_estado: string | null;
+    historial_texto: string | null;
+    historial_registrado_at: string | null;
+  }[];
 
   return rows.map((row) => ({
     id: row.id,
