@@ -1,0 +1,10 @@
+/node_modules
+/.next
+/out
+*.tsbuildinfo
+.claude/
+*.db
+*.db-shm
+*.db-wal
+.env.local
+.env
