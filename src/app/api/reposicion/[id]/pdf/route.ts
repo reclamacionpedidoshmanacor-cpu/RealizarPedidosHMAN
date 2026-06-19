@@ -114,7 +114,12 @@ async function buildPdf(
   /* ── Cabecera ── */
   w.text('ALBARAN DE REPOSICION', MARGIN, { size: 18, font: bold, color: rgb(0.05, 0.2, 0.45) });
   w.moveDown(22);
-  w.text('Farmacia Hospitalaria - Pacientes Externos', MARGIN, { size: 11, font: regular, color: rgb(0.35, 0.35, 0.35) });
+  w.text('Servicio de Farmacia Hospitalaria - Hospital de Manacor - Pacientes Externos', MARGIN, {
+    size: 11,
+    font: regular,
+    color: rgb(0.35, 0.35, 0.35),
+    maxWidth: USABLE_W,
+  });
   w.moveDown(14);
   w.line(rgb(0.6, 0.6, 0.6), 1);
   w.moveDown(12);
@@ -148,10 +153,10 @@ async function buildPdf(
       { text: 'Principio activo', x: COL.pa,  maxWidth: COL_W.pa,  font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
       { text: 'Medicamento',     x: COL.med, maxWidth: COL_W.med, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
       { text: 'Cajas',           x: COL.qty, maxWidth: COL_W.qty, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4), align: 'right' },
-    ], 14);
+    ], 18);
 
     w.line();
-    w.moveDown(6);
+    w.moveDown(10);
 
     /* Filas */
     for (const l of items) {
@@ -160,7 +165,7 @@ async function buildPdf(
         { text: safe(l.principioActivo ?? '-'),        x: COL.pa,  maxWidth: COL_W.pa,  size: 9 },
         { text: safe(l.nombre),                        x: COL.med, maxWidth: COL_W.med, size: 9, font: oblique, color: rgb(0.35, 0.35, 0.35) },
         { text: String(l.cantidadCajas),               x: COL.qty, maxWidth: COL_W.qty, size: 9, font: bold, align: 'right' },
-      ], 15);
+      ], 18);
     }
 
     w.moveDown(6);
@@ -173,7 +178,11 @@ async function buildPdf(
   const totalCajas = lineas.reduce((s, l) => s + l.cantidadCajas, 0);
   w.text(`Total líneas: ${lineas.length}   |   Total cajas: ${totalCajas}`, PAGE_W - MARGIN - 200, { size: 10, font: bold });
   w.moveDown(20);
-  w.text('Documento generado automaticamente - Farmacia Oncologica', MARGIN, { size: 8, font: regular, color: rgb(0.6, 0.6, 0.6) });
+  w.text('Documento generado automaticamente - Pacientes Externos', MARGIN, {
+    size: 8,
+    font: regular,
+    color: rgb(0.6, 0.6, 0.6),
+  });
 
   return doc.save();
 }
