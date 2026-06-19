@@ -50,7 +50,7 @@ export default function CatalogoPage() {
   const [meds, setMeds] = useState<Medicamento[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [filterVia, setFilterVia] = useState('');
+  const [filterUbicacion, setFilterUbicacion] = useState('');
   const [filterActivo, setFilterActivo] = useState('');
   const [importing, setImporting] = useState(false);
   const [editingCn, setEditingCn] = useState<string | null>(null);
@@ -113,9 +113,36 @@ export default function CatalogoPage() {
     finally { setImporting(false); if (fileRef.current) fileRef.current.value = ''; }
   };
 
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase();
+    const base = meds.filter(m => {
+      const matchSearch = !q || m.principioActivo?.toLowerCase().includes(q) || m.nombre.toLowerCase().includes(q) || m.cn.includes(q);
+      const matchUbicacion = !filterUbicacion || (m.ubicacion ?? '') === filterUbicacion;
+      const matchActivo = !filterActivo || (filterActivo === 'si' ? m.activo : !m.activo);
+      return matchSearch && matchUbicacion && matchActivo;
+    });
+
+    return [...base].sort((a, b) => {
+      let av: string | number | null = null;
+      let bv: string | number | null = null;
+      if (sortKey === 'principioActivo') { av = a.principioActivo ?? ''; bv = b.principioActivo ?? ''; }
+      else if (sortKey === 'nombre') { av = a.nombre; bv = b.nombre; }
+      else if (sortKey === 'cn') { av = a.cn; bv = b.cn; }
+      else if (sortKey === 'ubicacion') { av = a.ubicacion ?? ''; bv = b.ubicacion ?? ''; }
+      else if (sortKey === 'puntoPedido') { av = a.puntoPedido ?? 0; bv = b.puntoPedido ?? 0; }
+
+      if (typeof av === 'number' && typeof bv === 'number') {
+        return sortDir === 'asc' ? av - bv : bv - av;
+      }
+      const cmp = String(av).localeCompare(String(bv), 'es', { sensitivity: 'base' });
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+  }, [meds, search, filterUbicacion, filterActivo, sortKey, sortDir]);
+
   const handleCopiarCodigosSap = async () => {
+    const source = filtered;
     const cns = [...new Set(
-      meds
+      source
         .map((m) => m.cn?.trim())
         .filter((cn): cn is string => Boolean(cn))
     )].sort((a, b) => a.localeCompare(b, 'es', { numeric: true, sensitivity: 'base' }));
@@ -143,7 +170,7 @@ export default function CatalogoPage() {
         if (!ok) throw new Error('No se pudo copiar');
       }
 
-      toast.success(`Copiados ${cns.length} códigos SAP (activos e inactivos).`);
+      toast.success(`Copiados ${cns.length} códigos SAP ${source.length === meds.length ? '(todos)' : '(filtrados)'}.`);
     } catch {
       toast.error('No se pudieron copiar los códigos SAP.');
     }
@@ -223,32 +250,6 @@ export default function CatalogoPage() {
     finally { setSavingNuevo(false); }
   };
 
-  const filtered = useMemo(() => {
-    const q = search.toLowerCase();
-    const base = meds.filter(m => {
-      const matchSearch = !q || m.principioActivo?.toLowerCase().includes(q) || m.nombre.toLowerCase().includes(q) || m.cn.includes(q);
-      const matchVia = !filterVia || m.via === filterVia;
-      const matchActivo = !filterActivo || (filterActivo === 'si' ? m.activo : !m.activo);
-      return matchSearch && matchVia && matchActivo;
-    });
-
-    return [...base].sort((a, b) => {
-      let av: string | number | null = null;
-      let bv: string | number | null = null;
-      if (sortKey === 'principioActivo') { av = a.principioActivo ?? ''; bv = b.principioActivo ?? ''; }
-      else if (sortKey === 'nombre') { av = a.nombre; bv = b.nombre; }
-      else if (sortKey === 'cn') { av = a.cn; bv = b.cn; }
-      else if (sortKey === 'ubicacion') { av = a.ubicacion ?? ''; bv = b.ubicacion ?? ''; }
-      else if (sortKey === 'puntoPedido') { av = a.puntoPedido ?? 0; bv = b.puntoPedido ?? 0; }
-
-      if (typeof av === 'number' && typeof bv === 'number') {
-        return sortDir === 'asc' ? av - bv : bv - av;
-      }
-      const cmp = String(av).localeCompare(String(bv), 'es', { sensitivity: 'base' });
-      return sortDir === 'asc' ? cmp : -cmp;
-    });
-  }, [meds, search, filterVia, filterActivo, sortKey, sortDir]);
-
   const activos = meds.filter(m => m.activo).length;
   const mseCount = meds.filter(m => m.mse).length;
 
@@ -316,11 +317,14 @@ export default function CatalogoPage() {
           placeholder="Buscar por nombre, principio activo o CN…"
           className="flex-1 min-w-[220px] rounded-lg border border-slate-200 px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
         />
-        <select value={filterVia} onChange={e => setFilterVia(e.target.value)}
+        <select value={filterUbicacion} onChange={e => setFilterUbicacion(e.target.value)}
           className="rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white">
-          <option value="">Todas las vías</option>
-          <option value="IV">IV</option>
-          <option value="ORAL">ORAL</option>
+          <option value="">Todas las ubicaciones</option>
+          {ubicacionesUnicas.map((ubic) => (
+            <option key={ubic} value={ubic}>
+              {ubic}
+            </option>
+          ))}
         </select>
         <select value={filterActivo} onChange={e => setFilterActivo(e.target.value)}
           className="rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 bg-white">
