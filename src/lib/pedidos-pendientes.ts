@@ -193,6 +193,38 @@ export async function loadPedidosConRespuestas(params: LoadPedidosParams): Promi
   }));
 }
 
+// ---------------------------------------------------------------------------
+// Pedidos RECIBIDOS agrupados por mes para un CN concreto (para curva Inicio)
+// ---------------------------------------------------------------------------
+export type PedidoMesItem = { anio: number; mes: number; cantidad: number };
+
+export async function loadPedidosRecibidosPorMesByCn(
+  cn6: string,
+  fechaDesde: string,   // ISO yyyy-MM-dd
+): Promise<PedidoMesItem[]> {
+  const sql = getPedidosReadonlyClient();
+  const rows = (await sql`
+    SELECT
+      EXTRACT(YEAR  FROM fecha_documento)::int AS anio,
+      EXTRACT(MONTH FROM fecha_documento)::int AS mes,
+      SUM(COALESCE(cantidad_pedido::numeric, 0))::float AS cantidad
+    FROM public.orders
+    WHERE recibido = TRUE
+      AND anulado  = FALSE
+      AND fecha_documento >= ${fechaDesde}::date
+      AND n_mate_prov IS NOT NULL
+      AND lpad(right(regexp_replace(n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') = ${cn6}
+    GROUP BY 1, 2
+    ORDER BY 1, 2;
+  `) as Array<{ anio: number; mes: number; cantidad: number }>;
+
+  return rows.map(r => ({
+    anio: Number(r.anio),
+    mes:  Number(r.mes),
+    cantidad: Number(r.cantidad),
+  }));
+}
+
 export async function loadCantidadTransitoByCn(cns: string[]): Promise<Record<string, number>> {
   const normalizedCns = [...new Set(cns.map((cn) => toCn6(cn)).filter((cn): cn is string => !!cn))];
   if (normalizedCns.length === 0) return {};

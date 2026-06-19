@@ -322,8 +322,8 @@ export default function InicioPage() {
           Tendencias de consumo
         </h2>
         <p className="text-xs text-slate-400 mb-3">
-          Medicamentos con aumento de consumo &gt;10% en los últimos 3 meses respecto a los 3 meses anteriores.
-          Haz clic en un medicamento para ver la evolución y cruzarla con los pedidos recibidos.
+          Medicamentos con aumento de consumo &gt;10% en los últimos 3 meses respecto a los 3 anteriores (ventana total: 6 meses).
+          Haz clic en un medicamento para ver la evolución mensual y los pedidos recibidos.
         </p>
 
         {loadingTend && (
