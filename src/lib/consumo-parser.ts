@@ -1,12 +1,27 @@
 import * as XLSX from 'xlsx';
 
+// ---------------------------------------------------------------------------
+// Tipos
+// ---------------------------------------------------------------------------
 export interface ConsumoRow {
-  fecha: string;         // ISO yyyy-MM-dd
-  pacienteId: string;
+  anio: number;
+  mes: number;
+  dia: number | null;
+  fecha: string;           // ISO yyyy-MM-dd construida desde AÑO+MES+DIA
+  servicio: string;
+  uh: string;              // Unidad Hospitalaria
+  edadPaciente: string;
   indicacion: string;
+  diagnostico: string;
   protocolo: string;
+  numCiclo: string;
+  tipoTerapia: string;
+  tipoComponente: string;
+  componente: string;      // Principio activo
   cn: string;
-  vialesConsumidos: number;
+  medicamento: string;     // Nombre comercial
+  vialesDispensados: number;
+  numPacientes: number;
 }
 
 export interface ConsumoParseResult {
@@ -16,34 +31,57 @@ export interface ConsumoParseResult {
   periodoFin: string | null;
 }
 
-// Columnas obligatorias y sus aliases
-const COL_FECHA     = ['fecha'];
-const COL_PACIENTE  = ['hc', 'paciente', 'hc_paciente', 'historia', 'nhc'];
-const COL_INDICACION = ['indicacion', 'indicación', 'diagnostico', 'diagnóstico'];
-const COL_PROTOCOLO = ['protocolo'];
-const COL_CN        = ['cn', 'codigo nacional', 'código nacional', 'cod.nacional'];
-const COL_VIALES    = ['viales', 'viales_consumidos', 'cantidad', 'unidades'];
+// ---------------------------------------------------------------------------
+// Aliases de columnas (normalizados)
+// ---------------------------------------------------------------------------
+const COL_ANIO       = ['año', 'anio', 'ano', 'year'];
+const COL_MES        = ['mes', 'month'];
+const COL_DIA        = ['dia', 'día', 'day'];
+const COL_SERVICIO   = ['servicio'];
+const COL_UH         = ['uh', 'unidad hospitalaria', 'unidad'];
+const COL_EDAD       = ['edad del paciente', 'edad paciente', 'edad'];
+const COL_INDICACION = ['indicacion', 'indicación'];
+const COL_DIAGNOSTICO = ['diagnostico', 'diagnóstico', 'diagnostico'];
+const COL_PROTOCOLO  = ['protocolo'];
+const COL_CICLO      = ['nº ciclo', 'n ciclo', 'num ciclo', 'numero ciclo', 'número ciclo', 'ciclo'];
+const COL_TIPO_TERAPIA    = ['tipo de terapia', 'tipo terapia', 'terapia'];
+const COL_TIPO_COMPONENTE = ['tipo de componente', 'tipo componente'];
+const COL_COMPONENTE = ['componente'];  // principio activo
+const COL_CN         = ['cn', 'codigo nacional', 'código nacional', 'cod.nacional'];
+const COL_MEDICAMENTO = ['medicamento'];
+const COL_VIALES     = ['viales dispensados', 'viales', 'viales_dispensados', 'viales_consumidos', 'cantidad'];
+const COL_PACIENTES  = ['nº de pacientes', 'n de pacientes', 'num pacientes', 'numero de pacientes', 'número de pacientes', 'pacientes'];
 
-function normalize(s: string) {
-  return s.toLowerCase().trim().replace(/\s+/g, ' ').normalize('NFD').replace(/[̀-ͯ]/g, '');
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function normalize(s: string): string {
+  return s.toLowerCase().trim().replace(/\s+/g, ' ')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
 
 function findCol(headers: string[], candidates: string[]): number {
   return headers.findIndex(h => candidates.includes(normalize(h)));
 }
 
-function parseDate(raw: unknown): string | null {
-  if (!raw) return null;
-  if (raw instanceof Date) return raw.toISOString().slice(0, 10);
-  const s = String(raw).trim();
-  // dd/mm/yyyy
-  const match = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-  if (match) return `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
-  // yyyy-mm-dd
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  return null;
+function toNum(v: unknown): number {
+  if (v == null || v === '') return 0;
+  const n = parseFloat(String(v).replace(',', '.'));
+  return Number.isFinite(n) ? n : 0;
 }
 
+function toStr(v: unknown): string {
+  return String(v ?? '').trim();
+}
+
+function buildFecha(anio: number, mes: number, dia: number | null): string {
+  const d = dia && dia > 0 ? dia : 1;
+  return `${anio}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+}
+
+// ---------------------------------------------------------------------------
+// Parser principal
+// ---------------------------------------------------------------------------
 export function parseConsumoExcel(buffer: Buffer): ConsumoParseResult {
   const errors: string[] = [];
   const rows: ConsumoRow[] = [];
@@ -63,48 +101,71 @@ export function parseConsumoExcel(buffer: Buffer): ConsumoParseResult {
   }
 
   const headers = (raw[0] as string[]).map(String);
-  const idxFecha     = findCol(headers, COL_FECHA);
-  const idxPaciente  = findCol(headers, COL_PACIENTE);
-  const idxIndicacion = findCol(headers, COL_INDICACION);
-  const idxProtocolo = findCol(headers, COL_PROTOCOLO);
-  const idxCN        = findCol(headers, COL_CN);
-  const idxViales    = findCol(headers, COL_VIALES);
+  const idxAnio           = findCol(headers, COL_ANIO);
+  const idxMes            = findCol(headers, COL_MES);
+  const idxDia            = findCol(headers, COL_DIA);
+  const idxServicio       = findCol(headers, COL_SERVICIO);
+  const idxUH             = findCol(headers, COL_UH);
+  const idxEdad           = findCol(headers, COL_EDAD);
+  const idxIndicacion     = findCol(headers, COL_INDICACION);
+  const idxDiagnostico    = findCol(headers, COL_DIAGNOSTICO);
+  const idxProtocolo      = findCol(headers, COL_PROTOCOLO);
+  const idxCiclo          = findCol(headers, COL_CICLO);
+  const idxTipoTerapia    = findCol(headers, COL_TIPO_TERAPIA);
+  const idxTipoComponente = findCol(headers, COL_TIPO_COMPONENTE);
+  const idxComponente     = findCol(headers, COL_COMPONENTE);
+  const idxCN             = findCol(headers, COL_CN);
+  const idxMedicamento    = findCol(headers, COL_MEDICAMENTO);
+  const idxViales         = findCol(headers, COL_VIALES);
+  const idxPacientes      = findCol(headers, COL_PACIENTES);
 
-  const missing = [];
-  if (idxFecha === -1)   missing.push('"Fecha"');
-  if (idxCN === -1)      missing.push('"CN"');
-  if (idxViales === -1)  missing.push('"Viales"');
+  // Columnas obligatorias
+  const missing: string[] = [];
+  if (idxAnio === -1 && idxMes === -1)  missing.push('"AÑO" y "MES"');
+  if (idxCN === -1)       missing.push('"CN"');
+  if (idxViales === -1)   missing.push('"VIALES DISPENSADOS"');
   if (missing.length) {
-    return { rows, errors: [`Columnas obligatorias no encontradas: ${missing.join(', ')}`], periodoInicio: null, periodoFin: null };
+    return {
+      rows, errors: [`Columnas obligatorias no encontradas: ${missing.join(', ')}.`],
+      periodoInicio: null, periodoFin: null,
+    };
   }
 
   const fechas: string[] = [];
 
   for (let i = 1; i < raw.length; i++) {
     const row = raw[i] as unknown[];
-    const cn = String(row[idxCN] ?? '').trim();
-    if (!cn) continue;
 
-    const fecha = parseDate(row[idxFecha]);
-    if (!fecha) {
-      errors.push(`Fila ${i + 1}: fecha no reconocida ("${row[idxFecha]}")`);
+    const cn = toStr(row[idxCN]);
+    if (!cn) continue; // fila vacía
+
+    const anio = Math.round(toNum(row[idxAnio]));
+    const mes  = Math.round(toNum(row[idxMes]));
+    if (!anio || !mes) {
+      errors.push(`Fila ${i + 1}: año o mes no válido (AÑO=${row[idxAnio]}, MES=${row[idxMes]})`);
       continue;
     }
 
-    const viales = parseFloat(String(row[idxViales] ?? '0').replace(',', '.'));
-    if (isNaN(viales)) {
-      errors.push(`Fila ${i + 1}: viales no numérico`);
-      continue;
-    }
-
+    const dia = idxDia !== -1 ? Math.round(toNum(row[idxDia])) || null : null;
+    const fecha = buildFecha(anio, mes, dia);
     fechas.push(fecha);
+
     rows.push({
-      fecha,
-      pacienteId: idxPaciente !== -1 ? String(row[idxPaciente] ?? '').trim() : '',
-      indicacion: idxIndicacion !== -1 ? String(row[idxIndicacion] ?? '').trim() : '',
-      protocolo:  idxProtocolo !== -1 ? String(row[idxProtocolo] ?? '').trim() : '',
+      anio, mes, dia, fecha,
+      servicio:       idxServicio       !== -1 ? toStr(row[idxServicio])       : '',
+      uh:             idxUH             !== -1 ? toStr(row[idxUH])             : '',
+      edadPaciente:   idxEdad           !== -1 ? toStr(row[idxEdad])           : '',
+      indicacion:     idxIndicacion     !== -1 ? toStr(row[idxIndicacion])     : '',
+      diagnostico:    idxDiagnostico    !== -1 ? toStr(row[idxDiagnostico])    : '',
+      protocolo:      idxProtocolo      !== -1 ? toStr(row[idxProtocolo])      : '',
+      numCiclo:       idxCiclo          !== -1 ? toStr(row[idxCiclo])          : '',
+      tipoTerapia:    idxTipoTerapia    !== -1 ? toStr(row[idxTipoTerapia])    : '',
+      tipoComponente: idxTipoComponente !== -1 ? toStr(row[idxTipoComponente]) : '',
+      componente:     idxComponente     !== -1 ? toStr(row[idxComponente])     : '',
       cn,
-      vialesConsumidos: viales,
+      medicamento:    idxMedicamento    !== -1 ? toStr(row[idxMedicamento])    : '',
+      vialesDispensados: toNum(row[idxViales]),
+      numPacientes:   idxPacientes      !== -1 ? Math.round(toNum(row[idxPacientes])) : 0,
     });
   }
 
