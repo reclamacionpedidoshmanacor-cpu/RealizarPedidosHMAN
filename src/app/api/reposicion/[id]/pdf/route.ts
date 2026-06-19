@@ -1,104 +1,178 @@
 import { NextRequest, NextResponse } from 'next/server';
-import PDFDocument from 'pdfkit';
+import { PDFDocument, StandardFonts, rgb, PDFFont, PDFPage } from 'pdf-lib';
 import { getPedidoConLineas, ensureTablesReposicion, type ReposicionLinea } from '@/lib/reposicion-neon';
 
 export const runtime = 'nodejs';
 
+const MARGIN = 50;
+const PAGE_W = 595.28;  // A4
+const PAGE_H = 841.89;  // A4
+const USABLE_W = PAGE_W - MARGIN * 2;
+
 function fmtDate(iso: string): string {
-  return new Date(iso).toLocaleDateString('es-ES', {
-    day: '2-digit', month: '2-digit', year: 'numeric',
-  });
+  return new Date(iso).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
-function buildPdf(
+function truncate(text: string, maxChars: number): string {
+  return text.length > maxChars ? text.slice(0, maxChars - 1) + '…' : text;
+}
+
+/* ── Clase de ayuda para layout de texto ── */
+class PageWriter {
+  private page: PDFPage;
+  private y: number;
+  private readonly doc: PDFDocument;
+  private readonly regular: PDFFont;
+  private readonly bold: PDFFont;
+
+  constructor(doc: PDFDocument, regular: PDFFont, bold: PDFFont) {
+    this.doc = doc;
+    this.regular = regular;
+    this.bold = bold;
+    this.page = doc.addPage([PAGE_W, PAGE_H]);
+    this.y = PAGE_H - MARGIN;
+  }
+
+  ensureSpace(needed: number) {
+    if (this.y - needed < MARGIN + 40) {
+      this.page = this.doc.addPage([PAGE_W, PAGE_H]);
+      this.y = PAGE_H - MARGIN;
+    }
+  }
+
+  moveDown(pts: number) { this.y -= pts; }
+
+  line(color = rgb(0.8, 0.8, 0.8), thickness = 0.5) {
+    this.page.drawLine({
+      start: { x: MARGIN, y: this.y },
+      end: { x: PAGE_W - MARGIN, y: this.y },
+      thickness,
+      color,
+    });
+  }
+
+  text(
+    content: string,
+    x: number,
+    opts: { size?: number; font?: PDFFont; color?: ReturnType<typeof rgb>; maxWidth?: number } = {}
+  ) {
+    const font = opts.font ?? this.regular;
+    const size = opts.size ?? 10;
+    const color = opts.color ?? rgb(0, 0, 0);
+    const disp = opts.maxWidth
+      ? truncate(content, Math.floor(opts.maxWidth / (size * 0.5)))
+      : content;
+    this.page.drawText(disp, { x, y: this.y, size, font, color });
+  }
+
+  textRow(
+    cols: { text: string; x: number; maxWidth?: number; align?: 'left' | 'right'; size?: number; font?: PDFFont; color?: ReturnType<typeof rgb> }[],
+    rowH = 16
+  ) {
+    this.ensureSpace(rowH);
+    for (const col of cols) {
+      const font = col.font ?? this.regular;
+      const size = col.size ?? 9;
+      const disp = col.maxWidth
+        ? truncate(col.text, Math.floor(col.maxWidth / (size * 0.5)))
+        : col.text;
+      let x = col.x;
+      if (col.align === 'right' && col.maxWidth) {
+        const textW = font.widthOfTextAtSize(disp, size);
+        x = col.x + col.maxWidth - textW;
+      }
+      this.page.drawText(disp, { x, y: this.y, size, font, color: col.color ?? rgb(0, 0, 0) });
+    }
+    this.moveDown(rowH);
+  }
+
+  get currentY() { return this.y; }
+  get regularFont() { return this.regular; }
+  get boldFont() { return this.bold; }
+}
+
+/* ── Generador principal ── */
+async function buildPdf(
   pedidoId: number,
   fechaCreacion: string,
   fechaFinalizado: string | null,
   lineas: ReposicionLinea[]
-): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ margin: 50, size: 'A4' });
-    const chunks: Buffer[] = [];
-    doc.on('data', (c: Buffer) => chunks.push(c));
-    doc.on('end', () => resolve(Buffer.concat(chunks)));
-    doc.on('error', reject);
+): Promise<Uint8Array> {
+  const doc = await PDFDocument.create();
+  const regular = await doc.embedFont(StandardFonts.Helvetica);
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const oblique = await doc.embedFont(StandardFonts.HelveticaOblique);
 
-    const pageW = doc.page.width - 100; // ancho útil
+  const w = new PageWriter(doc, regular, bold);
 
-    /* ── Cabecera del albarán ── */
-    doc.fontSize(18).font('Helvetica-Bold').text('ALBARÁN DE REPOSICIÓN', { align: 'center' });
-    doc.moveDown(0.3);
-    doc.fontSize(11).font('Helvetica').text('Farmacia Hospitalaria — Pacientes Externos', { align: 'center' });
-    doc.moveDown(0.5);
+  /* ── Cabecera ── */
+  w.text('ALBARÁN DE REPOSICIÓN', MARGIN, { size: 18, font: bold, color: rgb(0.05, 0.2, 0.45) });
+  w.moveDown(22);
+  w.text('Farmacia Hospitalaria — Pacientes Externos', MARGIN, { size: 11, font: regular, color: rgb(0.35, 0.35, 0.35) });
+  w.moveDown(14);
+  w.line(rgb(0.6, 0.6, 0.6), 1);
+  w.moveDown(12);
 
-    doc.moveTo(50, doc.y).lineTo(50 + pageW, doc.y).stroke();
-    doc.moveDown(0.5);
+  /* ── Datos del pedido ── */
+  const meta = `Nº Pedido: ${pedidoId}    Fecha: ${fmtDate(fechaCreacion)}${fechaFinalizado ? `    Finalizado: ${fmtDate(fechaFinalizado)}` : ''}`;
+  w.text(meta, MARGIN, { size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
+  w.moveDown(18);
 
-    doc.fontSize(10).font('Helvetica');
-    doc.text(`Nº Pedido: ${pedidoId}`, { continued: true });
-    doc.text(`   Fecha: ${fmtDate(fechaCreacion)}`, { continued: true });
-    if (fechaFinalizado) doc.text(`   Finalizado: ${fmtDate(fechaFinalizado)}`);
-    else doc.text('');
-    doc.moveDown(1);
+  /* ── Columnas ── */
+  const COL = { cn: MARGIN, pa: MARGIN + 65, med: MARGIN + 230, qty: MARGIN + USABLE_W - 45 };
+  const COL_W = { cn: 60, pa: 160, med: 165, qty: 45 };
 
-    /* ── Agrupar por ubicación ── */
-    const porUbicacion = new Map<string, ReposicionLinea[]>();
-    for (const l of lineas) {
-      if (!porUbicacion.has(l.ubicacion)) porUbicacion.set(l.ubicacion, []);
-      porUbicacion.get(l.ubicacion)!.push(l);
+  /* ── Por ubicación ── */
+  const porUbicacion = new Map<string, ReposicionLinea[]>();
+  for (const l of lineas) {
+    if (!porUbicacion.has(l.ubicacion)) porUbicacion.set(l.ubicacion, []);
+    porUbicacion.get(l.ubicacion)!.push(l);
+  }
+
+  for (const [ubicacion, items] of porUbicacion) {
+    w.ensureSpace(60);
+
+    /* Título ubicación */
+    w.text(`📍 ${ubicacion}`, MARGIN, { size: 12, font: bold, color: rgb(0.07, 0.23, 0.52) });
+    w.moveDown(16);
+
+    /* Cabecera columnas */
+    w.textRow([
+      { text: 'CN',              x: COL.cn,  maxWidth: COL_W.cn,  font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
+      { text: 'Principio activo', x: COL.pa,  maxWidth: COL_W.pa,  font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
+      { text: 'Medicamento',     x: COL.med, maxWidth: COL_W.med, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
+      { text: 'Cajas',           x: COL.qty, maxWidth: COL_W.qty, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4), align: 'right' },
+    ], 14);
+
+    w.line();
+    w.moveDown(6);
+
+    /* Filas */
+    for (const l of items) {
+      w.textRow([
+        { text: l.cn,                        x: COL.cn,  maxWidth: COL_W.cn,  size: 9 },
+        { text: l.principioActivo ?? '—',    x: COL.pa,  maxWidth: COL_W.pa,  size: 9 },
+        { text: l.nombre,                    x: COL.med, maxWidth: COL_W.med, size: 9, font: oblique, color: rgb(0.35, 0.35, 0.35) },
+        { text: String(l.cantidadCajas),     x: COL.qty, maxWidth: COL_W.qty, size: 9, font: bold, align: 'right' },
+      ], 15);
     }
 
-    for (const [ubicacion, items] of porUbicacion) {
-      /* Título ubicación */
-      doc.fontSize(12).font('Helvetica-Bold').fillColor('#1e3a5f')
-        .text(`📍 ${ubicacion}`, { underline: false });
-      doc.moveDown(0.3);
+    w.moveDown(6);
+    w.line(rgb(0.7, 0.7, 0.7), 0.3);
+    w.moveDown(14);
+  }
 
-      /* Cabecera tabla */
-      const col = { cn: 50, pa: 120, med: 310, qty: 500 };
-      doc.fontSize(9).font('Helvetica-Bold').fillColor('#444444');
-      doc.text('CN', col.cn, doc.y, { width: 65 });
-      const yRow = doc.y;
-      doc.text('Principio activo', col.pa, yRow, { width: 185 });
-      doc.text('Medicamento', col.med, yRow, { width: 185 });
-      doc.text('Cajas', col.qty, yRow, { width: 45, align: 'right' });
-      doc.moveDown(0.2);
-      doc.moveTo(50, doc.y).lineTo(50 + pageW, doc.y).lineWidth(0.5).stroke();
-      doc.moveDown(0.2);
+  /* ── Pie ── */
+  w.ensureSpace(40);
+  const totalCajas = lineas.reduce((s, l) => s + l.cantidadCajas, 0);
+  w.text(`Total líneas: ${lineas.length}   |   Total cajas: ${totalCajas}`, PAGE_W - MARGIN - 200, { size: 10, font: bold });
+  w.moveDown(20);
+  w.text('Documento generado automáticamente — Farmacia Oncológica', MARGIN, { size: 8, font: regular, color: rgb(0.6, 0.6, 0.6) });
 
-      /* Filas */
-      doc.fontSize(9).font('Helvetica').fillColor('#000000');
-      for (const l of items) {
-        const y = doc.y;
-        doc.text(l.cn, col.cn, y, { width: 65 });
-        doc.text(l.principioActivo ?? '—', col.pa, y, { width: 185 });
-        doc.text(l.nombre, col.med, y, { width: 185 });
-        doc.text(String(l.cantidadCajas), col.qty, y, { width: 45, align: 'right' });
-        doc.moveDown(0.5);
-
-        // Salto de página automático
-        if (doc.y > doc.page.height - 100) {
-          doc.addPage();
-        }
-      }
-
-      doc.moveDown(0.5);
-      doc.moveTo(50, doc.y).lineTo(50 + pageW, doc.y).lineWidth(0.3).stroke();
-      doc.moveDown(1);
-    }
-
-    /* ── Pie ── */
-    const totalCajas = lineas.reduce((s, l) => s + l.cantidadCajas, 0);
-    doc.fontSize(10).font('Helvetica-Bold')
-      .text(`Total líneas: ${lineas.length}   |   Total cajas: ${totalCajas}`, { align: 'right' });
-    doc.moveDown(2);
-    doc.fontSize(9).font('Helvetica').fillColor('#888888')
-      .text('Documento generado automáticamente — Farmacia Oncológica', { align: 'center' });
-
-    doc.end();
-  });
+  return doc.save();
 }
 
+/* ── Endpoint ── */
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -112,14 +186,10 @@ export async function GET(
     }
 
     const result = await getPedidoConLineas(pedidoId);
-    if (!result) {
-      return NextResponse.json({ error: 'Pedido no encontrado.' }, { status: 404 });
-    }
-    if (result.lineas.length === 0) {
-      return NextResponse.json({ error: 'El pedido no tiene líneas.' }, { status: 400 });
-    }
+    if (!result) return NextResponse.json({ error: 'Pedido no encontrado.' }, { status: 404 });
+    if (result.lineas.length === 0) return NextResponse.json({ error: 'El pedido no tiene líneas.' }, { status: 400 });
 
-    const buffer = await buildPdf(
+    const bytes = await buildPdf(
       result.cabecera.id,
       result.cabecera.fechaCreacion,
       result.cabecera.fechaFinalizado,
@@ -129,11 +199,16 @@ export async function GET(
     const fecha = fmtDate(result.cabecera.fechaCreacion).replace(/\//g, '-');
     const filename = `albaran-reposicion-${pedidoId}-${fecha}.pdf`;
 
-    return new Response(new Uint8Array(buffer), {
+    // Copiar a ArrayBuffer puro para compatibilidad con BodyInit / BlobPart
+    const ab = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(ab).set(bytes);
+    const blob = new Blob([ab], { type: 'application/pdf' });
+
+    return new Response(blob, {
       headers: {
         'Content-Type': 'application/pdf',
         'Content-Disposition': `attachment; filename="${filename}"`,
-        'Content-Length': String(buffer.length),
+        'Content-Length': String(bytes.byteLength),
       },
     });
   } catch (err) {
