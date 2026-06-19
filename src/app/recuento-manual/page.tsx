@@ -351,6 +351,17 @@ export default function RecuentoManualPage() {
     }
   };
 
+  const volverAAcceso = async () => {
+    try {
+      // Reinicia sesión para asegurar que el login vuelve limpio
+      await fetch('/api/auth', { method: 'DELETE' });
+    } catch {
+      // Silencioso: aunque falle, redirigimos igualmente.
+    } finally {
+      window.location.href = '/login';
+    }
+  };
+
   /* ── Deep-link desde Stock: /recuento-manual?area=upe&modo=reposicion ── */
   useEffect(() => {
     if (deepLinkHandledRef.current) return;
@@ -383,12 +394,13 @@ export default function RecuentoManualPage() {
       <div className="min-h-screen bg-gradient-to-br from-slate-100 to-slate-200 flex flex-col items-center justify-center p-6">
         <div className="w-full max-w-2xl space-y-8">
           <div className="flex justify-start">
-            <Link
-              href="/login"
+            <button
+              type="button"
+              onClick={() => void volverAAcceso()}
               className="rounded-xl border-2 border-slate-300 bg-white px-5 py-3 text-lg font-bold text-slate-600 shadow-sm hover:bg-slate-50 active:scale-95"
             >
               ← Volver a acceso
-            </Link>
+            </button>
           </div>
           <div className="text-center space-y-2">
             <div className="text-6xl">📋</div>
@@ -730,7 +742,7 @@ function RepoMedCard({
 }) {
   return (
     <div className={`rounded-2xl border-2 bg-white px-5 py-4 shadow-sm transition-all ${
-      overMax ? 'border-rose-400 bg-rose-50' : changed ? 'border-orange-400 bg-orange-50' : 'border-slate-200'
+      overMax ? 'border-rose-400 bg-rose-50' : changed ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200'
     }`}>
       <div className="flex items-start justify-between gap-2 mb-4">
         <div className="flex-1 min-w-0">
@@ -750,18 +762,24 @@ function RepoMedCard({
       )}
 
       <div className="space-y-1">
-        <label className="block text-sm font-bold text-orange-600 uppercase tracking-wider">📦 Cajas a pedir</label>
+        <label className={`block text-sm font-bold uppercase tracking-wider ${
+          overMax ? 'text-rose-600' : changed ? 'text-emerald-600' : 'text-orange-600'
+        }`}>📦 Cajas a pedir</label>
         <input type="number" inputMode="numeric" min={0} step={1}
           value={cantidadCajas === 0 ? '' : cantidadCajas} placeholder="0"
           onChange={(e) => onChange(toIntInput(e.target.value))}
-          className="w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-3xl font-bold text-center text-slate-800 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-200" />
+          className={`w-full rounded-xl border-2 px-4 py-4 text-3xl font-bold text-center focus:outline-none focus:ring-2 ${
+            overMax
+              ? 'border-rose-300 text-rose-700 focus:border-rose-500 focus:ring-rose-200'
+              : 'border-slate-300 text-slate-800 focus:border-orange-500 focus:ring-orange-200'
+          }`} />
       </div>
       {overMax ? (
         <p className="mt-3 text-sm font-semibold text-rose-600">
           ⚠ Supera stock máximo ({med.stockMaximo} cajas)
         </p>
       ) : changed ? (
-        <p className="mt-3 text-sm font-semibold text-orange-600">✏ Cantidad añadida</p>
+        <p className="mt-3 text-sm font-semibold text-emerald-600">✔ Cantidad añadida</p>
       ) : null}
     </div>
   );
