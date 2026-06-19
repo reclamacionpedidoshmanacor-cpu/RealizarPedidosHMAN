@@ -420,7 +420,7 @@ export async function getCurvaMedicamento(cn: string, area: string): Promise<Cur
     CROSS JOIN maxdate
     WHERE ic.area = ${area}
       AND cr.cn = ${cn}
-      AND cr.fecha > (maxdate.latest - INTERVAL '3 months')::date
+      AND cr.fecha > (maxdate.latest - INTERVAL '6 months')::date
     GROUP BY cr.anio, cr.mes
     ORDER BY cr.anio, cr.mes;
   `) as Array<{ anio: number; mes: number; viales: number; pacientes: number }>;
