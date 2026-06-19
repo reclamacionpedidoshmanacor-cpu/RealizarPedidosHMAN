@@ -49,7 +49,17 @@ const COL_TIPO_COMPONENTE = ['tipo de componente', 'tipo componente'];
 const COL_COMPONENTE = ['componente'];  // principio activo
 const COL_CN         = ['cn', 'codigo nacional', 'código nacional', 'cod.nacional'];
 const COL_MEDICAMENTO = ['medicamento'];
-const COL_VIALES     = ['viales dispensados', 'viales', 'viales_dispensados', 'viales_consumidos', 'cantidad'];
+const COL_VIALES     = [
+  'viales dispensados',
+  'viales dispensados (ud)',
+  'viales dispensados (uds)',
+  'viales dispensados ud',
+  'viales dispensados uds',
+  'viales',
+  'viales_dispensados',
+  'viales_consumidos',
+  'cantidad',
+];
 const COL_PACIENTES  = ['nº de pacientes', 'n de pacientes', 'num pacientes', 'numero de pacientes', 'número de pacientes', 'pacientes'];
 
 // ---------------------------------------------------------------------------
@@ -61,7 +71,17 @@ function normalize(s: string): string {
 }
 
 function findCol(headers: string[], candidates: string[]): number {
-  return headers.findIndex(h => candidates.includes(normalize(h)));
+  return headers.findIndex((h) => {
+    const normalizedHeader = normalize(h);
+    return candidates.some((candidate) => {
+      const normalizedCandidate = normalize(candidate);
+      return (
+        normalizedHeader === normalizedCandidate ||
+        normalizedHeader.includes(normalizedCandidate) ||
+        normalizedCandidate.includes(normalizedHeader)
+      );
+    });
+  });
 }
 
 function toNum(v: unknown): number {
@@ -121,7 +141,7 @@ export function parseConsumoExcel(buffer: Buffer): ConsumoParseResult {
 
   // Columnas obligatorias
   const missing: string[] = [];
-  if (idxAnio === -1 && idxMes === -1)  missing.push('"AÑO" y "MES"');
+  if (idxAnio === -1 || idxMes === -1)  missing.push('"AÑO" y "MES"');
   if (idxCN === -1)       missing.push('"CN"');
   if (idxViales === -1)   missing.push('"VIALES DISPENSADOS"');
   if (missing.length) {
