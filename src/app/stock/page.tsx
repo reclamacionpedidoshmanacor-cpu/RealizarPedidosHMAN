@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 type RecuentoCabecera = {
@@ -27,15 +27,63 @@ type ApiResponse = {
   historico: RecuentoCabecera[];
 };
 
+type RecuentoDetalleResponse = {
+  recuento: RecuentoCabecera;
+  lineas: RecuentoLinea[];
+};
+
+const stockCajasFormatter = new Intl.NumberFormat('es-ES', {
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
+});
+
+const stockUnidadesFormatter = new Intl.NumberFormat('es-ES', {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 2,
+});
+
+function roundOneDecimal(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function formatStockCajas(value: number): string {
+  return stockCajasFormatter.format(roundOneDecimal(value));
+}
+
+function formatStockUnidades(value: number): string {
+  return stockUnidadesFormatter.format(value);
+}
+
+function parseStockCajasInput(input: string): number | null {
+  const raw = input.trim();
+  if (!raw) return null;
+
+  const compact = raw.replace(/\s/g, '');
+  let normalized = compact;
+
+  if (compact.includes(',')) {
+    normalized = compact.replace(/\./g, '').replace(',', '.');
+  } else if (/^\d{1,3}(\.\d{3})+$/.test(compact)) {
+    normalized = compact.replace(/\./g, '');
+  }
+
+  const value = Number(normalized);
+  if (!Number.isFinite(value) || value < 0) return null;
+  return roundOneDecimal(value);
+}
+
 export default function StockPage() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
-  const [savingCn, setSavingCn] = useState<string | null>(null);
+  const [savingAll, setSavingAll] = useState(false);
   const [data, setData] = useState<ApiResponse | null>(null);
   const [origen, setOrigen] = useState<'SAP' | 'MANUAL'>('SAP');
   const [fechaRecuento, setFechaRecuento] = useState(new Date().toISOString().slice(0, 10));
   const fileRef = useRef<HTMLInputElement>(null);
-  const [edits, setEdits] = useState<Record<string, number>>({});
+  const [edits, setEdits] = useState<Record<string, string>>({});
+  const [historicoExpanded, setHistoricoExpanded] = useState<Record<number, boolean>>({});
+  const [historicoLineas, setHistoricoLineas] = useState<Record<number, RecuentoLinea[]>>({});
+  const [historicoLoading, setHistoricoLoading] = useState<Record<number, boolean>>({});
 
   const load = async () => {
     setLoading(true);
@@ -44,11 +92,14 @@ export default function StockPage() {
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo cargar stock.');
       setData(payload);
-      const nextEdits: Record<string, number> = {};
+      const nextEdits: Record<string, string> = {};
       for (const row of payload.pendienteLineas as RecuentoLinea[]) {
-        nextEdits[row.cn] = row.stockCajas;
+        nextEdits[row.cn] = formatStockCajas(row.stockCajas);
       }
       setEdits(nextEdits);
+      setHistoricoExpanded({});
+      setHistoricoLineas({});
+      setHistoricoLoading({});
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
@@ -85,23 +136,82 @@ export default function StockPage() {
     }
   };
 
-  const saveLinea = async (cn: string) => {
+  const normalizeEdit = (cn: string, fallback: number) => {
+    setEdits((prev) => {
+      const parsed = parseStockCajasInput(prev[cn] ?? '');
+      return {
+        ...prev,
+        [cn]: parsed == null ? formatStockCajas(fallback) : formatStockCajas(parsed),
+      };
+    });
+  };
+
+  const saveRecuentoCompleto = async () => {
     if (!data?.pendiente) return;
-    setSavingCn(cn);
+    const cambios: Array<{ cn: string; stockCajas: number }> = [];
+    const invalidos: string[] = [];
+
+    for (const linea of data.pendienteLineas) {
+      const input = edits[linea.cn] ?? formatStockCajas(linea.stockCajas);
+      const parsed = parseStockCajasInput(input);
+      if (parsed == null) {
+        invalidos.push(linea.cn);
+        continue;
+      }
+      if (Math.abs(parsed - roundOneDecimal(linea.stockCajas)) > 0.0001) {
+        cambios.push({ cn: linea.cn, stockCajas: parsed });
+      }
+    }
+
+    if (invalidos.length > 0) {
+      toast.error(`Hay valores de cajas no validos (${invalidos.join(', ')}).`);
+      return;
+    }
+
+    if (cambios.length === 0) {
+      toast.info('No hay cambios pendientes de guardar.');
+      return;
+    }
+
+    setSavingAll(true);
     try {
       const res = await fetch(`/api/stock/recuentos/${data.pendiente.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cn, stockCajas: edits[cn] }),
+        body: JSON.stringify({ lineas: cambios }),
       });
       const payload = await res.json();
-      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo guardar la linea.');
-      toast.success('Linea actualizada');
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo guardar el recuento.');
+      toast.success(`Recuento guardado (${payload?.updated ?? cambios.length} lineas actualizadas).`);
       await load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
-      setSavingCn(null);
+      setSavingAll(false);
+    }
+  };
+
+  const toggleHistorico = async (recuentoId: number) => {
+    const alreadyOpen = historicoExpanded[recuentoId] ?? false;
+    if (alreadyOpen) {
+      setHistoricoExpanded((prev) => ({ ...prev, [recuentoId]: false }));
+      return;
+    }
+
+    setHistoricoExpanded((prev) => ({ ...prev, [recuentoId]: true }));
+    if (historicoLineas[recuentoId] || historicoLoading[recuentoId]) return;
+
+    setHistoricoLoading((prev) => ({ ...prev, [recuentoId]: true }));
+    try {
+      const res = await fetch(`/api/stock/recuentos/${recuentoId}`, { cache: 'no-store' });
+      const payload = (await res.json()) as RecuentoDetalleResponse & { error?: string };
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo cargar el detalle del recuento.');
+      setHistoricoLineas((prev) => ({ ...prev, [recuentoId]: payload.lineas ?? [] }));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+      setHistoricoExpanded((prev) => ({ ...prev, [recuentoId]: false }));
+    } finally {
+      setHistoricoLoading((prev) => ({ ...prev, [recuentoId]: false }));
     }
   };
 
@@ -173,15 +283,26 @@ export default function StockPage() {
                   <Kpi label="Fecha recuento" value={data.pendiente.fechaRecuento} />
                   <Kpi label="Lineas" value={String(data.pendiente.totalLineas)} />
                 </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                  <p className="text-xs text-slate-600">
+                    Formato de stock en cajas: <span className="font-semibold">0.000,0</span>
+                  </p>
+                  <button
+                    onClick={saveRecuentoCompleto}
+                    disabled={savingAll}
+                    className="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
+                  >
+                    {savingAll ? 'Guardando recuento...' : 'Guardar recuento completo'}
+                  </button>
+                </div>
                 <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
                   <table className="min-w-full text-sm">
                     <thead className="bg-slate-50 text-slate-600">
                       <tr>
                         <th className="px-3 py-2 text-left">CN</th>
                         <th className="px-3 py-2 text-left">Medicamento</th>
-                        <th className="px-3 py-2 text-center">Stock cajas</th>
+                        <th className="px-3 py-2 text-center">Stock cajas (editable)</th>
                         <th className="px-3 py-2 text-center">Stock unidades</th>
-                        <th className="px-3 py-2 text-center">Accion</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -191,28 +312,20 @@ export default function StockPage() {
                           <td className="px-3 py-2">{linea.nombre}</td>
                           <td className="px-3 py-2 text-center">
                             <input
-                              type="number"
-                              min={0}
-                              value={edits[linea.cn] ?? linea.stockCajas}
+                              type="text"
+                              inputMode="decimal"
+                              value={edits[linea.cn] ?? formatStockCajas(linea.stockCajas)}
                               onChange={(e) =>
                                 setEdits((prev) => ({
                                   ...prev,
-                                  [linea.cn]: Math.max(Number(e.target.value), 0),
+                                  [linea.cn]: e.target.value,
                                 }))
                               }
-                              className="w-24 rounded border border-slate-300 px-2 py-1 text-center"
+                              onBlur={() => normalizeEdit(linea.cn, linea.stockCajas)}
+                              className="w-28 rounded border border-slate-300 px-2 py-1 text-center"
                             />
                           </td>
-                          <td className="px-3 py-2 text-center">{linea.stockUnidades.toFixed(2)}</td>
-                          <td className="px-3 py-2 text-center">
-                            <button
-                              onClick={() => saveLinea(linea.cn)}
-                              disabled={savingCn === linea.cn}
-                              className="rounded bg-teal-700 px-2 py-1 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
-                            >
-                              Guardar
-                            </button>
-                          </td>
+                          <td className="px-3 py-2 text-center">{formatStockUnidades(linea.stockUnidades)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -234,25 +347,70 @@ export default function StockPage() {
                     <th className="px-3 py-2 text-left">Estado</th>
                     <th className="px-3 py-2 text-left">Lineas</th>
                     <th className="px-3 py-2 text-left">Propuesta</th>
+                    <th className="px-3 py-2 text-left">Detalle</th>
                   </tr>
                 </thead>
                 <tbody>
                   {(data?.historico ?? []).length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-3 py-4 text-slate-500">
+                      <td colSpan={7} className="px-3 py-4 text-slate-500">
                         No hay recuentos historicos.
                       </td>
                     </tr>
                   ) : (
                     data?.historico.map((it) => (
-                      <tr key={it.id} className="border-t border-slate-100">
-                        <td className="px-3 py-2">#{it.id}</td>
-                        <td className="px-3 py-2">{it.fechaRecuento}</td>
-                        <td className="px-3 py-2">{it.origen}</td>
-                        <td className="px-3 py-2">{it.estado}</td>
-                        <td className="px-3 py-2">{it.totalLineas}</td>
-                        <td className="px-3 py-2">{it.propuestaId ? `#${it.propuestaId}` : '—'}</td>
-                      </tr>
+                      <Fragment key={it.id}>
+                        <tr className="border-t border-slate-100">
+                          <td className="px-3 py-2">#{it.id}</td>
+                          <td className="px-3 py-2">{it.fechaRecuento}</td>
+                          <td className="px-3 py-2">{it.origen}</td>
+                          <td className="px-3 py-2">{it.estado}</td>
+                          <td className="px-3 py-2">{it.totalLineas}</td>
+                          <td className="px-3 py-2">{it.propuestaId ? `#${it.propuestaId}` : '—'}</td>
+                          <td className="px-3 py-2">
+                            <button
+                              onClick={() => toggleHistorico(it.id)}
+                              className="rounded border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                            >
+                              {historicoExpanded[it.id] ? 'Ocultar' : 'Desplegar'}
+                            </button>
+                          </td>
+                        </tr>
+                        {historicoExpanded[it.id] && (
+                          <tr className="border-t border-slate-100 bg-slate-50">
+                            <td colSpan={7} className="px-3 py-3">
+                              {historicoLoading[it.id] ? (
+                                <p className="text-sm text-slate-500">Cargando detalle...</p>
+                              ) : (historicoLineas[it.id] ?? []).length === 0 ? (
+                                <p className="text-sm text-slate-500">Sin lineas de detalle.</p>
+                              ) : (
+                                <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+                                  <table className="min-w-full text-xs">
+                                    <thead className="bg-slate-50 text-slate-600">
+                                      <tr>
+                                        <th className="px-2 py-2 text-left">CN</th>
+                                        <th className="px-2 py-2 text-left">Medicamento</th>
+                                        <th className="px-2 py-2 text-right">Stock cajas</th>
+                                        <th className="px-2 py-2 text-right">Stock unidades</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {(historicoLineas[it.id] ?? []).map((linea) => (
+                                        <tr key={`${it.id}-${linea.cn}`} className="border-t border-slate-100">
+                                          <td className="px-2 py-1 font-mono text-[11px]">{linea.cn}</td>
+                                          <td className="px-2 py-1">{linea.nombre}</td>
+                                          <td className="px-2 py-1 text-right">{formatStockCajas(linea.stockCajas)}</td>
+                                          <td className="px-2 py-1 text-right">{formatStockUnidades(linea.stockUnidades)}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
                     ))
                   )}
                 </tbody>

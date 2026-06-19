@@ -13,6 +13,10 @@ import {
 
 export const runtime = 'nodejs';
 
+function roundOneDecimal(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
 export async function GET(req: NextRequest) {
   const session = requireApiSession(req);
   if (!session.ok) return session.response;
@@ -70,14 +74,17 @@ export async function POST(req: NextRequest) {
 
       if (origen === 'SAP') {
         const sapRow = row as { stockUnidades: number; valorTotal: number | null };
-        const stockCajas = med.unidadesPorCaja > 0 ? sapRow.stockUnidades / med.unidadesPorCaja : 0;
+        const stockCajas = roundOneDecimal(
+          med.unidadesPorCaja > 0 ? sapRow.stockUnidades / med.unidadesPorCaja : 0
+        );
         lineasInsert.push({ cn: row.cn, stockUnidades: sapRow.stockUnidades, stockCajas, valorTotal: sapRow.valorTotal });
       } else {
         const manualRow = row as { stockCajas: number };
+        const stockCajas = roundOneDecimal(manualRow.stockCajas);
         lineasInsert.push({
           cn: row.cn,
-          stockCajas: manualRow.stockCajas,
-          stockUnidades: manualRow.stockCajas * med.unidadesPorCaja,
+          stockCajas,
+          stockUnidades: stockCajas * med.unidadesPorCaja,
           valorTotal: null,
         });
       }
