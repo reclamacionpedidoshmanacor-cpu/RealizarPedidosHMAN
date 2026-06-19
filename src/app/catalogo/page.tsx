@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
 import { cn, formatEuro } from '@/lib/utils';
+import { toSapCode } from '@/lib/propuesta';
 
 interface Medicamento {
   cn: string; nombre: string; principioActivo: string | null;
@@ -110,6 +111,42 @@ export default function CatalogoPage() {
       fetchMeds();
     } catch { toast.error('Error de conexión'); }
     finally { setImporting(false); if (fileRef.current) fileRef.current.value = ''; }
+  };
+
+  const handleCopiarCodigosSap = async () => {
+    const cns = [...new Set(
+      meds
+        .map((m) => m.cn?.trim())
+        .filter((cn): cn is string => Boolean(cn))
+    )].sort((a, b) => a.localeCompare(b, 'es', { numeric: true, sensitivity: 'base' }));
+
+    if (cns.length === 0) {
+      toast.warning('No hay códigos en catálogo para copiar.');
+      return;
+    }
+
+    const texto = cns.map((cn) => toSapCode(cn)).join('\n');
+
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(texto);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = texto;
+        textarea.setAttribute('readonly', 'true');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        if (!ok) throw new Error('No se pudo copiar');
+      }
+
+      toast.success(`Copiados ${cns.length} códigos SAP (activos e inactivos).`);
+    } catch {
+      toast.error('No se pudieron copiar los códigos SAP.');
+    }
   };
 
   const handleToggleActivo = async (med: Medicamento) => {
@@ -239,6 +276,17 @@ export default function CatalogoPage() {
         </div>
         <div className="flex items-center gap-2">
           <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImport} />
+          <button
+            onClick={handleCopiarCodigosSap}
+            disabled={loading || meds.length === 0}
+            className="flex items-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            title="Copia todos los códigos SAP (14+CN) del catálogo del área"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75A1.125 1.125 0 013.75 20.625V7.5c0-.621.504-1.125 1.125-1.125H8.25m7.5-3.375h4.5c.621 0 1.125.504 1.125 1.125v13.125c0 .621-.504 1.125-1.125 1.125h-9.75A1.125 1.125 0 019.375 17.25V4.125c0-.621.504-1.125 1.125-1.125h5.25z" />
+            </svg>
+            Copiar códigos SAP
+          </button>
           <button
             onClick={() => setShowNuevo(true)}
             className="flex items-center gap-2 rounded-lg border border-teal-600 px-4 py-2 text-sm font-medium text-teal-700 hover:bg-teal-50 transition-colors"
