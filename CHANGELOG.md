@@ -57,6 +57,69 @@ Historial de cambios del proyecto ordenado del más reciente al más antiguo.
 
 ---
 
+## [v0.9] — 19 jun 2026
+
+### APP Recuento Manual — mejoras de UX
+
+- **Campo "Unidades sueltas" condicional**: cuando `unidadesPorCaja = 1` se oculta el apartado de unidades sueltas y el campo "Cajas" ocupa el ancho completo. Para artículos con múltiplo > 1 se mantiene la cuadrícula de dos columnas habitual.
+- **Botón "← Volver a acceso"**: al pulsarlo envía `DELETE /api/auth` para limpiar la sesión por cookie antes de redirigir a `/login`, garantizando que el formulario de contraseña funciona correctamente al volver.
+- **Inicialización de cantidades**: en recuentos manuales de origen SAP o sin recuento previo los campos arrancan en cero; si el recuento pendiente es de origen manual se mantienen las cantidades guardadas.
+
+### Pedidos de Reposición (área Pacientes Externos) — funcionalidad completa
+
+#### Nuevo circuito de reposición en APP Recuento Manual
+- Botón **"Pedido a Farmacia"** visible únicamente en el área UPE.
+- Flujo de 3 pasos: seleccionar ubicación → indicar cajas → guardar ubicación o finalizar pedido.
+- Solo se muestran artículos **activos** en el listado de reposición.
+- Visualización del **stock máximo** de referencia junto a cada medicamento.
+- Alerta visual al superar el stock máximo: borde y texto del campo en **rojo**, mensaje "⚠ Supera stock máximo".
+- Cantidad guardada: borde en **verde** y mensaje "✔ Cantidad añadida" cuando el valor es válido.
+- Cantidades de borradores guardados se **precargan** al volver a entrar en una ubicación.
+
+#### Pestaña Stock — sección "Pedidos de Reposición"
+- Nueva sección visible solo para UPE con pedido borrador activo e historial de pedidos finalizados.
+- Botón **"Editar pedido"** en el borrador activo: redirige a la APP de recuento directamente al flujo de reposición con el pedido cargado.
+- Botones **"Descargar PDF"** y **"Enviar email"** para pedido borrador e historial.
+
+#### PDF — albarán de reposición
+- Generación con `pdf-lib` (compatible con Vercel serverless; sustituye a `pdfkit` que requería archivos de fuente en disco).
+- Función `safe()` para filtrar caracteres fuera de WinAnsi (emojis, símbolos especiales).
+- Cabecera: **"Servicio de Farmacia Hospitalaria - Hospital de Manacor - Pacientes Externos"**.
+- Pie: **"Documento generado automáticamente - Pacientes Externos"**.
+- Tabla con columnas: CN · Principio activo · Medicamento · Ubicación · Cajas pedidas.
+- Filas con altura adecuada para evitar solapamiento con cabeceras.
+
+#### Email — envío de albaranes
+- Servicio `reposicion-email.ts` con `nodemailer`: adjunta el PDF generado dinámicamente.
+- Tabla `app_settings` (Neon) para almacenar configuración SMTP y de email de forma persistente.
+- API `GET /api/settings` y `PATCH /api/settings` para lectura/escritura de ajustes.
+- API `POST /api/reposicion/[id]/email` que genera el PDF y lo envía.
+
+#### Pestaña Config (antes "Histórico")
+- Formulario editable con los siguientes campos:
+  - **SMTP**: host, puerto, usuario, contraseña (toggle mostrar/ocultar), TLS.
+  - **Email de reposición**: destinatarios (separados por coma), asunto y cuerpo del mensaje.
+- Botón **"Guardar configuración"** con feedback de éxito/error.
+
+### Pestaña Stock — eliminación de recuento pendiente
+- Botón **"Eliminar recuento pendiente"** para poder cargar un nuevo archivo cuando ya hay uno sin tramitar.
+- API `DELETE /api/stock/recuentos/[id]` que verifica el estado `pendiente` antes de borrar.
+
+### Importación SAP — mejoras de robustez y avisos
+- Parser tolerante a variaciones de nombre de columna (alias múltiples, match parcial, case-insensitive).
+- `parseExcelNumber` admite formatos españoles (coma decimal, punto de miles).
+- Función `cnFromSapMaterial` mejorada en `utils.ts` para extraer CN desde código SAP de 14 dígitos.
+- Advertencias más detalladas: indican el tipo de problema y el medicamento afectado, y son copiables al portapapeles.
+- Cuando el archivo incluye columna **"Valor final"** se actualiza automáticamente `precioUnidad` y `precioCaja` en el catálogo.
+
+### Pestaña Propuesta — cantidad en tránsito
+- Nueva columna **"En tránsito"** entre "Stock actual" y "Calculado".
+- El cálculo de propuesta descuenta la cantidad en tránsito (pedidos pendientes no recibidos, columna `por_entregar_cantidad`, excluidos los anulados).
+- `calcularCajasPropuestas` acepta `stockTransito` como parámetro.
+- API `/api/propuestas/actual` obtiene y aplica el tránsito antes de calcular.
+
+---
+
 ## [v0.8] — 19 jun 2026
 
 ### Pestaña Inventario
