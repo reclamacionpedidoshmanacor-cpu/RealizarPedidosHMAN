@@ -45,6 +45,8 @@ Historial de cambios del proyecto ordenado del más reciente al más antiguo.
 - Texto UI actualizado: explica explícitamente ventana visible 6 meses y análisis de tendencia en comparación 3+3 meses.
 - Historial de propuestas: nueva opción **Ver/Ocultar** para desplegar el detalle de líneas de cada propuesta sin deshacerla.
 - Nueva API `GET /api/propuestas/[id]/detalle` con control de área para consultar propuesta + líneas en modo lectura.
+- Propuestas: persistencia de `stock_transito_snap` en `propuestas_lineas` para conservar el valor de tránsito que influyó en el cálculo.
+- Historial desplegable: añade columna **En tránsito** en el detalle de líneas para consulta/auditoría tras tramitación.
 
 ### Pendiente para retomar (bloqueado por datos)
 - Cargar histórico de consumo depurado con datos suficientes para detectar tendencias reales.

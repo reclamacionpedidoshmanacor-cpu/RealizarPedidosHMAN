@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
 import {
+  actualizarStockTransitoSnapshot,
   actualizarCalculoAutomaticoLineaPropuesta,
   getBorradorPropuesta,
   crearPropuesta,
@@ -127,6 +128,9 @@ export async function GET(req: NextRequest) {
       );
       lineas = await getLineasPropuesta(propuesta.id);
     }
+
+    // Persistimos snapshot de stock en tránsito para auditoría/historial.
+    await actualizarStockTransitoSnapshot(propuesta.id, stockTransitoByCn);
 
     const lineasConTransito = lineas.map((linea) => ({
       ...linea,

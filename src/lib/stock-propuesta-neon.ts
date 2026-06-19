@@ -14,6 +14,20 @@ function numOrNull(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+let ensurePropuestasLineasSchemaPromise: Promise<void> | null = null;
+async function ensurePropuestasLineasSchema(): Promise<void> {
+  if (!ensurePropuestasLineasSchemaPromise) {
+    const sql = getDb();
+    ensurePropuestasLineasSchemaPromise = (async () => {
+      await sql`
+        ALTER TABLE propuestas_lineas
+        ADD COLUMN IF NOT EXISTS stock_transito_snap REAL NOT NULL DEFAULT 0;
+      `;
+    })();
+  }
+  await ensurePropuestasLineasSchemaPromise;
+}
+
 // ---------------------------------------------------------------------------
 // TIPOS
 // ---------------------------------------------------------------------------
@@ -472,11 +486,12 @@ export async function crearPropuesta(area: string, importacionStockId: number): 
 }
 
 export async function getLineasPropuesta(propuestaId: number): Promise<PropuestaLinea[]> {
+  await ensurePropuestasLineasSchema();
   const sql = getDb();
   const rows = (await sql`
     SELECT pl.id, pl.cn, pl.nombre_medicamento, pl.unidades_por_caja,
            m.principio_activo,
-           stock_actual, stock_minimo_snap, punto_pedido_snap, stock_maximo_snap,
+           stock_actual, stock_transito_snap, stock_minimo_snap, punto_pedido_snap, stock_maximo_snap,
            cajas_propuestas, cajas_validadas, motivo_ajuste, motivo_ajuste_otro, ajustado
     FROM propuestas_lineas pl
     LEFT JOIN medicamentos m ON m.cn = pl.cn
@@ -485,14 +500,14 @@ export async function getLineasPropuesta(propuestaId: number): Promise<Propuesta
   `) as Array<{
     id: number; cn: string; nombre_medicamento: string | null; unidades_por_caja: number;
     principio_activo: string | null;
-    stock_actual: string; stock_minimo_snap: number; punto_pedido_snap: number; stock_maximo_snap: number;
+    stock_actual: string; stock_transito_snap: string; stock_minimo_snap: number; punto_pedido_snap: number; stock_maximo_snap: number;
     cajas_propuestas: number; cajas_validadas: number | null;
     motivo_ajuste: string | null; motivo_ajuste_otro: string | null; ajustado: boolean;
   }>;
 
   return rows.map((r) => ({
     id: num(r.id), cn: r.cn, principioActivo: r.principio_activo, nombreMedicamento: r.nombre_medicamento,
-    unidadesPorCaja: num(r.unidades_por_caja), stockActual: num(r.stock_actual), stockTransito: 0,
+    unidadesPorCaja: num(r.unidades_por_caja), stockActual: num(r.stock_actual), stockTransito: num(r.stock_transito_snap),
     stockMinimoSnap: num(r.stock_minimo_snap), puntoPedidoSnap: num(r.punto_pedido_snap),
     stockMaximoSnap: num(r.stock_maximo_snap), cajasPropuestas: num(r.cajas_propuestas),
     cajasValidadas: r.cajas_validadas != null ? num(r.cajas_validadas) : null,
@@ -525,6 +540,7 @@ export async function insertarLineasPropuesta(
     stockMinimo: number; puntoPedido: number; stockMaximo: number; stockTransito: number;
   }>
 ): Promise<void> {
+  await ensurePropuestasLineasSchema();
   const sql = getDb();
   for (const r of rows) {
     const cajasPropuestas = calcularCajasPropuestas(
@@ -536,13 +552,32 @@ export async function insertarLineasPropuesta(
     await sql`
       INSERT INTO propuestas_lineas (
         propuesta_id, cn, nombre_medicamento, unidades_por_caja,
-        stock_actual, stock_minimo_snap, punto_pedido_snap, stock_maximo_snap, stock_objetivo_snap,
+        stock_actual, stock_transito_snap, stock_minimo_snap, punto_pedido_snap, stock_maximo_snap, stock_objetivo_snap,
         cajas_propuestas, cajas_validadas, ajustado
       ) VALUES (
         ${propuestaId}, ${r.cn}, ${r.nombre}, ${r.unidadesPorCaja},
-        ${r.stockCajas}, ${r.stockMinimo}, ${r.puntoPedido}, ${r.stockMaximo}, ${r.stockMaximo},
+        ${r.stockCajas}, ${r.stockTransito}, ${r.stockMinimo}, ${r.puntoPedido}, ${r.stockMaximo}, ${r.stockMaximo},
         ${cajasPropuestas}, ${cajasPropuestas}, false
       );
+    `;
+  }
+}
+
+export async function actualizarStockTransitoSnapshot(
+  propuestaId: number,
+  stockTransitoByCn: Record<string, number>
+): Promise<void> {
+  await ensurePropuestasLineasSchema();
+  const sql = getDb();
+  const cns = Object.keys(stockTransitoByCn);
+  if (cns.length === 0) return;
+
+  for (const cn of cns) {
+    const value = Number(stockTransitoByCn[cn] ?? 0);
+    await sql`
+      UPDATE propuestas_lineas
+      SET stock_transito_snap = ${value}
+      WHERE propuesta_id = ${propuestaId} AND cn = ${cn};
     `;
   }
 }

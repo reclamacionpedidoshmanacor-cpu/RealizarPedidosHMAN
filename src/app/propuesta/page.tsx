@@ -654,6 +654,7 @@ export default function PropuestaPage() {
                                     <th className="px-3 py-2 text-left">CN</th>
                                     <th className="px-3 py-2 text-left">Ppio activo / marca</th>
                                     <th className="px-3 py-2 text-center">Stock</th>
+                                    <th className="px-3 py-2 text-center">En tránsito</th>
                                     <th className="px-3 py-2 text-center">Calculado</th>
                                     <th className="px-3 py-2 text-center">Validado</th>
                                     <th className="px-3 py-2 text-left">Motivo</th>
@@ -670,6 +671,7 @@ export default function PropuestaPage() {
                                         )}
                                       </td>
                                       <td className="px-3 py-2 text-center tabular-nums text-slate-600">{Number(linea.stockActual).toFixed(1)}</td>
+                                      <td className="px-3 py-2 text-center tabular-nums text-violet-700">{Number(linea.stockTransito ?? 0).toFixed(1)}</td>
                                       <td className="px-3 py-2 text-center tabular-nums text-slate-600">{linea.cajasPropuestas}</td>
                                       <td className="px-3 py-2 text-center tabular-nums text-slate-700 font-semibold">{linea.cajasValidadas ?? linea.cajasPropuestas}</td>
                                       <td className="px-3 py-2 text-slate-500">
