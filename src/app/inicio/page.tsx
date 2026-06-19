@@ -27,7 +27,6 @@ type ResumenOperativo = {
 type TendenciaMedicamento = {
   cn: string;
   componente: string;
-  tipoComponente: string;
   medicamento: string;
   periodoActual: number;
   periodoAnterior: number;

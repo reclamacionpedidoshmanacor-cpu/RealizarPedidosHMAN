@@ -296,7 +296,6 @@ export type TemporalGlobal = {
 export type TendenciaMedicamento = {
   cn: string;
   componente: string;
-  tipoComponente: string;
   medicamento: string;
   periodoActual: number;
   periodoAnterior: number;
@@ -308,7 +307,8 @@ export async function getTendenciasConsumo(area: string): Promise<TendenciaMedic
   const sql = getDb();
   const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
 
-  // Calcula períodos relativos a la fecha más reciente en los datos (no a hoy)
+  // Calcula períodos relativos a la fecha más reciente en los datos (no a hoy).
+  // Excluye Fungible y Fluido, y solo incluye CNs presentes en el catálogo del área.
   const agrupado = (await sql`
     WITH maxdate AS (
       SELECT MAX(cr.fecha) AS latest
@@ -326,19 +326,22 @@ export async function getTendenciasConsumo(area: string): Promise<TendenciaMedic
     agrupado AS (
       SELECT
         cr.cn,
-        COALESCE(MAX(cr.componente),       '') AS componente,
-        COALESCE(MAX(cr.tipo_componente),  '') AS tipo_componente,
-        COALESCE(MAX(cr.medicamento),      '') AS medicamento,
-        SUM(CASE WHEN cr.fecha >  p.split_date                           THEN cr.viales_dispensados ELSE 0 END)::float AS periodo_actual,
+        COALESCE(MAX(cr.componente),  '') AS componente,
+        COALESCE(MAX(cr.medicamento), '') AS medicamento,
+        SUM(CASE WHEN cr.fecha >  p.split_date                            THEN cr.viales_dispensados ELSE 0 END)::float AS periodo_actual,
         SUM(CASE WHEN cr.fecha <= p.split_date AND cr.fecha > p.start_date THEN cr.viales_dispensados ELSE 0 END)::float AS periodo_anterior
       FROM consumo_registros cr
       JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+      -- Solo CNs del catálogo de esta área
+      JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area} AND m.activo = TRUE
       CROSS JOIN periods p
       WHERE ic.area = ${area}
+        -- Excluir Fungible y Fluido (insensible a mayúsculas)
+        AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
       GROUP BY cr.cn
     )
     SELECT
-      cn, componente, tipo_componente, medicamento,
+      cn, componente, medicamento,
       periodo_actual, periodo_anterior,
       ROUND((((periodo_actual / NULLIF(periodo_anterior, 0)) - 1) * 100)::numeric, 1) AS variacion_pct
     FROM agrupado
@@ -346,7 +349,7 @@ export async function getTendenciasConsumo(area: string): Promise<TendenciaMedic
       AND periodo_actual > periodo_anterior * 1.10
     ORDER BY variacion_pct DESC;
   `) as Array<{
-    cn: string; componente: string; tipo_componente: string; medicamento: string;
+    cn: string; componente: string; medicamento: string;
     periodo_actual: number; periodo_anterior: number; variacion_pct: number;
   }>;
 
@@ -376,7 +379,6 @@ export async function getTendenciasConsumo(area: string): Promise<TendenciaMedic
   return agrupado.map(r => ({
     cn: r.cn,
     componente: r.componente,
-    tipoComponente: r.tipo_componente,
     medicamento: r.medicamento,
     periodoActual: Number(r.periodo_actual),
     periodoAnterior: Number(r.periodo_anterior),
