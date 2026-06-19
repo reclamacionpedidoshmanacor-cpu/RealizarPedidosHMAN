@@ -290,7 +290,7 @@ export type TemporalGlobal = {
 
 // ---------------------------------------------------------------------------
 // Tendencias de consumo para el panel Inicio
-// Compara los últimos 3 meses de datos disponibles vs los 3 meses anteriores.
+// Compara los últimos 3 meses naturales vs los 3 meses anteriores (relativo a hoy).
 // Devuelve sólo los medicamentos con variación > +10 %.
 // ---------------------------------------------------------------------------
 export type TendenciaMedicamento = {
@@ -307,21 +307,13 @@ export async function getTendenciasConsumo(area: string): Promise<TendenciaMedic
   const sql = getDb();
   const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
 
-  // Calcula períodos relativos a la fecha más reciente en los datos (no a hoy).
+  // Ventana temporal relativa a hoy (no al último dato cargado).
   // Excluye Fungible y Fluido, y solo incluye CNs presentes en el catálogo del área.
   const agrupado = (await sql`
-    WITH maxdate AS (
-      SELECT MAX(cr.fecha) AS latest
-      FROM consumo_registros cr
-      JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
-      WHERE ic.area = ${area}
-    ),
-    periods AS (
+    WITH periods AS (
       SELECT
-        latest,
-        (latest - INTERVAL '3 months')::date AS split_date,
-        (latest - INTERVAL '6 months')::date AS start_date
-      FROM maxdate
+        (CURRENT_DATE - INTERVAL '3 months')::date AS split_date,
+        (CURRENT_DATE - INTERVAL '6 months')::date AS start_date
     ),
     agrupado AS (
       SELECT
@@ -337,6 +329,7 @@ export async function getTendenciasConsumo(area: string): Promise<TendenciaMedic
       JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area} AND m.activo = TRUE
       CROSS JOIN periods p
       WHERE ic.area = ${area}
+        AND cr.fecha > p.start_date
         -- Excluir Fungible y Fluido (insensible a mayúsculas)
         AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
       GROUP BY cr.cn
@@ -356,23 +349,16 @@ export async function getTendenciasConsumo(area: string): Promise<TendenciaMedic
 
   if (agrupado.length === 0) return [];
 
-  // Evolución mensual del período actual (últimos 3 meses) para cada CN encontrado
+  // Evolución mensual del período actual (últimos 3 meses naturales) para cada CN encontrado
   const cns = agrupado.map(r => r.cn);
   const temporal = (await sql`
-    WITH maxdate AS (
-      SELECT MAX(cr.fecha) AS latest
-      FROM consumo_registros cr
-      JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
-      WHERE ic.area = ${area}
-    )
     SELECT cr.cn, cr.anio, cr.mes,
            SUM(cr.viales_dispensados)::float AS viales
     FROM consumo_registros cr
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
-    CROSS JOIN maxdate
     WHERE ic.area = ${area}
       AND cr.cn = ANY(${cns})
-      AND cr.fecha > (maxdate.latest - INTERVAL '3 months')::date
+      AND cr.fecha > (CURRENT_DATE - INTERVAL '3 months')::date
     GROUP BY cr.cn, cr.anio, cr.mes
     ORDER BY cr.cn, cr.anio, cr.mes;
   `) as Array<{ cn: string; anio: number; mes: number; viales: number }>;
@@ -404,23 +390,16 @@ export type CurvaMes = {
 export async function getCurvaMedicamento(cn: string, area: string): Promise<CurvaMes[]> {
   const sql = getDb();
   const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-  // Últimos 3 meses relativos al dato más reciente disponible para este CN
+  // Ventana visible de los últimos 6 meses naturales (relativo a hoy).
   const rows = (await sql`
-    WITH maxdate AS (
-      SELECT MAX(cr.fecha) AS latest
-      FROM consumo_registros cr
-      JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
-      WHERE ic.area = ${area} AND cr.cn = ${cn}
-    )
     SELECT cr.anio, cr.mes,
            SUM(cr.viales_dispensados)::float AS viales,
            SUM(cr.num_pacientes)::int        AS pacientes
     FROM consumo_registros cr
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
-    CROSS JOIN maxdate
     WHERE ic.area = ${area}
       AND cr.cn = ${cn}
-      AND cr.fecha > (maxdate.latest - INTERVAL '6 months')::date
+      AND cr.fecha > (CURRENT_DATE - INTERVAL '6 months')::date
     GROUP BY cr.anio, cr.mes
     ORDER BY cr.anio, cr.mes;
   `) as Array<{ anio: number; mes: number; viales: number; pacientes: number }>;

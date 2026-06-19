@@ -47,6 +47,8 @@ Historial de cambios del proyecto ordenado del más reciente al más antiguo.
 - Nueva API `GET /api/propuestas/[id]/detalle` con control de área para consultar propuesta + líneas en modo lectura.
 - Propuestas: persistencia de `stock_transito_snap` en `propuestas_lineas` para conservar el valor de tránsito que influyó en el cálculo.
 - Historial desplegable: añade columna **En tránsito** en el detalle de líneas para consulta/auditoría tras tramitación.
+- Inicio: la ventana temporal de tendencia/curva se calcula contra fecha actual (`CURRENT_DATE`), evitando reutilizar ventanas antiguas del histórico (ej. 2024).
+- Inicio: la serie de pedidos en curva pasa a considerar pedidos no anulados (recibidos + pendientes) en los últimos 6 meses.
 
 ### Pendiente para retomar (bloqueado por datos)
 - Cargar histórico de consumo depurado con datos suficientes para detectar tendencias reales.

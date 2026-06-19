@@ -23,15 +23,13 @@ export async function GET(req: NextRequest) {
   if (!cn) return NextResponse.json({ error: 'cn requerido.' }, { status: 400 });
 
   try {
-    // Consumo: últimos 6 meses relativos al dato más reciente del área
+    // Consumo: últimos 6 meses naturales (relativo a hoy)
     const consumo = await getCurvaMedicamento(cn, session.area);
 
-    // Fecha inicio del período de consumo para filtrar pedidos al mismo rango
-    const fechaDesde = consumo.length > 0
-      ? `${consumo[0].anio}-${String(consumo[0].mes).padStart(2, '0')}-01`
-      : new Date(Date.now() - 180 * 86_400_000).toISOString().slice(0, 10);
+    // Fecha inicio de la ventana visible (6 meses naturales)
+    const fechaDesde = new Date(Date.now() - 180 * 86_400_000).toISOString().slice(0, 10);
 
-    // Pedidos recibidos: query directa por CN en PedidosPendientes
+    // Pedidos no anulados (recibidos + pendientes): query directa por CN en PedidosPendientes
     let pedidosMes: { anio: number; mes: number; label: string; cantidad: number }[] = [];
     try {
       const cn6 = toCn6(cn);

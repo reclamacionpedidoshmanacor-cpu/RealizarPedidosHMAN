@@ -194,7 +194,8 @@ export async function loadPedidosConRespuestas(params: LoadPedidosParams): Promi
 }
 
 // ---------------------------------------------------------------------------
-// Pedidos RECIBIDOS agrupados por mes para un CN concreto (para curva Inicio)
+// Pedidos no anulados (recibidos + pendientes) agrupados por mes para un CN.
+// Se usa en la curva de Inicio para representar compras emitidas.
 // ---------------------------------------------------------------------------
 export type PedidoMesItem = { anio: number; mes: number; cantidad: number };
 
@@ -208,8 +209,7 @@ export async function loadPedidosRecibidosPorMesByCn(
       fecha_documento::text AS fecha_documento,
       cantidad_pedido::text AS cantidad_pedido
     FROM public.orders
-    WHERE recibido = TRUE
-      AND anulado  = FALSE
+    WHERE anulado  = FALSE
       AND fecha_documento >= ${fechaDesde}::date
       AND n_mate_prov IS NOT NULL
       AND lpad(right(regexp_replace(n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') = ${cn6}
