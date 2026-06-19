@@ -34,8 +34,8 @@ export async function GET(
 
     sheet.columns = [
       { header: 'Codigo SAP', key: 'sap', width: 18 },
-      { header: 'Descripcion', key: 'descripcion', width: 60 },
       { header: 'Cantidad (unidades)', key: 'cantidad', width: 22 },
+      { header: 'Descripcion', key: 'descripcion', width: 60 },
     ];
 
     for (const linea of lineas) {
@@ -44,8 +44,8 @@ export async function GET(
       if (unidadesFinales <= 0) continue;
       sheet.addRow({
         sap: toSapCode(linea.cn),
-        descripcion: linea.nombreMedicamento ?? linea.cn,
         cantidad: unidadesFinales,
+        descripcion: linea.nombreMedicamento ?? linea.cn,
       });
     }
 
