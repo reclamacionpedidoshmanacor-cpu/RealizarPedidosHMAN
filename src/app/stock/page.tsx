@@ -96,6 +96,7 @@ export default function StockPage() {
   const [historicoLineas, setHistoricoLineas] = useState<Record<number, RecuentoLinea[]>>({});
   const [historicoLoading, setHistoricoLoading] = useState<Record<number, boolean>>({});
   const [recoveringId, setRecoveringId] = useState<number | null>(null);
+  const [sendingEmailId, setSendingEmailId] = useState<number | null>(null);
 
   /* ── Pedidos de Reposición (solo UPE) ── */
   const [reposicion, setReposicion] = useState<{ borrador: ReposicionCabecera | null; historial: ReposicionCabecera[] } | null>(null);
@@ -299,6 +300,20 @@ export default function StockPage() {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
       setRecoveringId(null);
+    }
+  };
+
+  const enviarPedidoReposicionEmail = async (pedidoId: number) => {
+    setSendingEmailId(pedidoId);
+    try {
+      const res = await fetch(`/api/reposicion/${pedidoId}/email`, { method: 'POST' });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo enviar el email.');
+      toast.success(`Email enviado para pedido #${pedidoId}.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setSendingEmailId(null);
     }
   };
 
@@ -603,6 +618,13 @@ export default function StockPage() {
                 className="rounded-lg border border-orange-300 bg-white px-3 py-1.5 text-xs font-semibold text-orange-700 hover:bg-orange-100">
                 ⬇ Descargar PDF
               </a>
+              <button
+                onClick={() => enviarPedidoReposicionEmail(reposicion.borrador!.id)}
+                disabled={sendingEmailId === reposicion.borrador.id}
+                className="rounded-lg border border-indigo-300 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+              >
+                {sendingEmailId === reposicion.borrador.id ? 'Enviando…' : '✉ Enviar email'}
+              </button>
             </div>
           )}
 
@@ -643,10 +665,19 @@ export default function StockPage() {
                       </td>
                       <td className="px-3 py-2 text-right text-slate-700">{rep.totalLineas}</td>
                       <td className="px-3 py-2 text-right">
-                        <a href={`/api/reposicion/${rep.id}/pdf`} target="_blank" rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100">
-                          ⬇ PDF
-                        </a>
+                        <div className="inline-flex items-center gap-2">
+                          <a href={`/api/reposicion/${rep.id}/pdf`} target="_blank" rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100">
+                            ⬇ PDF
+                          </a>
+                          <button
+                            onClick={() => enviarPedidoReposicionEmail(rep.id)}
+                            disabled={sendingEmailId === rep.id}
+                            className="inline-flex items-center gap-1 rounded-lg border border-indigo-300 px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                          >
+                            {sendingEmailId === rep.id ? 'Enviando…' : '✉ Enviar email'}
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))
