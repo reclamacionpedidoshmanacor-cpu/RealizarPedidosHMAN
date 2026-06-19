@@ -13,6 +13,14 @@ type RecuentoCabecera = {
   propuestaId: number | null;
 };
 
+type ReposicionCabecera = {
+  id: number;
+  estado: 'borrador' | 'finalizado';
+  fechaCreacion: string;
+  fechaFinalizado: string | null;
+  totalLineas: number;
+};
+
 type RecuentoLinea = {
   cn: string;
   principioActivo: string | null;
@@ -89,6 +97,9 @@ export default function StockPage() {
   const [historicoLoading, setHistoricoLoading] = useState<Record<number, boolean>>({});
   const [recoveringId, setRecoveringId] = useState<number | null>(null);
 
+  /* ── Pedidos de Reposición (solo UPE) ── */
+  const [reposicion, setReposicion] = useState<{ borrador: ReposicionCabecera | null; historial: ReposicionCabecera[] } | null>(null);
+
   const load = async () => {
     setLoading(true);
     try {
@@ -113,7 +124,18 @@ export default function StockPage() {
 
   useEffect(() => {
     void load();
+    void loadReposicion();
   }, []);
+
+  const loadReposicion = async () => {
+    try {
+      const res = await fetch('/api/reposicion', { cache: 'no-store' });
+      if (res.status === 403) { setReposicion(null); return; }
+      const payload = await res.json();
+      if (!res.ok) return;
+      setReposicion({ borrador: payload.borrador ?? null, historial: payload.historial ?? [] });
+    } catch { /* área no UPE: silencioso */ }
+  };
 
   const upload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -555,6 +577,84 @@ export default function StockPage() {
             </div>
           </section>
         </>
+      )}
+
+      {/* ══ Pedidos de Reposición (solo área Pac. Externos) ══ */}
+      {reposicion !== null && (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h2 className="text-lg font-bold text-slate-800">Pedidos de Reposición</h2>
+              <p className="text-xs text-slate-500">Solo disponible para el área de Pacientes Externos</p>
+            </div>
+            <span className="rounded-full bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-700">Pac. Externos</span>
+          </div>
+
+          {/* Borrador activo */}
+          {reposicion.borrador && (
+            <div className="rounded-xl border-2 border-orange-300 bg-orange-50 px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <p className="text-sm font-bold text-orange-700">🛒 Pedido en borrador #{reposicion.borrador.id}</p>
+                <p className="text-xs text-orange-600">
+                  Creado: {new Date(reposicion.borrador.fechaCreacion).toLocaleDateString('es-ES')} · {reposicion.borrador.totalLineas} líneas
+                </p>
+              </div>
+              <a href={`/api/reposicion/${reposicion.borrador.id}/pdf`} target="_blank" rel="noopener noreferrer"
+                className="rounded-lg border border-orange-300 bg-white px-3 py-1.5 text-xs font-semibold text-orange-700 hover:bg-orange-100">
+                ⬇ Descargar PDF
+              </a>
+            </div>
+          )}
+
+          {/* Historial */}
+          <div className="rounded-xl border border-slate-200 bg-white overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-3 py-2 text-left">Nº</th>
+                  <th className="px-3 py-2 text-left">Fecha</th>
+                  <th className="px-3 py-2 text-center">Estado</th>
+                  <th className="px-3 py-2 text-right">Líneas</th>
+                  <th className="px-3 py-2 text-right">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {reposicion.historial.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-4 text-slate-400 text-center">
+                      No hay pedidos de reposición aún. Usa la APP de Recuento → Pedido a Farmacia.
+                    </td>
+                  </tr>
+                ) : (
+                  reposicion.historial.map((rep) => (
+                    <tr key={rep.id} className="border-t border-slate-100 hover:bg-slate-50">
+                      <td className="px-3 py-2 font-mono text-slate-600">#{rep.id}</td>
+                      <td className="px-3 py-2 text-slate-700">
+                        {new Date(rep.fechaCreacion).toLocaleDateString('es-ES')}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                          rep.estado === 'finalizado'
+                            ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
+                            : 'bg-orange-50 text-orange-700 ring-1 ring-orange-200'
+                        }`}>
+                          {rep.estado === 'finalizado' ? 'Finalizado' : 'Borrador'}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right text-slate-700">{rep.totalLineas}</td>
+                      <td className="px-3 py-2 text-right">
+                        <a href={`/api/reposicion/${rep.id}/pdf`} target="_blank" rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100">
+                          ⬇ PDF
+                        </a>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
       )}
     </div>
   );

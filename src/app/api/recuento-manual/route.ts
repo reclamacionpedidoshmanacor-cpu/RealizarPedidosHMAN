@@ -115,6 +115,7 @@ export async function GET(req: NextRequest) {
               unidadesPorCaja,
               cajas,
               unidadesSueltas,
+              stockMaximo: med.stockMaximo ?? null,
             };
           })
       : [];
