@@ -336,7 +336,7 @@ export default function StockPage() {
           </section>
 
           <section className="space-y-3">
-            <h2 className="text-lg font-semibold text-slate-800">Recuentos historicos</h2>
+            <h2 className="text-lg font-semibold text-slate-800">Historial de recuentos</h2>
             <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
               <table className="min-w-full text-sm">
                 <thead className="bg-slate-50 text-slate-600">
