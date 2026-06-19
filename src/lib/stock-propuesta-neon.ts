@@ -806,7 +806,7 @@ export async function getResumenOperativo(area: string): Promise<ResumenOperativ
     FROM stock_registros sr
     JOIN ultimo u ON sr.importacion_id = u.id
     JOIN medicamentos m ON m.cn = sr.cn AND m.area = ${area} AND m.activo = TRUE
-    JOIN stock_objetivo so ON so.cn = sr.cn AND so.area = ${area};
+    JOIN stock_objetivo so ON so.cn = sr.cn;
   `) as Array<{ bajo_minimo: number; bajo_o_punto: number }>;
 
   return {

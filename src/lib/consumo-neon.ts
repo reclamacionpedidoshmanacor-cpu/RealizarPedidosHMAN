@@ -340,7 +340,7 @@ export async function getTendenciasConsumo(area: string): Promise<TendenciaMedic
     SELECT
       cn, componente, tipo_componente, medicamento,
       periodo_actual, periodo_anterior,
-      ROUND(((periodo_actual / NULLIF(periodo_anterior, 0)) - 1) * 100, 1) AS variacion_pct
+      ROUND((((periodo_actual / NULLIF(periodo_anterior, 0)) - 1) * 100)::numeric, 1) AS variacion_pct
     FROM agrupado
     WHERE periodo_anterior > 0
       AND periodo_actual > periodo_anterior * 1.10
