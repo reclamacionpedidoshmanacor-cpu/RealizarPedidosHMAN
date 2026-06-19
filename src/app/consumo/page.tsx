@@ -131,7 +131,11 @@ export default function ConsumoPage() {
       const form = new FormData();
       form.append('file', file);
       const res = await fetch('/api/consumo/importar', { method: 'POST', body: form });
-      const data = await res.json();
+      const text = await res.text();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let data: any;
+      try { data = JSON.parse(text); }
+      catch { throw new Error(`Error del servidor: ${text.slice(0, 300)}`); }
       if (!res.ok) throw new Error(data?.error ?? 'Error al importar.');
       toast.success(`Importado: ${data.totalLineas} filas · ${fmt(data.periodoInicio)} – ${fmt(data.periodoFin)}`);
       if (data.advertencias?.length) {

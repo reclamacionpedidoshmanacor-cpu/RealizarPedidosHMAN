@@ -138,27 +138,38 @@ export async function insertarImportacionConsumo(
 
   const importacionId = num(inserted[0]!.id);
 
-  // Insert in batches of 500
-  const BATCH = 500;
-  for (let i = 0; i < rows.length; i += BATCH) {
-    const batch = rows.slice(i, i + BATCH);
-    for (const r of batch) {
-      await sql`
-        INSERT INTO consumo_registros (
-          importacion_id, anio, mes, dia, fecha,
-          servicio, uh, edad_paciente,
-          indicacion, diagnostico, protocolo, num_ciclo,
-          tipo_terapia, tipo_componente, componente,
-          cn, medicamento, viales_dispensados, num_pacientes
-        ) VALUES (
-          ${importacionId}, ${r.anio}, ${r.mes}, ${r.dia ?? null}, ${r.fecha},
-          ${r.servicio || null}, ${r.uh || null}, ${r.edadPaciente || null},
-          ${r.indicacion || null}, ${r.diagnostico || null}, ${r.protocolo || null}, ${r.numCiclo || null},
-          ${r.tipoTerapia || null}, ${r.tipoComponente || null}, ${r.componente || null},
-          ${r.cn}, ${r.medicamento || null}, ${r.vialesDispensados}, ${r.numPacientes}
-        );
-      `;
-    }
+  // Bulk insert usando unnest — una sola llamada HTTP a Neon para todas las filas
+  if (rows.length > 0) {
+    await sql`
+      INSERT INTO consumo_registros (
+        importacion_id, anio, mes, dia, fecha,
+        servicio, uh, edad_paciente,
+        indicacion, diagnostico, protocolo, num_ciclo,
+        tipo_terapia, tipo_componente, componente,
+        cn, medicamento, viales_dispensados, num_pacientes
+      )
+      SELECT * FROM unnest(
+        ${rows.map(() => importacionId)}::integer[],
+        ${rows.map(r => r.anio)}::smallint[],
+        ${rows.map(r => r.mes)}::smallint[],
+        ${rows.map(r => r.dia ?? null)}::smallint[],
+        ${rows.map(r => r.fecha)}::date[],
+        ${rows.map(r => r.servicio || null)}::text[],
+        ${rows.map(r => r.uh || null)}::text[],
+        ${rows.map(r => r.edadPaciente || null)}::text[],
+        ${rows.map(r => r.indicacion || null)}::text[],
+        ${rows.map(r => r.diagnostico || null)}::text[],
+        ${rows.map(r => r.protocolo || null)}::text[],
+        ${rows.map(r => r.numCiclo || null)}::text[],
+        ${rows.map(r => r.tipoTerapia || null)}::text[],
+        ${rows.map(r => r.tipoComponente || null)}::text[],
+        ${rows.map(r => r.componente || null)}::text[],
+        ${rows.map(r => r.cn)}::text[],
+        ${rows.map(r => r.medicamento || null)}::text[],
+        ${rows.map(r => r.vialesDispensados)}::real[],
+        ${rows.map(r => r.numPacientes)}::integer[]
+      );
+    `;
   }
 
   return importacionId;
