@@ -205,24 +205,32 @@ export async function loadPedidosRecibidosPorMesByCn(
   const sql = getPedidosReadonlyClient();
   const rows = (await sql`
     SELECT
-      EXTRACT(YEAR  FROM fecha_documento)::int AS anio,
-      EXTRACT(MONTH FROM fecha_documento)::int AS mes,
-      SUM(COALESCE(cantidad_pedido::numeric, 0))::float AS cantidad
+      fecha_documento::text AS fecha_documento,
+      cantidad_pedido::text AS cantidad_pedido
     FROM public.orders
     WHERE recibido = TRUE
       AND anulado  = FALSE
       AND fecha_documento >= ${fechaDesde}::date
       AND n_mate_prov IS NOT NULL
       AND lpad(right(regexp_replace(n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') = ${cn6}
-    GROUP BY 1, 2
-    ORDER BY 1, 2;
-  `) as Array<{ anio: number; mes: number; cantidad: number }>;
+    ORDER BY fecha_documento ASC;
+  `) as Array<{ fecha_documento: string; cantidad_pedido: string | null }>;
 
-  return rows.map(r => ({
-    anio: Number(r.anio),
-    mes:  Number(r.mes),
-    cantidad: Number(r.cantidad),
-  }));
+  const monthMap = new Map<string, PedidoMesItem>();
+  for (const row of rows) {
+    const d = new Date(row.fecha_documento);
+    if (Number.isNaN(d.getTime())) continue;
+    const anio = d.getFullYear();
+    const mes = d.getMonth() + 1;
+    const key = `${anio}-${mes}`;
+    const prev = monthMap.get(key) ?? { anio, mes, cantidad: 0 };
+    const qty = parseNumberMaybe(row.cantidad_pedido) ?? 0;
+    monthMap.set(key, { ...prev, cantidad: prev.cantidad + qty });
+  }
+
+  return Array.from(monthMap.values()).sort((a, b) =>
+    a.anio !== b.anio ? a.anio - b.anio : a.mes - b.mes
+  );
 }
 
 export async function loadCantidadTransitoByCn(cns: string[]): Promise<Record<string, number>> {

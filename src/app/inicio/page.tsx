@@ -322,7 +322,7 @@ export default function InicioPage() {
           Tendencias de consumo
         </h2>
         <p className="text-xs text-slate-400 mb-3">
-          Medicamentos con aumento de consumo &gt;10% en los últimos 3 meses respecto a los 3 anteriores (ventana total: 6 meses).
+          Ventana visible: últimos 6 meses. El indicador de tendencia marca aumento &gt;10% comparando los 3 meses más recientes frente a los 3 anteriores.
           Haz clic en un medicamento para ver la evolución mensual y los pedidos recibidos.
         </p>
 
