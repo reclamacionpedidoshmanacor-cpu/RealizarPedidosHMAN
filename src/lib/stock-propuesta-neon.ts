@@ -437,6 +437,57 @@ export async function getLineasParaExcel(propuestaId: number): Promise<Array<{
   }));
 }
 
+export type PropuestaResumen = {
+  id: number;
+  estado: string;
+  fechaGeneracion: string;
+  tramitadaEn: string | null;
+  totalLineas: number;
+  recuentoId: number | null;
+  recuentoFecha: string | null;
+  recuentoOrigen: string | null;
+  excelGeneradoEn: string | null;
+};
+
+export async function listPropuestasByArea(area: string): Promise<PropuestaResumen[]> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT
+      p.id,
+      p.estado,
+      p.fecha_generacion::text   AS fecha_generacion,
+      p.tramitada_en::text       AS tramitada_en,
+      p.excel_generado_en::text  AS excel_generado_en,
+      p.importacion_stock_id     AS recuento_id,
+      i.fecha_recuento::text     AS recuento_fecha,
+      i.origen                   AS recuento_origen,
+      COUNT(pl.id)::int          AS total_lineas
+    FROM propuestas p
+    LEFT JOIN importaciones_stock i ON i.id = p.importacion_stock_id
+    LEFT JOIN propuestas_lineas pl ON pl.propuesta_id = p.id
+    WHERE p.area = ${area}
+    GROUP BY p.id, i.fecha_recuento, i.origen
+    ORDER BY p.id DESC
+    LIMIT 50;
+  `) as Array<{
+    id: number; estado: string; fecha_generacion: string;
+    tramitada_en: string | null; excel_generado_en: string | null;
+    recuento_id: number | null; recuento_fecha: string | null;
+    recuento_origen: string | null; total_lineas: number;
+  }>;
+  return rows.map(r => ({
+    id: num(r.id),
+    estado: r.estado,
+    fechaGeneracion: r.fecha_generacion,
+    tramitadaEn: r.tramitada_en,
+    excelGeneradoEn: r.excel_generado_en,
+    recuentoId: r.recuento_id ? num(r.recuento_id) : null,
+    recuentoFecha: r.recuento_fecha,
+    recuentoOrigen: r.recuento_origen,
+    totalLineas: num(r.total_lineas),
+  }));
+}
+
 export async function marcarExcelGenerado(propuestaId: number, area: string): Promise<void> {
   const sql = getDb();
   await sql`
