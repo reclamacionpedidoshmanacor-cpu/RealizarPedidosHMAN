@@ -384,10 +384,10 @@ export default function RecuentoManualPage() {
         <div className="w-full max-w-2xl space-y-8">
           <div className="flex justify-start">
             <Link
-              href="/inicio"
+              href="/login"
               className="rounded-xl border-2 border-slate-300 bg-white px-5 py-3 text-lg font-bold text-slate-600 shadow-sm hover:bg-slate-50 active:scale-95"
             >
-              ← Volver a Inicio
+              ← Volver a acceso
             </Link>
           </div>
           <div className="text-center space-y-2">
