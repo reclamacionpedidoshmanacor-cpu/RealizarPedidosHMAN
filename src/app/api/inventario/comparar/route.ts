@@ -11,12 +11,14 @@ type RowComparativa = {
   principioActivo: string | null;
   medicamento: string;
   unidadesPorCaja: number;
+  precioCaja: number | null;
+  precioUnidad: number;
   manualUnidades: number;
-  manualCajas: number;
   sapUnidades: number;
-  sapCajas: number;
   ajusteUnidades: number;
-  ajusteCajas: number;
+  manualImporte: number;
+  sapImporte: number;
+  ajusteImporte: number;
   materialSap: string | null;
 };
 
@@ -76,6 +78,7 @@ export async function POST(req: NextRequest) {
     }
 
     const warnings = [...sap.errors.map((e) => `[SAP] ${e}`)];
+    const missingPriceWarned = new Set<string>();
     for (const cn of sapByCn.keys()) {
       if (!catalogoByCn.has(cn)) {
         warnings.push(`[CATALOGO] CN ${cn}: no existe en el catálogo del área activa.`);
@@ -95,22 +98,36 @@ export async function POST(req: NextRequest) {
       const upc = med && Number(med.unidadesPorCaja) > 0 ? Number(med.unidadesPorCaja) : 1;
       const manualUnidades = Number(man?.stockUnidades ?? 0);
       const sapUnidades = Number(sapRow?.unidades ?? 0);
-      const manualCajas = man ? Number(man.stockCajas) : manualUnidades / upc;
-      const sapCajas = sapUnidades / upc;
       const ajusteUnidades = manualUnidades - sapUnidades;
-      const ajusteCajas = manualCajas - sapCajas;
+      const precioCaja = med?.precioCaja ?? null;
+      const precioUnidad =
+        med?.precioUnidad != null
+          ? Number(med.precioUnidad)
+          : precioCaja != null
+            ? Number(precioCaja) / upc
+            : 0;
+      const manualImporte = manualUnidades * precioUnidad;
+      const sapImporte = sapUnidades * precioUnidad;
+      const ajusteImporte = ajusteUnidades * precioUnidad;
+
+      if (precioUnidad <= 0 && !missingPriceWarned.has(cn)) {
+        missingPriceWarned.add(cn);
+        warnings.push(`[PRECIO] CN ${cn}: sin coste válido (precio_caja/precio_unidad) para calcular importe.`);
+      }
 
       return {
         cn,
         principioActivo: med?.principioActivo ?? man?.principioActivo ?? null,
         medicamento: med?.nombre ?? man?.nombre ?? sapRow?.material ?? `CN ${cn}`,
         unidadesPorCaja: upc,
+        precioCaja,
+        precioUnidad: round3(precioUnidad),
         manualUnidades: round3(manualUnidades),
-        manualCajas: round3(manualCajas),
         sapUnidades: round3(sapUnidades),
-        sapCajas: round3(sapCajas),
         ajusteUnidades: round3(ajusteUnidades),
-        ajusteCajas: round3(ajusteCajas),
+        manualImporte: round3(manualImporte),
+        sapImporte: round3(sapImporte),
+        ajusteImporte: round3(ajusteImporte),
         materialSap: sapRow?.material ?? null,
       };
     });
@@ -128,9 +145,9 @@ export async function POST(req: NextRequest) {
       totalManualUnidades: round3(rows.reduce((acc, r) => acc + r.manualUnidades, 0)),
       totalSapUnidades: round3(rows.reduce((acc, r) => acc + r.sapUnidades, 0)),
       totalAjusteUnidades: round3(rows.reduce((acc, r) => acc + r.ajusteUnidades, 0)),
-      totalManualCajas: round3(rows.reduce((acc, r) => acc + r.manualCajas, 0)),
-      totalSapCajas: round3(rows.reduce((acc, r) => acc + r.sapCajas, 0)),
-      totalAjusteCajas: round3(rows.reduce((acc, r) => acc + r.ajusteCajas, 0)),
+      totalManualImporte: round3(rows.reduce((acc, r) => acc + r.manualImporte, 0)),
+      totalSapImporte: round3(rows.reduce((acc, r) => acc + r.sapImporte, 0)),
+      totalAjusteImporte: round3(rows.reduce((acc, r) => acc + r.ajusteImporte, 0)),
     };
 
     return NextResponse.json({

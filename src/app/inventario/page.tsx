@@ -16,12 +16,14 @@ type InventarioRow = {
   principioActivo: string | null;
   medicamento: string;
   unidadesPorCaja: number;
+  precioCaja: number | null;
+  precioUnidad: number;
   manualUnidades: number;
-  manualCajas: number;
   sapUnidades: number;
-  sapCajas: number;
   ajusteUnidades: number;
-  ajusteCajas: number;
+  manualImporte: number;
+  sapImporte: number;
+  ajusteImporte: number;
   materialSap: string | null;
 };
 
@@ -39,9 +41,9 @@ type InventarioResultado = {
     totalManualUnidades: number;
     totalSapUnidades: number;
     totalAjusteUnidades: number;
-    totalManualCajas: number;
-    totalSapCajas: number;
-    totalAjusteCajas: number;
+    totalManualImporte: number;
+    totalSapImporte: number;
+    totalAjusteImporte: number;
   };
   rows: InventarioRow[];
 };
@@ -53,6 +55,10 @@ function fmtDate(v: string) {
 
 function fmtNum(v: number, digits = 2) {
   return v.toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: digits });
+}
+
+function fmtCurrency(v: number) {
+  return v.toLocaleString('es-ES', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export default function InventarioPage() {
@@ -244,9 +250,9 @@ export default function InventarioPage() {
             <Kpi label="Manual (ud)" value={fmtNum(resultado.resumen.totalManualUnidades)} />
             <Kpi label="SAP (ud)" value={fmtNum(resultado.resumen.totalSapUnidades)} />
             <Kpi label="Ajuste (ud)" value={fmtNum(resultado.resumen.totalAjusteUnidades)} />
-            <Kpi label="Manual (cajas)" value={fmtNum(resultado.resumen.totalManualCajas)} />
-            <Kpi label="SAP (cajas)" value={fmtNum(resultado.resumen.totalSapCajas)} />
-            <Kpi label="Ajuste (cajas)" value={fmtNum(resultado.resumen.totalAjusteCajas)} />
+            <Kpi label="Manual (€)" value={fmtCurrency(resultado.resumen.totalManualImporte)} />
+            <Kpi label="SAP (€)" value={fmtCurrency(resultado.resumen.totalSapImporte)} />
+            <Kpi label="Ajuste (€)" value={fmtCurrency(resultado.resumen.totalAjusteImporte)} />
           </div>
 
           {resultado.warnings.length > 0 && (
@@ -280,13 +286,14 @@ export default function InventarioPage() {
               <thead className="bg-slate-50 text-slate-600">
                 <tr>
                   <th className="px-3 py-2 text-left">Medicamento</th>
-                  <th className="px-3 py-2 text-center">UPC</th>
+                  <th className="px-3 py-2 text-right">Coste caja (€)</th>
+                  <th className="px-3 py-2 text-right">Coste ud (€)</th>
                   <th className="px-3 py-2 text-right">Manual (ud)</th>
                   <th className="px-3 py-2 text-right">SAP (ud)</th>
                   <th className="px-3 py-2 text-right">Ajuste (ud)</th>
-                  <th className="px-3 py-2 text-right">Manual (cajas)</th>
-                  <th className="px-3 py-2 text-right">SAP (cajas)</th>
-                  <th className="px-3 py-2 text-right">Ajuste (cajas)</th>
+                  <th className="px-3 py-2 text-right">Manual (€)</th>
+                  <th className="px-3 py-2 text-right">SAP (€)</th>
+                  <th className="px-3 py-2 text-right">Ajuste (€)</th>
                 </tr>
               </thead>
               <tbody>
@@ -299,7 +306,12 @@ export default function InventarioPage() {
                       <p className="font-semibold text-slate-800">{row.principioActivo ?? '—'}</p>
                       <p className="text-[11px] italic text-slate-400">{row.medicamento}</p>
                     </td>
-                    <td className="px-3 py-2 text-center tabular-nums text-slate-600">{fmtNum(row.unidadesPorCaja, 0)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-600">
+                      {row.precioCaja != null ? fmtCurrency(row.precioCaja) : '—'}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-600">
+                      {row.precioUnidad > 0 ? fmtCurrency(row.precioUnidad) : '—'}
+                    </td>
                     <td className="px-3 py-2 text-right tabular-nums">{fmtNum(row.manualUnidades)}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{fmtNum(row.sapUnidades)}</td>
                     <td
@@ -313,24 +325,24 @@ export default function InventarioPage() {
                     >
                       {fmtNum(row.ajusteUnidades)}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums">{fmtNum(row.manualCajas)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{fmtNum(row.sapCajas)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(row.manualImporte)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{fmtCurrency(row.sapImporte)}</td>
                     <td
                       className={`px-3 py-2 text-right tabular-nums font-semibold ${
-                        row.ajusteCajas > 0
+                        row.ajusteImporte > 0
                           ? 'text-emerald-700'
-                          : row.ajusteCajas < 0
+                          : row.ajusteImporte < 0
                             ? 'text-rose-700'
                             : 'text-slate-600'
                       }`}
                     >
-                      {fmtNum(row.ajusteCajas)}
+                      {fmtCurrency(row.ajusteImporte)}
                     </td>
                   </tr>
                 ))}
                 {filteredRows.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="px-3 py-6 text-center text-slate-400">
+                    <td colSpan={9} className="px-3 py-6 text-center text-slate-400">
                       No hay filas para mostrar con el filtro actual.
                     </td>
                   </tr>

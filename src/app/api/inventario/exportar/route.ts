@@ -9,12 +9,14 @@ type ExportRow = {
   principioActivo: string | null;
   medicamento: string;
   unidadesPorCaja: number;
+  precioCaja: number | null;
+  precioUnidad: number;
   manualUnidades: number;
-  manualCajas: number;
   sapUnidades: number;
-  sapCajas: number;
   ajusteUnidades: number;
-  ajusteCajas: number;
+  manualImporte: number;
+  sapImporte: number;
+  ajusteImporte: number;
 };
 
 function toNum(v: unknown): number {
@@ -46,12 +48,14 @@ export async function POST(req: NextRequest) {
       { header: 'Principio Activo', key: 'principioActivo', width: 32 },
       { header: 'Medicamento', key: 'medicamento', width: 40 },
       { header: 'Unidades/Caja', key: 'unidadesPorCaja', width: 16 },
-      { header: 'Manual (Cajas)', key: 'manualCajas', width: 16 },
-      { header: 'SAP (Cajas)', key: 'sapCajas', width: 16 },
-      { header: 'Ajuste (Cajas)', key: 'ajusteCajas', width: 16 },
+      { header: 'Coste Caja (€)', key: 'precioCaja', width: 16 },
+      { header: 'Coste Unidad (€)', key: 'precioUnidad', width: 18 },
       { header: 'Manual (Unidades)', key: 'manualUnidades', width: 18 },
       { header: 'SAP (Unidades)', key: 'sapUnidades', width: 18 },
       { header: 'Ajuste (Unidades)', key: 'ajusteUnidades', width: 18 },
+      { header: 'Manual (€)', key: 'manualImporte', width: 16 },
+      { header: 'SAP (€)', key: 'sapImporte', width: 16 },
+      { header: 'Ajuste (€)', key: 'ajusteImporte', width: 16 },
     ];
 
     for (const r of rows) {
@@ -60,24 +64,26 @@ export async function POST(req: NextRequest) {
         principioActivo: r.principioActivo ?? '',
         medicamento: r.medicamento ?? '',
         unidadesPorCaja: toNum(r.unidadesPorCaja),
-        manualCajas: toNum(r.manualCajas),
-        sapCajas: toNum(r.sapCajas),
-        ajusteCajas: toNum(r.ajusteCajas),
+        precioCaja: toNum(r.precioCaja),
+        precioUnidad: toNum(r.precioUnidad),
         manualUnidades: toNum(r.manualUnidades),
         sapUnidades: toNum(r.sapUnidades),
         ajusteUnidades: toNum(r.ajusteUnidades),
+        manualImporte: toNum(r.manualImporte),
+        sapImporte: toNum(r.sapImporte),
+        ajusteImporte: toNum(r.ajusteImporte),
       });
     }
 
     sheet.addRow({});
     sheet.addRow({
       cn: 'TOTAL',
-      manualCajas: rows.reduce((acc, r) => acc + toNum(r.manualCajas), 0),
-      sapCajas: rows.reduce((acc, r) => acc + toNum(r.sapCajas), 0),
-      ajusteCajas: rows.reduce((acc, r) => acc + toNum(r.ajusteCajas), 0),
       manualUnidades: rows.reduce((acc, r) => acc + toNum(r.manualUnidades), 0),
       sapUnidades: rows.reduce((acc, r) => acc + toNum(r.sapUnidades), 0),
       ajusteUnidades: rows.reduce((acc, r) => acc + toNum(r.ajusteUnidades), 0),
+      manualImporte: rows.reduce((acc, r) => acc + toNum(r.manualImporte), 0),
+      sapImporte: rows.reduce((acc, r) => acc + toNum(r.sapImporte), 0),
+      ajusteImporte: rows.reduce((acc, r) => acc + toNum(r.ajusteImporte), 0),
     });
 
     const fecha = new Date().toISOString().slice(0, 10);
