@@ -49,9 +49,12 @@ export async function ensureConsumoTables(): Promise<void> {
       num_pacientes      INTEGER NOT NULL DEFAULT 0
     );
   `;
+  // Columna semana_iso añadida en v2 — es seguro ejecutarla aunque ya exista
+  await sql`ALTER TABLE consumo_registros ADD COLUMN IF NOT EXISTS semana_iso SMALLINT;`;
   await sql`CREATE INDEX IF NOT EXISTS idx_consumo_importacion ON consumo_registros(importacion_id);`;
   await sql`CREATE INDEX IF NOT EXISTS idx_consumo_cn         ON consumo_registros(cn);`;
   await sql`CREATE INDEX IF NOT EXISTS idx_consumo_anio_mes   ON consumo_registros(anio, mes);`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_consumo_semana     ON consumo_registros(semana_iso) WHERE semana_iso IS NOT NULL;`;
   await sql`CREATE INDEX IF NOT EXISTS idx_consumo_area       ON importaciones_consumo(area);`;
 }
 
@@ -143,7 +146,7 @@ export async function insertarImportacionConsumo(
   if (rows.length > 0) {
     await sql`
       INSERT INTO consumo_registros (
-        importacion_id, anio, mes, dia, fecha,
+        importacion_id, anio, mes, dia, semana_iso, fecha,
         servicio, uh, edad_paciente,
         indicacion, diagnostico, protocolo, num_ciclo,
         tipo_terapia, tipo_componente, componente,
@@ -154,6 +157,7 @@ export async function insertarImportacionConsumo(
         ${rows.map(r => r.anio)}::smallint[],
         ${rows.map(r => r.mes)}::smallint[],
         ${rows.map(r => r.dia ?? null)}::smallint[],
+        ${rows.map(r => r.semanaIso ?? null)}::smallint[],
         ${rows.map(r => r.fecha)}::date[],
         ${rows.map(r => r.servicio || null)}::text[],
         ${rows.map(r => r.uh || null)}::text[],
@@ -283,6 +287,137 @@ export type TemporalGlobal = {
   viales: number;
   pacientes: number;
 };
+
+// ---------------------------------------------------------------------------
+// Tendencias de consumo para el panel Inicio
+// Compara los últimos 3 meses de datos disponibles vs los 3 meses anteriores.
+// Devuelve sólo los medicamentos con variación > +10 %.
+// ---------------------------------------------------------------------------
+export type TendenciaMedicamento = {
+  cn: string;
+  componente: string;
+  tipoComponente: string;
+  medicamento: string;
+  periodoActual: number;
+  periodoAnterior: number;
+  variacionPct: number;       // porcentaje de variación, ej: 25.3
+  temporalActual: { mes: number; anio: number; label: string; viales: number }[];
+};
+
+export async function getTendenciasConsumo(area: string): Promise<TendenciaMedicamento[]> {
+  const sql = getDb();
+  const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+
+  // Calcula períodos relativos a la fecha más reciente en los datos (no a hoy)
+  const agrupado = (await sql`
+    WITH maxdate AS (
+      SELECT MAX(cr.fecha) AS latest
+      FROM consumo_registros cr
+      JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+      WHERE ic.area = ${area}
+    ),
+    periods AS (
+      SELECT
+        latest,
+        (latest - INTERVAL '3 months')::date AS split_date,
+        (latest - INTERVAL '6 months')::date AS start_date
+      FROM maxdate
+    ),
+    agrupado AS (
+      SELECT
+        cr.cn,
+        COALESCE(MAX(cr.componente),       '') AS componente,
+        COALESCE(MAX(cr.tipo_componente),  '') AS tipo_componente,
+        COALESCE(MAX(cr.medicamento),      '') AS medicamento,
+        SUM(CASE WHEN cr.fecha >  p.split_date                           THEN cr.viales_dispensados ELSE 0 END)::float AS periodo_actual,
+        SUM(CASE WHEN cr.fecha <= p.split_date AND cr.fecha > p.start_date THEN cr.viales_dispensados ELSE 0 END)::float AS periodo_anterior
+      FROM consumo_registros cr
+      JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+      CROSS JOIN periods p
+      WHERE ic.area = ${area}
+      GROUP BY cr.cn
+    )
+    SELECT
+      cn, componente, tipo_componente, medicamento,
+      periodo_actual, periodo_anterior,
+      ROUND(((periodo_actual / NULLIF(periodo_anterior, 0)) - 1) * 100, 1) AS variacion_pct
+    FROM agrupado
+    WHERE periodo_anterior > 0
+      AND periodo_actual > periodo_anterior * 1.10
+    ORDER BY variacion_pct DESC;
+  `) as Array<{
+    cn: string; componente: string; tipo_componente: string; medicamento: string;
+    periodo_actual: number; periodo_anterior: number; variacion_pct: number;
+  }>;
+
+  if (agrupado.length === 0) return [];
+
+  // Evolución mensual del período actual (últimos 3 meses) para cada CN encontrado
+  const cns = agrupado.map(r => r.cn);
+  const temporal = (await sql`
+    WITH maxdate AS (
+      SELECT MAX(cr.fecha) AS latest
+      FROM consumo_registros cr
+      JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+      WHERE ic.area = ${area}
+    )
+    SELECT cr.cn, cr.anio, cr.mes,
+           SUM(cr.viales_dispensados)::float AS viales
+    FROM consumo_registros cr
+    JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+    CROSS JOIN maxdate
+    WHERE ic.area = ${area}
+      AND cr.cn = ANY(${cns})
+      AND cr.fecha > (maxdate.latest - INTERVAL '3 months')::date
+    GROUP BY cr.cn, cr.anio, cr.mes
+    ORDER BY cr.cn, cr.anio, cr.mes;
+  `) as Array<{ cn: string; anio: number; mes: number; viales: number }>;
+
+  return agrupado.map(r => ({
+    cn: r.cn,
+    componente: r.componente,
+    tipoComponente: r.tipo_componente,
+    medicamento: r.medicamento,
+    periodoActual: Number(r.periodo_actual),
+    periodoAnterior: Number(r.periodo_anterior),
+    variacionPct: Number(r.variacion_pct),
+    temporalActual: temporal
+      .filter(t => t.cn === r.cn)
+      .map(t => ({
+        anio: num(t.anio), mes: num(t.mes),
+        label: `${MESES[num(t.mes) - 1]} ${t.anio}`,
+        viales: Number(t.viales),
+      })),
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Curva completa de un medicamento (todos los meses disponibles para el área)
+// ---------------------------------------------------------------------------
+export type CurvaMes = {
+  anio: number; mes: number; label: string; viales: number; pacientes: number;
+};
+
+export async function getCurvaMedicamento(cn: string, area: string): Promise<CurvaMes[]> {
+  const sql = getDb();
+  const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const rows = (await sql`
+    SELECT cr.anio, cr.mes,
+           SUM(cr.viales_dispensados)::float AS viales,
+           SUM(cr.num_pacientes)::int        AS pacientes
+    FROM consumo_registros cr
+    JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+    WHERE ic.area = ${area} AND cr.cn = ${cn}
+    GROUP BY cr.anio, cr.mes
+    ORDER BY cr.anio, cr.mes;
+  `) as Array<{ anio: number; mes: number; viales: number; pacientes: number }>;
+  return rows.map(r => ({
+    anio: num(r.anio), mes: num(r.mes),
+    label: `${MESES[num(r.mes) - 1]} ${r.anio}`,
+    viales: Number(r.viales),
+    pacientes: num(r.pacientes),
+  }));
+}
 
 export async function getTemporalGlobal(
   importacionId: number,

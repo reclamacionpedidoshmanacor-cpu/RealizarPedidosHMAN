@@ -7,7 +7,8 @@ export interface ConsumoRow {
   anio: number;
   mes: number;
   dia: number | null;
-  fecha: string;           // ISO yyyy-MM-dd construida desde AÑO+MES+DIA
+  semanaIso: number | null; // semana ISO 8601 calculada desde DIA si disponible
+  fecha: string;            // ISO yyyy-MM-dd construida desde AÑO+MES+DIA
   servicio: string;
   uh: string;              // Unidad Hospitalaria
   edadPaciente: string;
@@ -108,6 +109,15 @@ function buildFecha(anio: number, mes: number, dia: number | null): string {
   return `${anio}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
 
+/** Calcula el número de semana ISO 8601 a partir de una fecha. */
+function calcIsoWeek(anio: number, mes: number, dia: number): number {
+  const d = new Date(anio, mes - 1, dia);
+  const dayOfWeek = d.getDay() || 7; // lunes=1, domingo=7
+  d.setDate(d.getDate() + 4 - dayOfWeek);
+  const yearStart = new Date(d.getFullYear(), 0, 1);
+  return Math.ceil(((d.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7);
+}
+
 // ---------------------------------------------------------------------------
 // Parser principal
 // ---------------------------------------------------------------------------
@@ -176,11 +186,12 @@ export function parseConsumoExcel(buffer: Buffer): ConsumoParseResult {
     }
 
     const dia = idxDia !== -1 ? Math.round(toNum(row[idxDia])) || null : null;
+    const semanaIso = dia && dia > 0 ? calcIsoWeek(anio, mes, dia) : null;
     const fecha = buildFecha(anio, mes, dia);
     fechas.push(fecha);
 
     rows.push({
-      anio, mes, dia, fecha,
+      anio, mes, dia, semanaIso, fecha,
       servicio:       idxServicio       !== -1 ? toStr(row[idxServicio])       : '',
       uh:             idxUH             !== -1 ? toStr(row[idxUH])             : '',
       edadPaciente:   idxEdad           !== -1 ? toStr(row[idxEdad])           : '',

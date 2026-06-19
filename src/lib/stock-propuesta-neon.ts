@@ -759,3 +759,62 @@ export async function marcarExcelGenerado(propuestaId: number, area: string): Pr
     WHERE id = ${propuestaId} AND area = ${area};
   `;
 }
+
+// ---------------------------------------------------------------------------
+// Resumen operativo para el panel Inicio
+// ---------------------------------------------------------------------------
+export type ResumenOperativo = {
+  recuentosPendientes: number;
+  propuestasBorrador: number;
+  ultimaPropuestaTramitadaEn: string | null;
+  ultimoRecuentoFecha: string | null;
+  bajoMinimo: number;     // CNs cuyo stock_unidades < stock_minimo en el último recuento
+  bajoOPunto: number;     // CNs cuyo stock_unidades <= punto_pedido en el último recuento
+};
+
+export async function getResumenOperativo(area: string): Promise<ResumenOperativo> {
+  const sql = getDb();
+
+  // Recuentos pendientes y última fecha de recuento
+  const recuentos = (await sql`
+    SELECT
+      COUNT(*) FILTER (WHERE estado = 'pendiente')::int AS pendientes,
+      MAX(fecha_recuento)::text AS ultimo_recuento
+    FROM importaciones_stock
+    WHERE area = ${area};
+  `) as Array<{ pendientes: number; ultimo_recuento: string | null }>;
+
+  // Propuestas en borrador y última propuesta tramitada
+  const propuestas = (await sql`
+    SELECT
+      COUNT(*) FILTER (WHERE estado = 'borrador')::int   AS borradores,
+      MAX(tramitada_en) FILTER (WHERE estado = 'tramitada')::text AS ultima_tramitada
+    FROM propuestas
+    WHERE area = ${area};
+  `) as Array<{ borradores: number; ultima_tramitada: string | null }>;
+
+  // Alertas de stock: comparar el stock del último recuento (pendiente o tramitado) con stock_objetivo
+  const alertas = (await sql`
+    WITH ultimo AS (
+      SELECT id FROM importaciones_stock
+      WHERE area = ${area}
+      ORDER BY id DESC LIMIT 1
+    )
+    SELECT
+      COUNT(*) FILTER (WHERE sr.stock_unidades < so.stock_minimo)::int   AS bajo_minimo,
+      COUNT(*) FILTER (WHERE sr.stock_unidades <= so.punto_pedido)::int  AS bajo_o_punto
+    FROM stock_registros sr
+    JOIN ultimo u ON sr.importacion_id = u.id
+    JOIN medicamentos m ON m.cn = sr.cn AND m.area = ${area} AND m.activo = TRUE
+    JOIN stock_objetivo so ON so.cn = sr.cn AND so.area = ${area};
+  `) as Array<{ bajo_minimo: number; bajo_o_punto: number }>;
+
+  return {
+    recuentosPendientes: num(recuentos[0]?.pendientes ?? 0),
+    propuestasBorrador:  num(propuestas[0]?.borradores ?? 0),
+    ultimaPropuestaTramitadaEn: propuestas[0]?.ultima_tramitada ?? null,
+    ultimoRecuentoFecha: recuentos[0]?.ultimo_recuento ?? null,
+    bajoMinimo:   num(alertas[0]?.bajo_minimo ?? 0),
+    bajoOPunto:   num(alertas[0]?.bajo_o_punto ?? 0),
+  };
+}
