@@ -267,7 +267,7 @@ export default function RecuentoManualPage() {
       /* Si la ubicación ya existe en borrador, precargar valores guardados */
       const saved = repoLineasByUbicacion[ub] ?? {};
       const nextDraft: Record<string, ReposicionDraftLinea> = {};
-      for (const med of payload.medicamentos) {
+      for (const med of payload.medicamentos.filter((m) => m.activo)) {
         nextDraft[med.cn] = { cantidadCajas: Number(saved[med.cn] ?? 0) };
       }
       setRepoDraft(nextDraft);
@@ -292,11 +292,24 @@ export default function RecuentoManualPage() {
 
   const handleGuardarUbicacionRepo = async () => {
     if (!data || !ubicacion) return;
-    const lineas = (data.medicamentos ?? [])
+    const medicamentosActivos = (data.medicamentos ?? []).filter((med) => med.activo);
+    const lineas = medicamentosActivos
       .map((med) => ({ cn: med.cn, cantidadCajas: repoDraft[med.cn]?.cantidadCajas ?? 0 }))
       .filter((l) => l.cantidadCajas > 0);
 
     if (lineas.length === 0) { toast.info('Introduce al menos una cantidad.'); return; }
+
+    const excedidas = medicamentosActivos.filter((med) => {
+      const qty = repoDraft[med.cn]?.cantidadCajas ?? 0;
+      return med.stockMaximo != null && qty > med.stockMaximo;
+    });
+
+    if (excedidas.length > 0) {
+      const ok = confirm(
+        `Hay ${excedidas.length} medicamentos por encima del stock máximo. ¿Guardar igualmente?`
+      );
+      if (!ok) return;
+    }
 
     setSaving(true);
     try {
@@ -596,8 +609,12 @@ export default function RecuentoManualPage() {
 
   /* ── REPOSICIÓN: Introducir cantidades ── */
   if (step === 'reposicion-recuento') {
-    const medicamentos = data?.medicamentos ?? [];
+    const medicamentos = (data?.medicamentos ?? []).filter((med) => med.activo);
     const repoHasAnyQty = medicamentos.some((med) => (repoDraft[med.cn]?.cantidadCajas ?? 0) > 0);
+    const repoOverMaxCount = medicamentos.filter((med) => {
+      const qty = repoDraft[med.cn]?.cantidadCajas ?? 0;
+      return med.stockMaximo != null && qty > med.stockMaximo;
+    }).length;
 
     return (
       <div className="min-h-screen bg-orange-50 flex flex-col pb-40">
@@ -624,8 +641,9 @@ export default function RecuentoManualPage() {
             medicamentos.map((med, idx) => {
               const qty = repoDraft[med.cn]?.cantidadCajas ?? 0;
               const changed = qty > 0;
+              const overMax = med.stockMaximo != null && qty > med.stockMaximo;
               return (
-                <RepoMedCard key={med.cn} med={med} cantidadCajas={qty} changed={changed}
+                <RepoMedCard key={med.cn} med={med} cantidadCajas={qty} changed={changed} overMax={overMax}
                   index={idx + 1} total={medicamentos.length}
                   onChange={(v) => setRepoDraft((prev) => ({ ...prev, [med.cn]: { cantidadCajas: v } }))} />
               );
@@ -637,9 +655,15 @@ export default function RecuentoManualPage() {
           <div className="fixed bottom-0 left-0 right-0 z-30 bg-white border-t-2 border-orange-200 shadow-lg px-4 py-4">
             <div className="max-w-2xl mx-auto flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
               <div className="flex-1 text-sm text-slate-500">
-                {repoHasChanges
-                  ? <span className="font-semibold text-orange-600">⚠ Cambios sin guardar en esta ubicación</span>
-                  : <span className="text-slate-400">Sin cambios pendientes</span>}
+                {repoOverMaxCount > 0 ? (
+                  <span className="font-semibold text-rose-600">
+                    ⚠ {repoOverMaxCount} medicamento(s) superan stock máximo
+                  </span>
+                ) : repoHasChanges ? (
+                  <span className="font-semibold text-orange-600">⚠ Cambios sin guardar en esta ubicación</span>
+                ) : (
+                  <span className="text-slate-400">Sin cambios pendientes</span>
+                )}
               </div>
               <button onClick={() => void handleGuardarUbicacionRepo()} disabled={saving || !repoHasChanges || !repoHasAnyQty}
                 className="rounded-2xl bg-orange-500 px-8 py-4 text-xl font-extrabold text-white shadow-lg hover:bg-orange-600 active:scale-95 transition-all disabled:opacity-40">
@@ -698,13 +722,16 @@ function MedCard({
 
 /* ════════════════ Tarjeta de medicamento — reposición ════════════════ */
 function RepoMedCard({
-  med, cantidadCajas, changed, index, total, onChange,
+  med, cantidadCajas, changed, overMax, index, total, onChange,
 }: {
   med: MedicamentoManual; cantidadCajas: number; changed: boolean;
+  overMax: boolean;
   index: number; total: number; onChange: (v: number) => void;
 }) {
   return (
-    <div className={`rounded-2xl border-2 bg-white px-5 py-4 shadow-sm transition-all ${changed ? 'border-orange-400 bg-orange-50' : 'border-slate-200'}`}>
+    <div className={`rounded-2xl border-2 bg-white px-5 py-4 shadow-sm transition-all ${
+      overMax ? 'border-rose-400 bg-rose-50' : changed ? 'border-orange-400 bg-orange-50' : 'border-slate-200'
+    }`}>
       <div className="flex items-start justify-between gap-2 mb-4">
         <div className="flex-1 min-w-0">
           <p className="text-2xl font-extrabold text-slate-800 leading-tight">{med.principioActivo ?? med.nombre}</p>
@@ -729,7 +756,13 @@ function RepoMedCard({
           onChange={(e) => onChange(toIntInput(e.target.value))}
           className="w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-3xl font-bold text-center text-slate-800 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-200" />
       </div>
-      {changed && <p className="mt-3 text-sm font-semibold text-orange-600">✏ Cantidad añadida</p>}
+      {overMax ? (
+        <p className="mt-3 text-sm font-semibold text-rose-600">
+          ⚠ Supera stock máximo ({med.stockMaximo} cajas)
+        </p>
+      ) : changed ? (
+        <p className="mt-3 text-sm font-semibold text-orange-600">✏ Cantidad añadida</p>
+      ) : null}
     </div>
   );
 }
