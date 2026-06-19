@@ -418,19 +418,23 @@ export async function deshacerPropuesta(propuestaId: number, importacionStockId:
 }
 
 export async function getLineasParaExcel(propuestaId: number): Promise<Array<{
-  cn: string; nombreMedicamento: string | null;
+  cn: string; nombreMedicamento: string | null; principioActivo: string | null;
   cajasPropuestas: number; cajasValidadas: number | null; unidadesPorCaja: number;
 }>> {
   const sql = getDb();
   const rows = (await sql`
-    SELECT cn, nombre_medicamento, cajas_propuestas, cajas_validadas, unidades_por_caja
-    FROM propuestas_lineas WHERE propuesta_id = ${propuestaId};
+    SELECT
+      pl.cn, pl.nombre_medicamento, pl.cajas_propuestas, pl.cajas_validadas, pl.unidades_por_caja,
+      m.principio_activo
+    FROM propuestas_lineas pl
+    LEFT JOIN medicamentos m ON m.cn = pl.cn
+    WHERE pl.propuesta_id = ${propuestaId};
   `) as Array<{
-    cn: string; nombre_medicamento: string | null;
+    cn: string; nombre_medicamento: string | null; principio_activo: string | null;
     cajas_propuestas: number; cajas_validadas: number | null; unidades_por_caja: number;
   }>;
   return rows.map((r) => ({
-    cn: r.cn, nombreMedicamento: r.nombre_medicamento,
+    cn: r.cn, nombreMedicamento: r.nombre_medicamento, principioActivo: r.principio_activo,
     cajasPropuestas: num(r.cajas_propuestas),
     cajasValidadas: r.cajas_validadas != null ? num(r.cajas_validadas) : null,
     unidadesPorCaja: num(r.unidades_por_caja),

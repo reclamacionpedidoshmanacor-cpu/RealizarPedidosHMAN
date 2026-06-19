@@ -36,6 +36,7 @@ export async function GET(
       { header: 'Codigo SAP', key: 'sap', width: 18 },
       { header: 'Cantidad (unidades)', key: 'cantidad', width: 22 },
       { header: 'Descripcion', key: 'descripcion', width: 60 },
+      { header: 'Principio Activo', key: 'principioActivo', width: 40 },
     ];
 
     for (const linea of lineas) {
@@ -46,6 +47,7 @@ export async function GET(
         sap: toSapCode(linea.cn),
         cantidad: unidadesFinales,
         descripcion: linea.nombreMedicamento ?? linea.cn,
+        principioActivo: linea.principioActivo ?? '',
       });
     }
 
