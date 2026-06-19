@@ -71,6 +71,7 @@ export default function RecuentoManualPage() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState<Record<string, DraftLinea>>({});
+  const [baseline, setBaseline] = useState<Record<string, DraftLinea>>({});
   const tableRef = useRef<HTMLDivElement>(null);
 
   /* ── carga de medicamentos ── */
@@ -83,11 +84,21 @@ export default function RecuentoManualPage() {
       if (!res.ok) throw new Error(payload?.error ?? 'Error al cargar medicamentos.');
       const typed = payload as ApiResponse;
       setData(typed);
+
+      // Si el recuento pendiente es de origen manual, se recuperan los valores
+      // para que el usuario pueda continuar. Si es SAP (o no hay pendiente), todo a cero.
+      const esManual = typed.pendiente?.origen === 'manual';
       const nextDraft: Record<string, DraftLinea> = {};
+      const nextBaseline: Record<string, DraftLinea> = {};
       for (const med of typed.medicamentos) {
-        nextDraft[med.cn] = { cajas: med.cajas, unidadesSueltas: med.unidadesSueltas };
+        const vals = esManual
+          ? { cajas: med.cajas, unidadesSueltas: med.unidadesSueltas }
+          : { cajas: 0, unidadesSueltas: 0 };
+        nextDraft[med.cn] = { ...vals };
+        nextBaseline[med.cn] = { ...vals };
       }
       setDraft(nextDraft);
+      setBaseline(nextBaseline);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
@@ -113,6 +124,7 @@ export default function RecuentoManualPage() {
       setData(data2);
       setUbicacion(null);
       setDraft({});
+      setBaseline({});
       setStep('ubicacion');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
@@ -142,9 +154,10 @@ export default function RecuentoManualPage() {
     if (!data) return false;
     return data.medicamentos.some((med) => {
       const cur = draft[med.cn];
-      return cur && (cur.cajas !== med.cajas || cur.unidadesSueltas !== med.unidadesSueltas);
+      const base = baseline[med.cn] ?? { cajas: 0, unidadesSueltas: 0 };
+      return cur && (cur.cajas !== base.cajas || cur.unidadesSueltas !== base.unidadesSueltas);
     });
-  }, [data, draft]);
+  }, [data, draft, baseline]);
 
   /* ── guardar ── */
   const handleGuardar = async () => {
@@ -152,9 +165,14 @@ export default function RecuentoManualPage() {
 
     const cambios = data.medicamentos
       .map((med) => {
-        const cur = draft[med.cn] ?? { cajas: med.cajas, unidadesSueltas: med.unidadesSueltas };
-        return { cn: med.cn, cajas: cur.cajas, unidadesSueltas: cur.unidadesSueltas,
-          changed: cur.cajas !== med.cajas || cur.unidadesSueltas !== med.unidadesSueltas };
+        const cur = draft[med.cn] ?? { cajas: 0, unidadesSueltas: 0 };
+        const base = baseline[med.cn] ?? { cajas: 0, unidadesSueltas: 0 };
+        return {
+          cn: med.cn,
+          cajas: cur.cajas,
+          unidadesSueltas: cur.unidadesSueltas,
+          changed: cur.cajas !== base.cajas || cur.unidadesSueltas !== base.unidadesSueltas,
+        };
       })
       .filter((l) => l.changed)
       .map(({ changed, ...l }) => l);
@@ -337,8 +355,9 @@ export default function RecuentoManualPage() {
               {medicamentos.length} medicamento{medicamentos.length !== 1 ? 's' : ''} — escribe las cantidades y pulsa <strong>Guardar</strong>
             </p>
             {medicamentos.map((med, idx) => {
-              const val = draft[med.cn] ?? { cajas: med.cajas, unidadesSueltas: med.unidadesSueltas };
-              const changed = val.cajas !== med.cajas || val.unidadesSueltas !== med.unidadesSueltas;
+              const val = draft[med.cn] ?? { cajas: 0, unidadesSueltas: 0 };
+              const base = baseline[med.cn] ?? { cajas: 0, unidadesSueltas: 0 };
+              const changed = val.cajas !== base.cajas || val.unidadesSueltas !== base.unidadesSueltas;
               return (
                 <MedCard
                   key={med.cn}
