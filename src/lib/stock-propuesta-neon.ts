@@ -28,6 +28,14 @@ export type RecuentoCabecera = {
   propuestaId: number | null;
 };
 
+export type RecuentoManualResumen = {
+  id: number;
+  estado: string;
+  fechaRecuento: string;
+  importadoEn: string;
+  totalLineas: number;
+};
+
 export type RecuentoLinea = {
   cn: string;
   principioActivo: string | null;
@@ -111,6 +119,63 @@ export async function getLineasRecuento(importacionId: number): Promise<Recuento
     stockCajas: num(r.stock_cajas), stockUnidades: num(r.stock_unidades),
     valorTotal: numOrNull(r.valor_total),
   }));
+}
+
+export async function listRecuentosManualesByArea(area: string): Promise<RecuentoManualResumen[]> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT id, estado, fecha_recuento::text, importado_en::text, total_lineas
+    FROM importaciones_stock
+    WHERE area = ${area}
+      AND lower(origen) = 'manual'
+    ORDER BY id DESC;
+  `) as Array<{
+    id: number;
+    estado: string;
+    fecha_recuento: string;
+    importado_en: string;
+    total_lineas: number;
+  }>;
+
+  return rows.map((r) => ({
+    id: num(r.id),
+    estado: r.estado,
+    fechaRecuento: r.fecha_recuento,
+    importadoEn: r.importado_en,
+    totalLineas: num(r.total_lineas),
+  }));
+}
+
+export async function getRecuentoCabeceraById(importacionId: number): Promise<RecuentoCabecera | null> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT id, area, estado, origen, fecha_recuento::text, importado_en::text, total_lineas, propuesta_id
+    FROM importaciones_stock
+    WHERE id = ${importacionId}
+    LIMIT 1;
+  `) as Array<{
+    id: number;
+    area: string;
+    estado: string;
+    origen: string;
+    fecha_recuento: string;
+    importado_en: string;
+    total_lineas: number;
+    propuesta_id: number | null;
+  }>;
+
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    id: num(r.id),
+    area: r.area,
+    estado: r.estado,
+    origen: r.origen,
+    fechaRecuento: r.fecha_recuento,
+    importadoEn: r.importado_en,
+    totalLineas: num(r.total_lineas),
+    propuestaId: r.propuesta_id ? num(r.propuesta_id) : null,
+  };
 }
 
 export async function getPendienteRecuento(area: string): Promise<RecuentoCabecera | null> {
