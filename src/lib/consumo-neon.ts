@@ -286,6 +286,8 @@ export type TemporalGlobal = {
   label: string;
   viales: number;
   pacientes: number;
+  preparaciones?: number;
+  medicamentosDistintos?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -436,5 +438,139 @@ export async function getTemporalGlobal(
     label: `${MESES[num(r.mes) - 1]} ${r.anio}`,
     viales: Number(r.viales),
     pacientes: num(r.pacientes),
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Resumen global por área (acumulado de todas las importaciones)
+// ---------------------------------------------------------------------------
+export async function getResumenConsumoArea(
+  area: string,
+  fechaDesde?: string | null,
+  fechaHasta?: string | null,
+): Promise<ResumenMedicamento[]> {
+  const sql = getDb();
+  const desde = fechaDesde ?? null;
+  const hasta = fechaHasta ?? null;
+
+  const totales = (await sql`
+    SELECT
+      cr.cn,
+      COALESCE(MAX(cr.componente), '') AS componente,
+      COALESCE(MAX(cr.tipo_componente), '') AS tipo_componente,
+      COALESCE(MAX(cr.medicamento), '') AS medicamento,
+      SUM(cr.viales_dispensados)::float AS total_viales,
+      SUM(cr.num_pacientes)::int        AS total_pacientes
+    FROM consumo_registros cr
+    INNER JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+    WHERE ic.area = ${area}
+      AND (${desde}::date IS NULL OR cr.fecha >= ${desde}::date)
+      AND (${hasta}::date IS NULL OR cr.fecha <= ${hasta}::date)
+    GROUP BY cr.cn
+    ORDER BY COALESCE(MAX(cr.componente), '') ASC, COALESCE(MAX(cr.medicamento), '') ASC;
+  `) as Array<{
+    cn: string; componente: string; tipo_componente: string; medicamento: string;
+    total_viales: number; total_pacientes: number;
+  }>;
+
+  const desgloses = (await sql`
+    SELECT
+      cr.cn,
+      COALESCE(cr.diagnostico, '—') AS diagnostico,
+      COALESCE(cr.indicacion, '—')  AS indicacion,
+      COALESCE(cr.protocolo, '—')   AS protocolo,
+      SUM(cr.viales_dispensados)::float AS viales
+    FROM consumo_registros cr
+    INNER JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+    WHERE ic.area = ${area}
+      AND (${desde}::date IS NULL OR cr.fecha >= ${desde}::date)
+      AND (${hasta}::date IS NULL OR cr.fecha <= ${hasta}::date)
+    GROUP BY cr.cn, cr.diagnostico, cr.indicacion, cr.protocolo
+    ORDER BY cr.cn, diagnostico ASC, indicacion ASC, protocolo ASC;
+  `) as Array<{
+    cn: string; diagnostico: string; indicacion: string; protocolo: string; viales: number;
+  }>;
+
+  const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const temporal = (await sql`
+    SELECT
+      cr.cn, cr.anio, cr.mes,
+      SUM(cr.viales_dispensados)::float AS viales,
+      SUM(cr.num_pacientes)::int        AS pacientes
+    FROM consumo_registros cr
+    INNER JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+    WHERE ic.area = ${area}
+      AND (${desde}::date IS NULL OR cr.fecha >= ${desde}::date)
+      AND (${hasta}::date IS NULL OR cr.fecha <= ${hasta}::date)
+    GROUP BY cr.cn, cr.anio, cr.mes
+    ORDER BY cr.cn, cr.anio, cr.mes;
+  `) as Array<{
+    cn: string; anio: number; mes: number; viales: number; pacientes: number;
+  }>;
+
+  return totales.map(t => ({
+    cn: t.cn,
+    componente: t.componente,
+    tipoComponente: t.tipo_componente,
+    medicamento: t.medicamento,
+    totalViales: Number(t.total_viales),
+    totalPacientes: num(t.total_pacientes),
+    desglose: desgloses
+      .filter(d => d.cn === t.cn)
+      .map(d => ({
+        diagnostico: d.diagnostico,
+        indicacion: d.indicacion,
+        protocolo: d.protocolo,
+        viales: Number(d.viales),
+        pacientes: 0,
+      })),
+    temporal: temporal
+      .filter(p => p.cn === t.cn)
+      .map(p => ({
+        anio: num(p.anio),
+        mes: num(p.mes),
+        label: `${MESES[num(p.mes) - 1]} ${p.anio}`,
+        viales: Number(p.viales),
+        pacientes: num(p.pacientes),
+      })),
+  }));
+}
+
+export async function getTemporalGlobalArea(
+  area: string,
+  fechaDesde?: string | null,
+  fechaHasta?: string | null,
+): Promise<TemporalGlobal[]> {
+  const sql = getDb();
+  const desde = fechaDesde ?? null;
+  const hasta = fechaHasta ?? null;
+  const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const rows = (await sql`
+    SELECT
+      cr.anio, cr.mes,
+      SUM(cr.viales_dispensados)::float AS viales,
+      SUM(cr.num_pacientes)::int        AS pacientes,
+      COUNT(*)::int                     AS preparaciones,
+      COUNT(DISTINCT cr.cn)::int        AS medicamentos_distintos
+    FROM consumo_registros cr
+    INNER JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+    WHERE ic.area = ${area}
+      AND (${desde}::date IS NULL OR cr.fecha >= ${desde}::date)
+      AND (${hasta}::date IS NULL OR cr.fecha <= ${hasta}::date)
+    GROUP BY cr.anio, cr.mes
+    ORDER BY cr.anio, cr.mes;
+  `) as Array<{
+    anio: number; mes: number; viales: number; pacientes: number;
+    preparaciones: number; medicamentos_distintos: number;
+  }>;
+
+  return rows.map(r => ({
+    anio: num(r.anio),
+    mes: num(r.mes),
+    label: `${MESES[num(r.mes) - 1]} ${r.anio}`,
+    viales: Number(r.viales),
+    pacientes: num(r.pacientes),
+    preparaciones: num(r.preparaciones),
+    medicamentosDistintos: num(r.medicamentos_distintos),
   }));
 }

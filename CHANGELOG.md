@@ -49,6 +49,10 @@ Historial de cambios del proyecto ordenado del más reciente al más antiguo.
 - Historial desplegable: añade columna **En tránsito** en el detalle de líneas para consulta/auditoría tras tramitación.
 - Inicio: la ventana temporal de tendencia/curva se calcula contra fecha actual (`CURRENT_DATE`), evitando reutilizar ventanas antiguas del histórico (ej. 2024).
 - Inicio: la serie de pedidos en curva pasa a considerar pedidos no anulados (recibidos + pendientes) en los últimos 6 meses.
+- Consumo: se elimina selector de importaciones; el análisis pasa a ser acumulado por área sobre todo el histórico cargado.
+- Consumo: desglose por medicamento ordenado alfabéticamente por diagnóstico > indicación > protocolo, mostrando solo viales (sin pacientes por línea).
+- Consumo: evolución temporal enfocada en pacientes reportados, preparaciones y medicamentos distintos por mes.
+- Consumo: mantiene visibilidad/filtrado por `tipo_componente` (incluido Fluido).
 
 ### Pendiente para retomar (bloqueado por datos)
 - Cargar histórico de consumo depurado con datos suficientes para detectar tendencias reales.
