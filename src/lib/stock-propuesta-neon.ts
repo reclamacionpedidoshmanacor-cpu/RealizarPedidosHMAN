@@ -30,6 +30,7 @@ export type RecuentoCabecera = {
 
 export type RecuentoLinea = {
   cn: string;
+  principioActivo: string | null;
   nombre: string;
   stockCajas: number;
   stockUnidades: number;
@@ -47,6 +48,7 @@ export type PropuestaCabecera = {
 export type PropuestaLinea = {
   id: number;
   cn: string;
+  principioActivo: string | null;
   nombreMedicamento: string | null;
   unidadesPorCaja: number;
   stockActual: number;
@@ -93,18 +95,18 @@ export async function getRecuentosByArea(area: string): Promise<{
 export async function getLineasRecuento(importacionId: number): Promise<RecuentoLinea[]> {
   const sql = getDb();
   const rows = (await sql`
-    SELECT sr.cn, m.nombre, sr.stock_cajas, sr.stock_unidades, sr.valor_total
+    SELECT sr.cn, m.principio_activo, m.nombre, sr.stock_cajas, sr.stock_unidades, sr.valor_total
     FROM stock_registros sr
     INNER JOIN medicamentos m ON m.cn = sr.cn
     WHERE sr.importacion_id = ${importacionId}
     ORDER BY m.principio_activo ASC NULLS LAST, m.nombre ASC;
   `) as Array<{
-    cn: string; nombre: string;
+    cn: string; principio_activo: string | null; nombre: string;
     stock_cajas: string; stock_unidades: string; valor_total: string | null;
   }>;
 
   return rows.map((r) => ({
-    cn: r.cn, nombre: r.nombre,
+    cn: r.cn, principioActivo: r.principio_activo, nombre: r.nombre,
     stockCajas: num(r.stock_cajas), stockUnidades: num(r.stock_unidades),
     valorTotal: numOrNull(r.valor_total),
   }));
@@ -203,6 +205,20 @@ export async function getMedicamentoByCnArea(
   return r ? { cn: r.cn, unidadesPorCaja: num(r.unidades_por_caja) } : null;
 }
 
+export async function recuperarRecuentoGenerado(
+  importacionId: number,
+  area: string
+): Promise<boolean> {
+  const sql = getDb();
+  const rows = (await sql`
+    UPDATE importaciones_stock
+    SET estado = 'pendiente', generado_en = NULL, propuesta_id = NULL
+    WHERE id = ${importacionId} AND area = ${area} AND estado = 'generado'
+    RETURNING id;
+  `) as Array<{ id: number }>;
+  return rows.length > 0;
+}
+
 // ---------------------------------------------------------------------------
 // PROPUESTAS
 // ---------------------------------------------------------------------------
@@ -241,21 +257,24 @@ export async function crearPropuesta(area: string, importacionStockId: number): 
 export async function getLineasPropuesta(propuestaId: number): Promise<PropuestaLinea[]> {
   const sql = getDb();
   const rows = (await sql`
-    SELECT id, cn, nombre_medicamento, unidades_por_caja,
+    SELECT pl.id, pl.cn, pl.nombre_medicamento, pl.unidades_por_caja,
+           m.principio_activo,
            stock_actual, stock_minimo_snap, punto_pedido_snap, stock_maximo_snap,
            cajas_propuestas, cajas_validadas, motivo_ajuste, motivo_ajuste_otro, ajustado
-    FROM propuestas_lineas
-    WHERE propuesta_id = ${propuestaId}
-    ORDER BY nombre_medicamento ASC NULLS LAST;
+    FROM propuestas_lineas pl
+    LEFT JOIN medicamentos m ON m.cn = pl.cn
+    WHERE pl.propuesta_id = ${propuestaId}
+    ORDER BY m.principio_activo ASC NULLS LAST, pl.nombre_medicamento ASC NULLS LAST;
   `) as Array<{
     id: number; cn: string; nombre_medicamento: string | null; unidades_por_caja: number;
+    principio_activo: string | null;
     stock_actual: string; stock_minimo_snap: number; punto_pedido_snap: number; stock_maximo_snap: number;
     cajas_propuestas: number; cajas_validadas: number | null;
     motivo_ajuste: string | null; motivo_ajuste_otro: string | null; ajustado: boolean;
   }>;
 
   return rows.map((r) => ({
-    id: num(r.id), cn: r.cn, nombreMedicamento: r.nombre_medicamento,
+    id: num(r.id), cn: r.cn, principioActivo: r.principio_activo, nombreMedicamento: r.nombre_medicamento,
     unidadesPorCaja: num(r.unidades_por_caja), stockActual: num(r.stock_actual),
     stockMinimoSnap: num(r.stock_minimo_snap), puntoPedidoSnap: num(r.punto_pedido_snap),
     stockMaximoSnap: num(r.stock_maximo_snap), cajasPropuestas: num(r.cajas_propuestas),
