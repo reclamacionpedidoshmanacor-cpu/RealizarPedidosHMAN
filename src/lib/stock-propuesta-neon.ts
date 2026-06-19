@@ -272,7 +272,7 @@ export async function getRecuentoConStockParaPropuesta(importacionId: number, ar
       m.nombre, m.unidades_por_caja,
       so.stock_minimo, so.punto_pedido, so.stock_maximo
     FROM stock_registros sr
-    INNER JOIN medicamentos m ON m.cn = sr.cn AND m.area = ${area}
+    INNER JOIN medicamentos m ON m.cn = sr.cn AND m.area = ${area} AND m.activo = true
     LEFT JOIN stock_objetivo so ON so.cn = sr.cn
     WHERE sr.importacion_id = ${importacionId};
   `) as Array<{
