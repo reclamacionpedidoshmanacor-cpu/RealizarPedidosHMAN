@@ -710,7 +710,8 @@ function MedCard({
           <span className="text-sm text-slate-400">{index}/{total}</span>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      {med.unidadesPorCaja === 1 ? (
+        /* Múltiplo 1: solo cajas, a pantalla completa */
         <div className="space-y-1">
           <label className="block text-sm font-bold text-slate-600 uppercase tracking-wider">📦 Cajas</label>
           <input type="number" inputMode="numeric" min={0} step={1}
@@ -718,15 +719,26 @@ function MedCard({
             onChange={(e) => onChange({ cajas: toIntInput(e.target.value) })}
             className="w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-3xl font-bold text-center text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200" />
         </div>
-        <div className="space-y-1">
-          <label className="block text-sm font-bold text-slate-600 uppercase tracking-wider">💊 Unidades sueltas</label>
-          <input type="number" inputMode="numeric" min={0} step={1}
-            value={val.unidadesSueltas === 0 ? '' : val.unidadesSueltas} placeholder="0"
-            onChange={(e) => onChange({ unidadesSueltas: toIntInput(e.target.value) })}
-            className="w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-3xl font-bold text-center text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200" />
-          <p className="text-sm text-slate-400 text-center">(1 caja = {med.unidadesPorCaja} udes)</p>
+      ) : (
+        /* Múltiplo > 1: cajas + unidades sueltas */
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1">
+            <label className="block text-sm font-bold text-slate-600 uppercase tracking-wider">📦 Cajas</label>
+            <input type="number" inputMode="numeric" min={0} step={1}
+              value={val.cajas === 0 ? '' : val.cajas} placeholder="0"
+              onChange={(e) => onChange({ cajas: toIntInput(e.target.value) })}
+              className="w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-3xl font-bold text-center text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200" />
+          </div>
+          <div className="space-y-1">
+            <label className="block text-sm font-bold text-slate-600 uppercase tracking-wider">💊 Uds. sueltas</label>
+            <input type="number" inputMode="numeric" min={0} step={1}
+              value={val.unidadesSueltas === 0 ? '' : val.unidadesSueltas} placeholder="0"
+              onChange={(e) => onChange({ unidadesSueltas: toIntInput(e.target.value) })}
+              className="w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-3xl font-bold text-center text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200" />
+            <p className="text-sm text-slate-400 text-center">(1 caja = {med.unidadesPorCaja} udes)</p>
+          </div>
         </div>
-      </div>
+      )}
       {changed && <p className="mt-3 text-sm font-semibold text-amber-600">✏ Modificado</p>}
     </div>
   );
