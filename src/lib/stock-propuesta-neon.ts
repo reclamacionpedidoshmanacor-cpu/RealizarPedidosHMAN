@@ -403,6 +403,20 @@ export async function tramitarPropuesta(propuestaId: number, importacionStockId:
   `;
 }
 
+export async function deshacerPropuesta(propuestaId: number, importacionStockId: number): Promise<void> {
+  const sql = getDb();
+  await sql`
+    UPDATE propuestas
+    SET estado = 'borrador', tramitada_en = null, validada_en = null
+    WHERE id = ${propuestaId};
+  `;
+  await sql`
+    UPDATE importaciones_stock
+    SET estado = 'pendiente', generado_en = null, propuesta_id = null
+    WHERE id = ${importacionStockId};
+  `;
+}
+
 export async function getLineasParaExcel(propuestaId: number): Promise<Array<{
   cn: string; nombreMedicamento: string | null;
   cajasPropuestas: number; cajasValidadas: number | null; unidadesPorCaja: number;
