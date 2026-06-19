@@ -5,7 +5,7 @@ import { loadPedidosConRespuestas } from '@/lib/pedidos-pendientes';
 
 export const runtime = 'nodejs';
 
-/** Convierte un CN en formato 6 dígitos para comparar con PedidosPendientes */
+/** Últimos 6 dígitos numéricos de un CN para comparar con PedidosPendientes */
 function toCn6(cn: string): string {
   const digits = cn.replace(/\D/g, '');
   if (digits.length > 6) return digits.slice(-6);
@@ -23,8 +23,13 @@ export async function GET(req: NextRequest) {
   if (!cn) return NextResponse.json({ error: 'cn requerido.' }, { status: 400 });
 
   try {
-    // Consumo mensual del área
+    // Consumo últimos 3 meses (relativo al dato más reciente del área)
     const consumo = await getCurvaMedicamento(cn, session.area);
+
+    // Rango de fechas del consumo para filtrar pedidos en el mismo período
+    const fechaMinConsumo = consumo.length > 0
+      ? new Date(consumo[0].anio, consumo[0].mes - 1, 1)
+      : null;
 
     // Pedidos recibidos del sistema externo agrupados por mes
     let pedidosMes: { anio: number; mes: number; label: string; cantidad: number }[] = [];
@@ -33,17 +38,24 @@ export async function GET(req: NextRequest) {
       const pedidos = await loadPedidosConRespuestas({
         estado: 'recibidos',
         soloReclamados: false,
-        limit: 2000,
+        limit: 5000,
       });
 
-      // Agrupar por año+mes los pedidos cuyo CN6 coincide
       const map = new Map<string, { anio: number; mes: number; cantidad: number }>();
       for (const p of pedidos) {
-        const pCn6 = p.cnRaw ? p.cnRaw.replace(/\D/g, '').padStart(6, '0').slice(-6) : null;
+        // Comparar CN6
+        const pCn6 = p.cnRaw
+          ? p.cnRaw.replace(/\D/g, '').padStart(6, '0').slice(-6)
+          : null;
         if (pCn6 !== cn6) continue;
         if (!p.fechaDocumento) continue;
+
         const d = new Date(p.fechaDocumento);
         if (isNaN(d.getTime())) continue;
+
+        // Solo pedidos dentro del período del consumo
+        if (fechaMinConsumo && d < fechaMinConsumo) continue;
+
         const anio = d.getFullYear();
         const mes  = d.getMonth() + 1;
         const key  = `${anio}-${mes}`;
@@ -60,7 +72,7 @@ export async function GET(req: NextRequest) {
           cantidad: r.cantidad,
         }));
     } catch {
-      // Si no hay conexión con PedidosPendientes, devolvemos solo consumo
+      // Sin conexión con PedidosPendientes — devolvemos solo consumo
     }
 
     return NextResponse.json({ consumo, pedidos: pedidosMes });

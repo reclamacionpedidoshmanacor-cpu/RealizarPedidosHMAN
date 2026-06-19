@@ -326,8 +326,9 @@ export async function getTendenciasConsumo(area: string): Promise<TendenciaMedic
     agrupado AS (
       SELECT
         cr.cn,
-        COALESCE(MAX(cr.componente),  '') AS componente,
-        COALESCE(MAX(cr.medicamento), '') AS medicamento,
+        -- Principio activo y nombre comercial tomados del catálogo (más fiables que el Excel de consumo)
+        COALESCE(MAX(m.principio_activo), MAX(cr.componente), '') AS componente,
+        COALESCE(MAX(m.nombre),           MAX(cr.medicamento), '') AS medicamento,
         SUM(CASE WHEN cr.fecha >  p.split_date                            THEN cr.viales_dispensados ELSE 0 END)::float AS periodo_actual,
         SUM(CASE WHEN cr.fecha <= p.split_date AND cr.fecha > p.start_date THEN cr.viales_dispensados ELSE 0 END)::float AS periodo_anterior
       FROM consumo_registros cr
@@ -403,13 +404,23 @@ export type CurvaMes = {
 export async function getCurvaMedicamento(cn: string, area: string): Promise<CurvaMes[]> {
   const sql = getDb();
   const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  // Últimos 3 meses relativos al dato más reciente disponible para este CN
   const rows = (await sql`
+    WITH maxdate AS (
+      SELECT MAX(cr.fecha) AS latest
+      FROM consumo_registros cr
+      JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+      WHERE ic.area = ${area} AND cr.cn = ${cn}
+    )
     SELECT cr.anio, cr.mes,
            SUM(cr.viales_dispensados)::float AS viales,
            SUM(cr.num_pacientes)::int        AS pacientes
     FROM consumo_registros cr
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
-    WHERE ic.area = ${area} AND cr.cn = ${cn}
+    CROSS JOIN maxdate
+    WHERE ic.area = ${area}
+      AND cr.cn = ${cn}
+      AND cr.fecha > (maxdate.latest - INTERVAL '3 months')::date
     GROUP BY cr.anio, cr.mes
     ORDER BY cr.anio, cr.mes;
   `) as Array<{ anio: number; mes: number; viales: number; pacientes: number }>;
