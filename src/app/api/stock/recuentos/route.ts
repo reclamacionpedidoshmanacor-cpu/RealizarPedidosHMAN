@@ -3,6 +3,7 @@ import { requireApiSession } from '@/lib/api-auth';
 import { parseSapExcel } from '@/lib/sap-parser';
 import { parseManualStockExcel } from '@/lib/manual-stock-parser';
 import {
+  actualizarPreciosCatalogoDesdeSap,
   crearRecuento,
   getLineasRecuento,
   getMedicamentosParaRecuento,
@@ -15,6 +16,10 @@ export const runtime = 'nodejs';
 
 function roundOneDecimal(value: number): number {
   return Math.round(value * 10) / 10;
+}
+
+function roundPrice(value: number): number {
+  return Math.round(value * 1000000) / 1000000;
 }
 
 export async function GET(req: NextRequest) {
@@ -64,6 +69,7 @@ export async function POST(req: NextRequest) {
 
     const errores = [...parser.errors];
     const lineasInsert: Array<{ cn: string; stockUnidades: number; stockCajas: number; valorTotal: number | null }> = [];
+    const preciosDesdeSap: Array<{ cn: string; precioUnidad: number; precioCaja: number }> = [];
 
     for (const row of parser.rows) {
       const med = medsMap.get(row.cn);
@@ -78,6 +84,21 @@ export async function POST(req: NextRequest) {
           med.unidadesPorCaja > 0 ? sapRow.stockUnidades / med.unidadesPorCaja : 0
         );
         lineasInsert.push({ cn: row.cn, stockUnidades: sapRow.stockUnidades, stockCajas, valorTotal: sapRow.valorTotal });
+
+        if (sapRow.valorTotal != null) {
+          const valorTotal = Number(sapRow.valorTotal);
+          const stockUnidades = Number(sapRow.stockUnidades);
+
+          if (!Number.isFinite(valorTotal) || valorTotal < 0) {
+            errores.push(`CN ${row.cn}: "Valor final" no válido para actualizar precios.`);
+          } else if (!Number.isFinite(stockUnidades) || stockUnidades <= 0) {
+            errores.push(`CN ${row.cn}: no se puede calcular precio porque Stock de cierre es <= 0.`);
+          } else {
+            const precioUnidad = roundPrice(valorTotal / stockUnidades);
+            const precioCaja = roundPrice(precioUnidad * med.unidadesPorCaja);
+            preciosDesdeSap.push({ cn: row.cn, precioUnidad, precioCaja });
+          }
+        }
       } else {
         const manualRow = row as { stockCajas: number };
         const stockCajas = roundOneDecimal(manualRow.stockCajas);
@@ -103,8 +124,18 @@ export async function POST(req: NextRequest) {
     });
 
     await insertarLineasRecuento(importacionId, lineasInsert);
+    const preciosActualizados =
+      origen === 'SAP'
+        ? await actualizarPreciosCatalogoDesdeSap(session.area, preciosDesdeSap)
+        : 0;
 
-    return NextResponse.json({ ok: true, importacionId, totalLineas: lineasInsert.length, errores });
+    return NextResponse.json({
+      ok: true,
+      importacionId,
+      totalLineas: lineasInsert.length,
+      errores,
+      preciosActualizados,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Error inesperado';
     return NextResponse.json({ error: msg }, { status: 500 });

@@ -194,6 +194,36 @@ export async function actualizarLineaRecuento(
   return rows.length > 0;
 }
 
+export async function actualizarPreciosCatalogoDesdeSap(
+  area: string,
+  updates: Array<{ cn: string; precioUnidad: number; precioCaja: number }>
+): Promise<number> {
+  if (updates.length === 0) return 0;
+
+  const sql = getDb();
+  let updated = 0;
+
+  // Si el Excel trae varias líneas del mismo CN usamos el último valor recibido.
+  const byCn = new Map<string, { precioUnidad: number; precioCaja: number }>();
+  for (const u of updates) byCn.set(u.cn, { precioUnidad: u.precioUnidad, precioCaja: u.precioCaja });
+
+  for (const [cn, values] of byCn.entries()) {
+    const rows = (await sql`
+      UPDATE medicamentos
+      SET
+        precio_unidad = ${values.precioUnidad},
+        precio_caja = ${values.precioCaja},
+        actualizado_en = now()
+      WHERE area = ${area} AND cn = ${cn}
+      RETURNING cn;
+    `) as Array<{ cn: string }>;
+
+    if (rows.length > 0) updated += 1;
+  }
+
+  return updated;
+}
+
 export async function getMedicamentoByCnArea(
   cn: string, area: string
 ): Promise<{ cn: string; unidadesPorCaja: number } | null> {

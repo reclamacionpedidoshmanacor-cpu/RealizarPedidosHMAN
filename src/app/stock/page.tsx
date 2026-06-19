@@ -125,7 +125,12 @@ export default function StockPage() {
       const res = await fetch('/api/stock/recuentos', { method: 'POST', body: form });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo importar recuento.');
-      toast.success(`Recuento creado con ${payload.totalLineas} lineas.`);
+      const preciosActualizados = Number(payload?.preciosActualizados ?? 0);
+      toast.success(
+        preciosActualizados > 0
+          ? `Recuento creado con ${payload.totalLineas} lineas. Precios actualizados: ${preciosActualizados}.`
+          : `Recuento creado con ${payload.totalLineas} lineas.`
+      );
       if (payload.errores?.length) {
         toast.warning(`Se detectaron ${payload.errores.length} advertencias en la importacion.`);
       }
