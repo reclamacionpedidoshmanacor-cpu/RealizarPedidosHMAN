@@ -52,6 +52,7 @@ export type PropuestaLinea = {
   nombreMedicamento: string | null;
   unidadesPorCaja: number;
   stockActual: number;
+  stockTransito: number;
   stockMinimoSnap: number;
   puntoPedidoSnap: number;
   stockMaximoSnap: number;
@@ -371,7 +372,7 @@ export async function getLineasPropuesta(propuestaId: number): Promise<Propuesta
 
   return rows.map((r) => ({
     id: num(r.id), cn: r.cn, principioActivo: r.principio_activo, nombreMedicamento: r.nombre_medicamento,
-    unidadesPorCaja: num(r.unidades_por_caja), stockActual: num(r.stock_actual),
+    unidadesPorCaja: num(r.unidades_por_caja), stockActual: num(r.stock_actual), stockTransito: 0,
     stockMinimoSnap: num(r.stock_minimo_snap), puntoPedidoSnap: num(r.punto_pedido_snap),
     stockMaximoSnap: num(r.stock_maximo_snap), cajasPropuestas: num(r.cajas_propuestas),
     cajasValidadas: r.cajas_validadas != null ? num(r.cajas_validadas) : null,
@@ -401,12 +402,17 @@ export async function insertarLineasPropuesta(
   propuestaId: number,
   rows: Array<{
     cn: string; nombre: string; unidadesPorCaja: number; stockCajas: number;
-    stockMinimo: number; puntoPedido: number; stockMaximo: number;
+    stockMinimo: number; puntoPedido: number; stockMaximo: number; stockTransito: number;
   }>
 ): Promise<void> {
   const sql = getDb();
   for (const r of rows) {
-    const cajasPropuestas = calcularCajasPropuestas(r.stockCajas, r.puntoPedido, r.stockMaximo);
+    const cajasPropuestas = calcularCajasPropuestas(
+      r.stockCajas,
+      r.puntoPedido,
+      r.stockMaximo,
+      r.stockTransito
+    );
     await sql`
       INSERT INTO propuestas_lineas (
         propuesta_id, cn, nombre_medicamento, unidades_por_caja,
@@ -459,6 +465,25 @@ export async function actualizarLineaPropuesta(
         motivo_ajuste_otro = ${motivoAjusteOtro},
         ajustado = ${ajustado},
         unidades_final = ${unidadesFinal}
+    WHERE id = ${lineaId} AND propuesta_id = ${propuestaId};
+  `;
+}
+
+export async function actualizarCalculoAutomaticoLineaPropuesta(
+  lineaId: number,
+  propuestaId: number,
+  cajasPropuestas: number,
+  unidadesPorCaja: number
+): Promise<void> {
+  const sql = getDb();
+  await sql`
+    UPDATE propuestas_lineas
+    SET cajas_propuestas = ${cajasPropuestas},
+        cajas_validadas = ${cajasPropuestas},
+        ajustado = false,
+        motivo_ajuste = NULL,
+        motivo_ajuste_otro = NULL,
+        unidades_final = ${Math.round(cajasPropuestas * unidadesPorCaja)}
     WHERE id = ${lineaId} AND propuesta_id = ${propuestaId};
   `;
 }

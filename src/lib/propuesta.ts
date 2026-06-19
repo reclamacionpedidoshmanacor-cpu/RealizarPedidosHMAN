@@ -12,10 +12,12 @@ export type MotivoAjuste = (typeof MOTIVOS_AJUSTE)[number];
 export function calcularCajasPropuestas(
   stockActual: number,
   puntoPedido: number,
-  stockMaximo: number
+  stockMaximo: number,
+  stockTransito = 0
 ): number {
-  if (stockActual > puntoPedido) return 0;
-  return Math.max(Math.ceil(stockMaximo - stockActual), 0);
+  const stockDisponible = stockActual + stockTransito;
+  if (stockDisponible > puntoPedido) return 0;
+  return Math.max(Math.ceil(stockMaximo - stockDisponible), 0);
 }
 
 export function toSapCode(cn: string): string {

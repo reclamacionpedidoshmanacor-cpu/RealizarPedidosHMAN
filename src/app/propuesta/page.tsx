@@ -29,6 +29,7 @@ type Linea = {
   nombreMedicamento: string | null;
   unidadesPorCaja: number;
   stockActual: number;
+  stockTransito: number;
   stockMinimoSnap: number;
   puntoPedidoSnap: number;
   stockMaximoSnap: number;
@@ -322,6 +323,7 @@ export default function PropuestaPage() {
                     <th className="px-4 py-3 text-left">Ppio activo / marca</th>
                     <th className="px-4 py-3 text-center">Stock objetivo</th>
                     <th className="px-4 py-3 text-center">Stock actual</th>
+                    <th className="px-4 py-3 text-center">En tránsito</th>
                     <th className="px-4 py-3 text-center">Calculado</th>
                     <th className="px-4 py-3 text-center">Validado</th>
                     <th className="px-4 py-3 text-left">Motivo ajuste</th>
@@ -335,8 +337,9 @@ export default function PropuestaPage() {
                     const diff       = cajasVal - linea.cajasPropuestas;
                     const aumentado  = diff > 0;
                     const reducido   = diff < 0;
-                    // Rojo: stock por debajo del punto de pedido; azul: stock normal
-                    const bajoMinimo = linea.stockActual <= linea.puntoPedidoSnap;
+                    const stockDisponible = linea.stockActual + (linea.stockTransito ?? 0);
+                    // Rojo: stock disponible (actual + tránsito) por debajo del punto de pedido.
+                    const bajoMinimo = stockDisponible <= linea.puntoPedidoSnap;
 
                     return (
                       <tr key={linea.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
@@ -380,6 +383,13 @@ export default function PropuestaPage() {
                               : 'bg-sky-50 text-sky-800 ring-sky-200'
                           }`}>
                             {Number(linea.stockActual).toFixed(1)}
+                          </span>
+                        </td>
+
+                        {/* En tránsito */}
+                        <td className="px-4 py-3 text-center">
+                          <span className="inline-block rounded-md bg-violet-50 px-3 py-1 text-base font-semibold tabular-nums text-violet-800 ring-1 ring-violet-200">
+                            {Number(linea.stockTransito ?? 0).toFixed(1)}
                           </span>
                         </td>
 

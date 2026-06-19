@@ -37,6 +37,37 @@ type LoadPedidosParams = {
   limit: number;
 };
 
+function toCn6(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const digits = raw.replace(/\D/g, '');
+  if (!digits) return null;
+  if (digits.length > 6) return digits.slice(-6);
+  return digits.padStart(6, '0');
+}
+
+function parseNumberMaybe(raw: string | null): number | null {
+  if (raw == null) return null;
+  const compact = String(raw).trim().replace(/\s/g, '');
+  if (!compact) return null;
+
+  let normalized = compact;
+  if (compact.includes('.') && compact.includes(',')) {
+    const lastDot = compact.lastIndexOf('.');
+    const lastComma = compact.lastIndexOf(',');
+    normalized =
+      lastComma > lastDot
+        ? compact.replace(/\./g, '').replace(',', '.')
+        : compact.replace(/,/g, '');
+  } else if (compact.includes(',')) {
+    normalized = compact.replace(',', '.');
+  } else if (/^\d{1,3}(\.\d{3})+$/.test(compact)) {
+    normalized = compact.replace(/\./g, '');
+  }
+
+  const value = Number(normalized);
+  return Number.isFinite(value) ? value : null;
+}
+
 function getPedidosReadonlyClient() {
   const connectionString = process.env.PEDIDOS_PENDIENTES_DATABASE_URL;
   if (!connectionString) {
@@ -160,4 +191,45 @@ export async function loadPedidosConRespuestas(params: LoadPedidosParams): Promi
     historialTexto: row.historial_texto,
     historialRegistradoAt: row.historial_registrado_at,
   }));
+}
+
+export async function loadCantidadTransitoByCn(cns: string[]): Promise<Record<string, number>> {
+  const normalizedCns = [...new Set(cns.map((cn) => toCn6(cn)).filter((cn): cn is string => !!cn))];
+  if (normalizedCns.length === 0) return {};
+
+  const sql = getPedidosReadonlyClient();
+  const rows = (await sql`
+    -- En tránsito = pedidos pendientes (no recibido y no anulado),
+    -- medido por la cantidad pendiente por entregar.
+    WITH base AS (
+      SELECT
+        lpad(right(regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') AS cn6,
+        o.por_entregar_cantidad::text AS por_entregar_cantidad
+      FROM public.orders o
+      WHERE o.recibido = false
+        AND o.anulado = false
+        AND o.n_mate_prov IS NOT NULL
+        AND regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g') <> ''
+    )
+    SELECT cn6 AS cn_raw, por_entregar_cantidad
+    FROM base
+    WHERE cn6 = ANY(${normalizedCns});
+  `) as Array<{
+    cn_raw: string | null;
+    por_entregar_cantidad: string | null;
+  }>;
+
+  const totals: Record<string, number> = {};
+
+  for (const row of rows) {
+    const cn6 = toCn6(row.cn_raw);
+    if (!cn6) continue;
+
+    const cantidadTransito = parseNumberMaybe(row.por_entregar_cantidad) ?? 0;
+    if (cantidadTransito <= 0) continue;
+
+    totals[cn6] = (totals[cn6] ?? 0) + cantidadTransito;
+  }
+
+  return totals;
 }
