@@ -24,6 +24,10 @@ function toNum(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function toSapCode(cn: string): string {
+  return `14${cn}`;
+}
+
 export async function POST(req: NextRequest) {
   const session = requireApiSession(req);
   if (!session.ok) return session.response;
@@ -44,7 +48,7 @@ export async function POST(req: NextRequest) {
     const sheet = workbook.addWorksheet('Ajustes Inventario');
 
     sheet.columns = [
-      { header: 'CN', key: 'cn', width: 14 },
+      { header: 'Codigo SAP', key: 'sap', width: 18 },
       { header: 'Principio Activo', key: 'principioActivo', width: 32 },
       { header: 'Medicamento', key: 'medicamento', width: 40 },
       { header: 'Unidades/Caja', key: 'unidadesPorCaja', width: 16 },
@@ -60,7 +64,7 @@ export async function POST(req: NextRequest) {
 
     for (const r of rows) {
       sheet.addRow({
-        cn: r.cn,
+        sap: toSapCode(r.cn),
         principioActivo: r.principioActivo ?? '',
         medicamento: r.medicamento ?? '',
         unidadesPorCaja: toNum(r.unidadesPorCaja),
@@ -77,7 +81,7 @@ export async function POST(req: NextRequest) {
 
     sheet.addRow({});
     sheet.addRow({
-      cn: 'TOTAL',
+      sap: 'TOTAL',
       manualUnidades: rows.reduce((acc, r) => acc + toNum(r.manualUnidades), 0),
       sapUnidades: rows.reduce((acc, r) => acc + toNum(r.sapUnidades), 0),
       ajusteUnidades: rows.reduce((acc, r) => acc + toNum(r.ajusteUnidades), 0),
