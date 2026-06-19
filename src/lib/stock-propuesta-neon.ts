@@ -195,6 +195,61 @@ export async function actualizarLineaRecuento(
   return rows.length > 0;
 }
 
+export async function upsertLineaRecuento(
+  importacionId: number,
+  line: { cn: string; stockUnidades: number; stockCajas: number; valorTotal: number | null }
+): Promise<'updated' | 'inserted'> {
+  const updated = await actualizarLineaRecuento(
+    importacionId,
+    line.cn,
+    line.stockCajas,
+    line.stockUnidades
+  );
+  if (updated) {
+    const sql = getDb();
+    await sql`
+      UPDATE stock_registros
+      SET valor_total = ${line.valorTotal}
+      WHERE importacion_id = ${importacionId} AND cn = ${line.cn};
+    `;
+    return 'updated';
+  }
+
+  const sql = getDb();
+  await sql`
+    INSERT INTO stock_registros (importacion_id, cn, stock_unidades, stock_cajas, valor_total)
+    VALUES (${importacionId}, ${line.cn}, ${line.stockUnidades}, ${line.stockCajas}, ${line.valorTotal});
+  `;
+  return 'inserted';
+}
+
+export async function eliminarLineaRecuento(importacionId: number, cn: string): Promise<boolean> {
+  const sql = getDb();
+  const rows = (await sql`
+    DELETE FROM stock_registros
+    WHERE importacion_id = ${importacionId} AND cn = ${cn}
+    RETURNING id;
+  `) as Array<{ id: number }>;
+  return rows.length > 0;
+}
+
+export async function recalcularTotalLineasRecuento(importacionId: number): Promise<number> {
+  const sql = getDb();
+  const rows = (await sql`
+    UPDATE importaciones_stock i
+    SET total_lineas = sub.total
+    FROM (
+      SELECT COUNT(*)::int AS total
+      FROM stock_registros
+      WHERE importacion_id = ${importacionId}
+    ) sub
+    WHERE i.id = ${importacionId}
+    RETURNING i.total_lineas;
+  `) as Array<{ total_lineas: number }>;
+
+  return num(rows[0]?.total_lineas ?? 0);
+}
+
 export type EliminarRecuentoResult =
   | { ok: true; lineasEliminadas: number; propuestasEliminadas: number }
   | { ok: false; reason: 'not_found_or_not_pending' | 'linked_non_draft_proposal'; propuestaEstado?: string };

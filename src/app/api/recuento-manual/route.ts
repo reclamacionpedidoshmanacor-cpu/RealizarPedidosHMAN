@@ -1,0 +1,318 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { isValidArea, type AreaId } from '@/lib/areas';
+import { listMedicamentosByArea } from '@/lib/catalogo-neon';
+import {
+  crearRecuento,
+  eliminarLineaRecuento,
+  getLineasRecuento,
+  getPendienteRecuento,
+  recalcularTotalLineasRecuento,
+  upsertLineaRecuento,
+} from '@/lib/stock-propuesta-neon';
+
+export const runtime = 'nodejs';
+const AREA_COOKIE_MAX_AGE = 60 * 60 * 12;
+
+type BodyLinea = {
+  cn?: unknown;
+  cajas?: unknown;
+  unidadesSueltas?: unknown;
+};
+
+function normalizeText(value: string | null | undefined): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ');
+}
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function parseNonNegativeInteger(value: unknown): number | null {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  if (num < 0) return null;
+  if (!Number.isInteger(num)) return null;
+  return num;
+}
+
+function buildUbicacionesMap(
+  rows: Array<{ ubicacion: string | null }>
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const row of rows) {
+    const raw = String(row.ubicacion ?? '').trim();
+    if (!raw) continue;
+    const key = normalizeText(raw);
+    if (!map.has(key)) map.set(key, raw);
+  }
+  return map;
+}
+
+function getAreaFromCookie(req: NextRequest): AreaId {
+  const areaCookie = req.cookies.get('area_session')?.value;
+  if (isValidArea(areaCookie)) return areaCookie;
+  return 'oncologia';
+}
+
+function withAreaCookie(res: NextResponse, area: AreaId): NextResponse {
+  res.cookies.set('area_session', area, {
+    httpOnly: false,
+    sameSite: 'lax',
+    path: '/',
+    maxAge: AREA_COOKIE_MAX_AGE,
+  });
+  return res;
+}
+
+export async function GET(req: NextRequest) {
+  try {
+    const areaQuery = req.nextUrl.searchParams.get('area');
+    if (areaQuery && !isValidArea(areaQuery)) {
+      return NextResponse.json({ error: 'Area no valida.' }, { status: 400 });
+    }
+    const area = isValidArea(areaQuery) ? areaQuery : getAreaFromCookie(req);
+
+    const catalogo = await listMedicamentosByArea(area);
+    const ubicacionesMap = buildUbicacionesMap(catalogo);
+    const ubicaciones = [...ubicacionesMap.values()].sort((a, b) =>
+      a.localeCompare(b, 'es', { sensitivity: 'base' })
+    );
+
+    const ubicacionParam = req.nextUrl.searchParams.get('ubicacion');
+    const ubicacionParamKey = normalizeText(ubicacionParam);
+    const selectedKey =
+      ubicacionParamKey && ubicacionesMap.has(ubicacionParamKey)
+        ? ubicacionParamKey
+        : normalizeText(ubicaciones[0] ?? '');
+    const ubicacionSeleccionada = ubicacionesMap.get(selectedKey) ?? null;
+
+    const pendiente = await getPendienteRecuento(area);
+    const lineasPendiente = pendiente ? await getLineasRecuento(pendiente.id) : [];
+    const lineasByCn = new Map(lineasPendiente.map((linea) => [linea.cn, linea]));
+
+    const medicamentos = ubicacionSeleccionada
+      ? catalogo
+          .filter((med) => normalizeText(med.ubicacion) === selectedKey)
+          .map((med) => {
+            const unidadesPorCaja = Number(med.unidadesPorCaja) > 0 ? Number(med.unidadesPorCaja) : 1;
+            const linea = lineasByCn.get(med.cn);
+            const stockUnidades = linea
+              ? Math.max(0, Math.round(Number(linea.stockUnidades)))
+              : 0;
+            const cajas = Math.floor(stockUnidades / unidadesPorCaja);
+            const unidadesSueltas = stockUnidades - cajas * unidadesPorCaja;
+
+            return {
+              cn: med.cn,
+              principioActivo: med.principioActivo,
+              nombre: med.nombre,
+              activo: med.activo,
+              unidadesPorCaja,
+              cajas,
+              unidadesSueltas,
+            };
+          })
+      : [];
+
+    const res = NextResponse.json({
+      area,
+      pendiente,
+      ubicaciones,
+      ubicacionSeleccionada,
+      medicamentos,
+    });
+    return withAreaCookie(res, area);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Error inesperado';
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const body = (await req.json()) as {
+      area?: unknown;
+      ubicacion?: unknown;
+      fechaRecuento?: unknown;
+      lineas?: unknown;
+    };
+
+    const areaRaw = String(body.area ?? '').trim();
+    if (areaRaw && !isValidArea(areaRaw)) {
+      return NextResponse.json({ error: 'Area no valida.' }, { status: 400 });
+    }
+    const area = isValidArea(areaRaw) ? areaRaw : getAreaFromCookie(req);
+
+    const ubicacionRaw = String(body.ubicacion ?? '').trim();
+    if (!ubicacionRaw) {
+      return NextResponse.json({ error: 'Ubicacion requerida.' }, { status: 400 });
+    }
+
+    const fechaRecuentoRaw = String(body.fechaRecuento ?? '').trim();
+    if (fechaRecuentoRaw && !/^\d{4}-\d{2}-\d{2}$/.test(fechaRecuentoRaw)) {
+      return NextResponse.json({ error: 'Fecha de recuento no valida.' }, { status: 400 });
+    }
+    const fechaRecuento = fechaRecuentoRaw || todayIsoDate();
+
+    const inputLineas = Array.isArray(body.lineas) ? (body.lineas as BodyLinea[]) : [];
+    if (inputLineas.length === 0) {
+      return NextResponse.json({ error: 'No hay lineas para guardar.' }, { status: 400 });
+    }
+
+    const catalogo = await listMedicamentosByArea(area);
+    const ubicacionesMap = buildUbicacionesMap(catalogo);
+    const ubicacionKey = normalizeText(ubicacionRaw);
+    const ubicacionSeleccionada = ubicacionesMap.get(ubicacionKey);
+    if (!ubicacionSeleccionada) {
+      return NextResponse.json({ error: 'Ubicacion no valida para el area seleccionada.' }, { status: 400 });
+    }
+
+    const catalogoByCn = new Map(catalogo.map((med) => [med.cn, med]));
+    const errores: string[] = [];
+
+    const preparadas: Array<{
+      cn: string;
+      stockUnidades: number;
+      stockCajas: number;
+    }> = [];
+
+    for (const raw of inputLineas) {
+      const cn = String(raw.cn ?? '').trim();
+      const cajas = parseNonNegativeInteger(raw.cajas);
+      const unidadesSueltas = parseNonNegativeInteger(raw.unidadesSueltas);
+
+      if (!cn) {
+        errores.push('Linea sin CN.');
+        continue;
+      }
+      if (cajas == null || unidadesSueltas == null) {
+        errores.push(`CN ${cn}: cajas y unidades sueltas deben ser enteros >= 0.`);
+        continue;
+      }
+
+      const med = catalogoByCn.get(cn);
+      if (!med) {
+        errores.push(`CN ${cn}: no existe en el catalogo del area activa.`);
+        continue;
+      }
+      if (normalizeText(med.ubicacion) !== ubicacionKey) {
+        errores.push(`CN ${cn}: no pertenece a la ubicacion seleccionada (${ubicacionSeleccionada}).`);
+        continue;
+      }
+
+      const unidadesPorCaja = Number(med.unidadesPorCaja) > 0 ? Number(med.unidadesPorCaja) : 1;
+      const extraCajas = Math.floor(unidadesSueltas / unidadesPorCaja);
+      const sueltasNormalizadas = unidadesSueltas % unidadesPorCaja;
+      const cajasNormalizadas = cajas + extraCajas;
+      const stockUnidades = cajasNormalizadas * unidadesPorCaja + sueltasNormalizadas;
+      const stockCajas = stockUnidades / unidadesPorCaja;
+
+      preparadas.push({
+        cn,
+        stockUnidades,
+        stockCajas,
+      });
+    }
+
+    if (errores.length > 0) {
+      return NextResponse.json(
+        { error: 'Hay lineas invalidas en el recuento manual.', errores },
+        { status: 400 }
+      );
+    }
+
+    const pendiente = await getPendienteRecuento(area);
+    if (pendiente && pendiente.origen.toLowerCase() !== 'manual') {
+      return NextResponse.json(
+        {
+          error:
+            'Ya existe un recuento pendiente de otro origen. Tramítalo o elimínalo antes de usar el recuento manual.',
+        },
+        { status: 409 }
+      );
+    }
+
+    if (!pendiente && preparadas.every((linea) => linea.stockUnidades <= 0)) {
+      return NextResponse.json(
+        { error: 'Debes introducir al menos una cantidad mayor que cero para crear el recuento manual.' },
+        { status: 400 }
+      );
+    }
+
+    const importacionId =
+      pendiente?.id ??
+      (await crearRecuento({
+        area,
+        origen: 'Manual',
+        fechaRecuento,
+        ficheroNombre: 'APP Recuento Manual',
+        totalLineas: 0,
+      }));
+
+    const existentes = await getLineasRecuento(importacionId);
+    const existentesByCn = new Map(existentes.map((linea) => [linea.cn, linea]));
+
+    let insertadas = 0;
+    let actualizadas = 0;
+    let eliminadas = 0;
+    let sinCambios = 0;
+
+    for (const linea of preparadas) {
+      const actual = existentesByCn.get(linea.cn);
+      const stockActual = actual ? Math.max(0, Math.round(Number(actual.stockUnidades))) : 0;
+
+      if (linea.stockUnidades <= 0) {
+        if (stockActual > 0) {
+          const deleted = await eliminarLineaRecuento(importacionId, linea.cn);
+          if (deleted) eliminadas += 1;
+        } else {
+          sinCambios += 1;
+        }
+        continue;
+      }
+
+      if (stockActual === linea.stockUnidades) {
+        sinCambios += 1;
+        continue;
+      }
+
+      const result = await upsertLineaRecuento(importacionId, {
+        cn: linea.cn,
+        stockUnidades: linea.stockUnidades,
+        stockCajas: linea.stockCajas,
+        valorTotal: null,
+      });
+      if (result === 'inserted') insertadas += 1;
+      else actualizadas += 1;
+    }
+
+    if (insertadas === 0 && actualizadas === 0 && eliminadas === 0) {
+      return NextResponse.json(
+        { error: 'No hay cambios para guardar en esta ubicacion.' },
+        { status: 400 }
+      );
+    }
+
+    const totalLineas = await recalcularTotalLineasRecuento(importacionId);
+
+    const res = NextResponse.json({
+      ok: true,
+      importacionId,
+      totalLineas,
+      ubicacion: ubicacionSeleccionada,
+      insertadas,
+      actualizadas,
+      eliminadas,
+      sinCambios,
+    });
+    return withAreaCookie(res, area);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Error inesperado';
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
+}

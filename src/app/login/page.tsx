@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Image from 'next/image';
+import Link from 'next/link';
 import { cn } from '@/lib/utils';
 
 const AREAS = [
@@ -167,6 +168,18 @@ export default function LoginPage() {
           >
             {loading ? 'Accediendo…' : `Acceder a ${AREAS.find(a => a.id === selectedArea)?.label ?? ''}`}
           </button>
+
+          <div className="mt-4 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-center">
+            <p className="text-xs text-sky-700 mb-1.5">
+              Acceso rápido sin contraseña para recuento manual
+            </p>
+            <Link
+              href="/recuento-manual"
+              className="inline-flex rounded-md bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-700"
+            >
+              Abrir APP Recuento manual
+            </Link>
+          </div>
         </form>
       </div>
     </div>
