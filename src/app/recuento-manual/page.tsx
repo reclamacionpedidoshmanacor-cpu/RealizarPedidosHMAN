@@ -29,6 +29,11 @@ type ApiResponse = {
 /* ─── tipos reposición (solo UPE) ─── */
 type ReposicionBorrador = { id: number; totalLineas: number; fechaCreacion: string } | null;
 type ReposicionDraftLinea = { cantidadCajas: number };
+type ReposicionDetalleLinea = { ubicacion: string; cn: string; cantidadCajas: number };
+type ReposicionDetalleResponse = {
+  cabecera: { id: number; totalLineas: number; fechaCreacion: string };
+  lineas: ReposicionDetalleLinea[];
+};
 
 type Step = 'area' | 'ubicacion' | 'recuento' | 'reposicion-ubicacion' | 'reposicion-recuento';
 
@@ -74,6 +79,7 @@ export default function RecuentoManualPage() {
   const [repoUbicacionesUsadas, setRepoUbicacionesUsadas] = useState<string[]>([]);
   const [repoDraft, setRepoDraft] = useState<Record<string, ReposicionDraftLinea>>({});
   const [repoBaselineDraft, setRepoBaselineDraft] = useState<Record<string, ReposicionDraftLinea>>({});
+  const [repoLineasByUbicacion, setRepoLineasByUbicacion] = useState<Record<string, Record<string, number>>>({});
   const [finalizando, setFinalizando] = useState(false);
   const deepLinkHandledRef = useRef(false);
 
@@ -131,6 +137,7 @@ export default function RecuentoManualPage() {
       setRepoUbicacionesUsadas([]);
       setRepoDraft({});
       setRepoBaselineDraft({});
+      setRepoLineasByUbicacion({});
       setStep('ubicacion');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
@@ -196,6 +203,40 @@ export default function RecuentoManualPage() {
 
   /* ════════ REPOSICIÓN (solo UPE) ════════ */
 
+  const cargarEstadoReposicion = async () => {
+    const resRepo = await fetch('/api/reposicion', { cache: 'no-store' });
+    const payloadRepo = await resRepo.json();
+    if (!resRepo.ok) throw new Error(payloadRepo?.error ?? 'No se pudo cargar reposición.');
+
+    if (!payloadRepo.borrador) {
+      setRepoBorrador(null);
+      setRepoUbicacionesUsadas([]);
+      setRepoLineasByUbicacion({});
+      return;
+    }
+
+    const borradorId = Number(payloadRepo.borrador.id);
+    setRepoBorrador({
+      id: borradorId,
+      totalLineas: Number(payloadRepo.borrador.totalLineas ?? 0),
+      fechaCreacion: String(payloadRepo.borrador.fechaCreacion ?? new Date().toISOString()),
+    });
+
+    const resDetalle = await fetch(`/api/reposicion/${borradorId}`, { cache: 'no-store' });
+    const detalle = (await resDetalle.json()) as ReposicionDetalleResponse & { error?: string };
+    if (!resDetalle.ok) throw new Error(detalle?.error ?? 'No se pudo cargar detalle del borrador.');
+
+    const byUbicacion: Record<string, Record<string, number>> = {};
+    for (const linea of detalle.lineas ?? []) {
+      const ub = String(linea.ubicacion ?? '').trim();
+      if (!ub) continue;
+      if (!byUbicacion[ub]) byUbicacion[ub] = {};
+      byUbicacion[ub][String(linea.cn)] = Number(linea.cantidadCajas ?? 0);
+    }
+    setRepoLineasByUbicacion(byUbicacion);
+    setRepoUbicacionesUsadas(Object.keys(byUbicacion).sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' })));
+  };
+
   const iniciarReposicion = async () => {
     setLoading(true);
     try {
@@ -204,19 +245,8 @@ export default function RecuentoManualPage() {
       const payload = (await res.json()) as ApiResponse;
       setData(payload);
 
-      /* Comprobamos si hay borrador activo */
-      const resRepo = await fetch('/api/reposicion', { cache: 'no-store' });
-      const payloadRepo = await resRepo.json();
-      if (payloadRepo.borrador) {
-        setRepoBorrador({
-          id: payloadRepo.borrador.id,
-          totalLineas: payloadRepo.borrador.totalLineas,
-          fechaCreacion: payloadRepo.borrador.fechaCreacion,
-        });
-      } else {
-        setRepoBorrador(null);
-      }
-      setRepoUbicacionesUsadas([]);
+      /* Comprobamos si hay borrador activo y cargamos sus líneas */
+      await cargarEstadoReposicion();
       setStep('reposicion-ubicacion');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
@@ -233,10 +263,11 @@ export default function RecuentoManualPage() {
       setData(payload);
       setUbicacion(ub);
 
-      /* Inicializar draft de reposición a cero */
+      /* Si la ubicación ya existe en borrador, precargar valores guardados */
+      const saved = repoLineasByUbicacion[ub] ?? {};
       const nextDraft: Record<string, ReposicionDraftLinea> = {};
       for (const med of payload.medicamentos) {
-        nextDraft[med.cn] = { cantidadCajas: 0 };
+        nextDraft[med.cn] = { cantidadCajas: Number(saved[med.cn] ?? 0) };
       }
       setRepoDraft(nextDraft);
       setRepoBaselineDraft({ ...nextDraft });
@@ -249,8 +280,14 @@ export default function RecuentoManualPage() {
   };
 
   const repoHasChanges = useMemo(() => {
-    return Object.values(repoDraft).some((l) => l.cantidadCajas > 0);
-  }, [repoDraft]);
+    const keys = new Set([...Object.keys(repoDraft), ...Object.keys(repoBaselineDraft)]);
+    for (const cn of keys) {
+      const cur = repoDraft[cn]?.cantidadCajas ?? 0;
+      const base = repoBaselineDraft[cn]?.cantidadCajas ?? 0;
+      if (cur !== base) return true;
+    }
+    return false;
+  }, [repoDraft, repoBaselineDraft]);
 
   const handleGuardarUbicacionRepo = async () => {
     if (!data || !ubicacion) return;
@@ -269,8 +306,7 @@ export default function RecuentoManualPage() {
       });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo guardar.');
-      setRepoBorrador({ id: payload.pedidoId, totalLineas: (repoBorrador?.totalLineas ?? 0) + payload.upserted, fechaCreacion: new Date().toISOString() });
-      setRepoUbicacionesUsadas((prev) => prev.includes(ubicacion) ? prev : [...prev, ubicacion]);
+      await cargarEstadoReposicion();
       toast.success(`✅ Ubicación "${ubicacion}" añadida al pedido`);
       setStep('reposicion-ubicacion');
     } catch (err) {
@@ -292,6 +328,7 @@ export default function RecuentoManualPage() {
       toast.success('✅ Pedido de reposición finalizado. Puedes descargarlo en la pestaña Stock.');
       setRepoBorrador(null);
       setRepoUbicacionesUsadas([]);
+      setRepoLineasByUbicacion({});
       setStep('ubicacion');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
@@ -591,11 +628,11 @@ export default function RecuentoManualPage() {
           <div className="fixed bottom-0 left-0 right-0 z-30 bg-white border-t-2 border-orange-200 shadow-lg px-4 py-4">
             <div className="max-w-2xl mx-auto flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
               <div className="flex-1 text-sm text-slate-500">
-                {repoHasAnyQty
-                  ? <span className="font-semibold text-orange-600">⚠ {medicamentos.filter(m => (repoDraft[m.cn]?.cantidadCajas ?? 0) > 0).length} medicamentos con cantidad</span>
-                  : <span className="text-slate-400">Introduce las cantidades a pedir</span>}
+                {repoHasChanges
+                  ? <span className="font-semibold text-orange-600">⚠ Cambios sin guardar en esta ubicación</span>
+                  : <span className="text-slate-400">Sin cambios pendientes</span>}
               </div>
-              <button onClick={() => void handleGuardarUbicacionRepo()} disabled={saving || !repoHasAnyQty}
+              <button onClick={() => void handleGuardarUbicacionRepo()} disabled={saving || !repoHasChanges || !repoHasAnyQty}
                 className="rounded-2xl bg-orange-500 px-8 py-4 text-xl font-extrabold text-white shadow-lg hover:bg-orange-600 active:scale-95 transition-all disabled:opacity-40">
                 {saving ? 'Guardando…' : '💾 Guardar ubicación'}
               </button>
