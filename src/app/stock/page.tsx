@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -618,6 +619,12 @@ export default function StockPage() {
                 className="rounded-lg border border-orange-300 bg-white px-3 py-1.5 text-xs font-semibold text-orange-700 hover:bg-orange-100">
                 ⬇ Descargar PDF
               </a>
+              <Link
+                href="/recuento-manual?area=upe&modo=reposicion"
+                className="rounded-lg border border-teal-300 bg-white px-3 py-1.5 text-xs font-semibold text-teal-700 hover:bg-teal-50"
+              >
+                ✎ Editar pedido
+              </Link>
               <button
                 onClick={() => enviarPedidoReposicionEmail(reposicion.borrador!.id)}
                 disabled={sendingEmailId === reposicion.borrador.id}
@@ -670,6 +677,14 @@ export default function StockPage() {
                             className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100">
                             ⬇ PDF
                           </a>
+                          {rep.estado === 'borrador' && (
+                            <Link
+                              href="/recuento-manual?area=upe&modo=reposicion"
+                              className="inline-flex items-center gap-1 rounded-lg border border-teal-300 px-2 py-1 text-xs font-semibold text-teal-700 hover:bg-teal-50"
+                            >
+                              ✎ Editar pedido
+                            </Link>
+                          )}
                           <button
                             onClick={() => enviarPedidoReposicionEmail(rep.id)}
                             disabled={sendingEmailId === rep.id}

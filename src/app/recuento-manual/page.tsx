@@ -75,6 +75,7 @@ export default function RecuentoManualPage() {
   const [repoDraft, setRepoDraft] = useState<Record<string, ReposicionDraftLinea>>({});
   const [repoBaselineDraft, setRepoBaselineDraft] = useState<Record<string, ReposicionDraftLinea>>({});
   const [finalizando, setFinalizando] = useState(false);
+  const deepLinkHandledRef = useRef(false);
 
   const tableRef = useRef<HTMLDivElement>(null);
   const areaConfig = AREAS.find((a) => a.id === area) ?? AREAS[0];
@@ -298,6 +299,30 @@ export default function RecuentoManualPage() {
       setFinalizando(false);
     }
   };
+
+  /* ── Deep-link desde Stock: /recuento-manual?area=upe&modo=reposicion ── */
+  useEffect(() => {
+    if (deepLinkHandledRef.current) return;
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('modo') !== 'reposicion') return;
+    deepLinkHandledRef.current = true;
+
+    const areaParam = params.get('area');
+    const targetArea: AreaId =
+      areaParam && AREA_IDS.includes(areaParam as AreaId)
+        ? (areaParam as AreaId)
+        : 'upe';
+
+    const run = async () => {
+      await seleccionarArea(targetArea);
+      if (targetArea === 'upe') {
+        await iniciarReposicion();
+      }
+    };
+
+    void run();
+  }, []);
 
   /* ══════════════════════════════ RENDER ══════════════════════════════ */
 
