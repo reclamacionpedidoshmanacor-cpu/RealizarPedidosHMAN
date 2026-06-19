@@ -25,6 +25,7 @@ type Propuesta = {
 type Linea = {
   id: number;
   cn: string;
+  principioActivo: string | null;
   nombreMedicamento: string | null;
   unidadesPorCaja: number;
   stockActual: number;
@@ -318,7 +319,7 @@ export default function PropuestaPage() {
               <table className="min-w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                    <th className="px-4 py-3 text-left">Medicamento</th>
+                    <th className="px-4 py-3 text-left">Ppio activo / marca</th>
                     <th className="px-4 py-3 text-center">Stock objetivo</th>
                     <th className="px-4 py-3 text-center">Stock actual</th>
                     <th className="px-4 py-3 text-center">Calculado</th>
@@ -347,10 +348,17 @@ export default function PropuestaPage() {
                               <span className="mt-[5px] h-2 w-2 shrink-0 rounded-full bg-rose-400" title="Stock por debajo del punto de pedido" />
                             )}
                             <div>
-                              <p className="font-semibold text-slate-800 leading-snug">{linea.nombreMedicamento ?? '—'}</p>
-                              <span className="mt-0.5 inline-block rounded bg-slate-100 px-1.5 py-px font-mono text-[11px] text-slate-500 tracking-wide">
+                              <span className="inline-block rounded bg-slate-100 px-1.5 py-px font-mono text-[11px] text-slate-500 tracking-wide mb-0.5">
                                 {linea.cn}
                               </span>
+                              <p className="font-semibold text-slate-800 leading-snug">
+                                {linea.principioActivo ?? linea.nombreMedicamento ?? '—'}
+                              </p>
+                              {linea.principioActivo && linea.nombreMedicamento && (
+                                <p className="text-[11px] italic text-slate-400 font-sans mt-0.5">
+                                  {linea.nombreMedicamento}
+                                </p>
+                              )}
                             </div>
                           </div>
                         </td>

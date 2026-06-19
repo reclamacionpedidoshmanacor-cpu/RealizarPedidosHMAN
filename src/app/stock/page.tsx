@@ -15,6 +15,7 @@ type RecuentoCabecera = {
 
 type RecuentoLinea = {
   cn: string;
+  principioActivo: string | null;
   nombre: string;
   stockCajas: number;
   stockUnidades: number;
@@ -84,6 +85,7 @@ export default function StockPage() {
   const [historicoExpanded, setHistoricoExpanded] = useState<Record<number, boolean>>({});
   const [historicoLineas, setHistoricoLineas] = useState<Record<number, RecuentoLinea[]>>({});
   const [historicoLoading, setHistoricoLoading] = useState<Record<number, boolean>>({});
+  const [recoveringId, setRecoveringId] = useState<number | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -215,6 +217,23 @@ export default function StockPage() {
     }
   };
 
+  const recuperarHistorico = async (recuentoId: number) => {
+    if (!confirm('¿Recuperar este recuento generado y dejarlo pendiente para nueva propuesta?')) return;
+
+    setRecoveringId(recuentoId);
+    try {
+      const res = await fetch(`/api/stock/recuentos/${recuentoId}/recuperar`, { method: 'POST' });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo recuperar el recuento.');
+      toast.success('Recuento recuperado y marcado como pendiente.');
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setRecoveringId(null);
+    }
+  };
+
   return (
     <div className="space-y-5">
       <div>
@@ -297,19 +316,23 @@ export default function StockPage() {
                 </div>
                 <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
                   <table className="min-w-full text-sm">
-                    <thead className="bg-slate-50 text-slate-600">
+                    <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                       <tr>
                         <th className="px-3 py-2 text-left">CN</th>
-                        <th className="px-3 py-2 text-left">Medicamento</th>
-                        <th className="px-3 py-2 text-center">Stock cajas (editable)</th>
+                        <th className="px-3 py-2 text-left">Principio activo</th>
+                        <th className="px-3 py-2 text-left">Marca / nombre comercial</th>
+                        <th className="px-3 py-2 text-center">Stock cajas</th>
                         <th className="px-3 py-2 text-center">Stock unidades</th>
                       </tr>
                     </thead>
                     <tbody>
                       {data.pendienteLineas.map((linea) => (
                         <tr key={linea.cn} className="border-t border-slate-100">
-                          <td className="px-3 py-2 font-mono text-xs">{linea.cn}</td>
-                          <td className="px-3 py-2">{linea.nombre}</td>
+                          <td className="px-3 py-2">
+                            <span className="inline-block rounded bg-slate-100 px-1.5 py-px font-mono text-[11px] text-slate-500 tracking-wide">{linea.cn}</span>
+                          </td>
+                          <td className="px-3 py-2 font-semibold text-slate-800">{linea.principioActivo ?? '—'}</td>
+                          <td className="px-3 py-2 text-[12px] italic text-slate-400 font-sans">{linea.nombre}</td>
                           <td className="px-3 py-2 text-center">
                             <input
                               type="text"
@@ -348,12 +371,13 @@ export default function StockPage() {
                     <th className="px-3 py-2 text-left">Lineas</th>
                     <th className="px-3 py-2 text-left">Propuesta</th>
                     <th className="px-3 py-2 text-left">Detalle</th>
+                    <th className="px-3 py-2 text-left">Recuperar</th>
                   </tr>
                 </thead>
                 <tbody>
                   {(data?.historico ?? []).length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-3 py-4 text-slate-500">
+                      <td colSpan={8} className="px-3 py-4 text-slate-500">
                         No hay recuentos historicos.
                       </td>
                     </tr>
@@ -375,10 +399,23 @@ export default function StockPage() {
                               {historicoExpanded[it.id] ? 'Ocultar' : 'Desplegar'}
                             </button>
                           </td>
+                          <td className="px-3 py-2">
+                            {it.estado === 'generado' ? (
+                              <button
+                                onClick={() => recuperarHistorico(it.id)}
+                                disabled={recoveringId === it.id}
+                                className="rounded border border-teal-300 px-2 py-1 text-xs font-semibold text-teal-700 hover:bg-teal-50 disabled:opacity-50"
+                              >
+                                {recoveringId === it.id ? 'Recuperando...' : 'Recuperar'}
+                              </button>
+                            ) : (
+                              <span className="text-xs text-slate-400">—</span>
+                            )}
+                          </td>
                         </tr>
                         {historicoExpanded[it.id] && (
                           <tr className="border-t border-slate-100 bg-slate-50">
-                            <td colSpan={7} className="px-3 py-3">
+                            <td colSpan={8} className="px-3 py-3">
                               {historicoLoading[it.id] ? (
                                 <p className="text-sm text-slate-500">Cargando detalle...</p>
                               ) : (historicoLineas[it.id] ?? []).length === 0 ? (
@@ -386,10 +423,11 @@ export default function StockPage() {
                               ) : (
                                 <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
                                   <table className="min-w-full text-xs">
-                                    <thead className="bg-slate-50 text-slate-600">
+                                    <thead className="bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
                                       <tr>
                                         <th className="px-2 py-2 text-left">CN</th>
-                                        <th className="px-2 py-2 text-left">Medicamento</th>
+                                        <th className="px-2 py-2 text-left">Principio activo</th>
+                                        <th className="px-2 py-2 text-left">Marca / nombre comercial</th>
                                         <th className="px-2 py-2 text-right">Stock cajas</th>
                                         <th className="px-2 py-2 text-right">Stock unidades</th>
                                       </tr>
@@ -397,8 +435,11 @@ export default function StockPage() {
                                     <tbody>
                                       {(historicoLineas[it.id] ?? []).map((linea) => (
                                         <tr key={`${it.id}-${linea.cn}`} className="border-t border-slate-100">
-                                          <td className="px-2 py-1 font-mono text-[11px]">{linea.cn}</td>
-                                          <td className="px-2 py-1">{linea.nombre}</td>
+                                          <td className="px-2 py-1">
+                                            <span className="inline-block rounded bg-slate-100 px-1.5 py-px font-mono text-[11px] text-slate-500 tracking-wide">{linea.cn}</span>
+                                          </td>
+                                          <td className="px-2 py-1 text-xs font-semibold text-slate-800">{linea.principioActivo ?? '—'}</td>
+                                          <td className="px-2 py-1 text-[11px] italic text-slate-400 font-sans">{linea.nombre}</td>
                                           <td className="px-2 py-1 text-right">{formatStockCajas(linea.stockCajas)}</td>
                                           <td className="px-2 py-1 text-right">{formatStockUnidades(linea.stockUnidades)}</td>
                                         </tr>
