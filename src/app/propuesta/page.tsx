@@ -334,8 +334,8 @@ export default function PropuestaPage() {
                     const diff       = cajasVal - linea.cajasPropuestas;
                     const aumentado  = diff > 0;
                     const reducido   = diff < 0;
-                    // Rojo: stock por debajo del mínimo; azul: stock normal
-                    const bajoMinimo = linea.stockActual < linea.stockMinimoSnap;
+                    // Rojo: stock por debajo del punto de pedido; azul: stock normal
+                    const bajoMinimo = linea.stockActual <= linea.puntoPedidoSnap;
 
                     return (
                       <tr key={linea.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
@@ -344,7 +344,7 @@ export default function PropuestaPage() {
                         <td className="px-4 py-3">
                           <div className="flex items-start gap-2">
                             {bajoMinimo && (
-                              <span className="mt-[5px] h-2 w-2 shrink-0 rounded-full bg-rose-400" title="Stock por debajo del mínimo" />
+                              <span className="mt-[5px] h-2 w-2 shrink-0 rounded-full bg-rose-400" title="Stock por debajo del punto de pedido" />
                             )}
                             <div>
                               <p className="font-semibold text-slate-800 leading-snug">{linea.nombreMedicamento ?? '—'}</p>
