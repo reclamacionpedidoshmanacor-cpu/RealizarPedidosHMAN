@@ -15,12 +15,46 @@ export interface SapParseResult {
 }
 
 // Columnas esperadas en el Excel de SAP (case-insensitive, trim)
-const COL_MATERIAL = ['material'];
-const COL_STOCK    = ['stock de cierre', 'stock cierre', 'stockcierre'];
-const COL_VALOR    = ['valor final', 'valor', 'valorstock'];
+const COL_MATERIAL = ['material', 'cod material', 'codigo material'];
+const COL_STOCK = ['stock de cierre', 'stock cierre', 'stockcierre', 'stock final', 'stock'];
+const COL_VALOR = ['valor final', 'valor', 'valorstock', 'valor total'];
 
 function normalize(s: string) {
-  return s.toLowerCase().trim().replace(/\s+/g, ' ');
+  return s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[_\n\r\t]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function parseExcelNumber(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+
+  const compact = raw.replace(/\s/g, '');
+  let normalized = compact;
+
+  if (compact.includes('.') && compact.includes(',')) {
+    const lastDot = compact.lastIndexOf('.');
+    const lastComma = compact.lastIndexOf(',');
+    normalized =
+      lastComma > lastDot
+        ? compact.replace(/\./g, '').replace(',', '.')
+        : compact.replace(/,/g, '');
+  } else if (compact.includes(',')) {
+    normalized = compact.replace(',', '.');
+  } else if (/^\d{1,3}(\.\d{3})+$/.test(compact)) {
+    normalized = compact.replace(/\./g, '');
+  }
+
+  const num = Number(normalized);
+  return Number.isFinite(num) ? num : null;
 }
 
 function findCol(headers: string[], candidates: string[]): number {
@@ -39,13 +73,13 @@ export function parseSapExcel(buffer: Buffer): SapParseResult {
   }
 
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const raw: string[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as string[][];
+  const raw: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as unknown[][];
 
   if (raw.length < 2) {
     return { rows, errors: ['El archivo no contiene datos.'], fechaArchivo: null };
   }
 
-  const headers = (raw[0] as string[]).map(String);
+  const headers = (raw[0] as unknown[]).map((v) => String(v ?? ''));
   const idxMaterial = findCol(headers, COL_MATERIAL);
   const idxStock    = findCol(headers, COL_STOCK);
   const idxValor    = findCol(headers, COL_VALOR);
@@ -55,27 +89,29 @@ export function parseSapExcel(buffer: Buffer): SapParseResult {
   if (errors.length) return { rows, errors, fechaArchivo: null };
 
   for (let i = 1; i < raw.length; i++) {
-    const row = raw[i] as string[];
+    const row = raw[i] as unknown[];
     const material = String(row[idxMaterial] ?? '').trim();
     if (!material) continue;
 
-    const stockRaw = parseFloat(String(row[idxStock] ?? '0').replace(',', '.'));
-    if (isNaN(stockRaw)) {
+    const stockRaw = parseExcelNumber(row[idxStock]);
+    if (stockRaw == null) {
       errors.push(`Fila ${i + 1}: stock no numérico ("${row[idxStock]}")`);
       continue;
     }
 
-    const valorRaw = idxValor !== -1
-      ? parseFloat(String(row[idxValor] ?? '').replace(',', '.'))
-      : NaN;
+    const valorRaw = idxValor !== -1 ? parseExcelNumber(row[idxValor]) : null;
 
     const cn = cnFromSapMaterial(material);
+    if (!cn) {
+      errors.push(`Fila ${i + 1}: material sin CN válido ("${material}")`);
+      continue;
+    }
 
     rows.push({
       cn,
       material,
       stockUnidades: stockRaw,
-      valorTotal: isNaN(valorRaw) ? null : valorRaw,
+      valorTotal: valorRaw,
     });
   }
 

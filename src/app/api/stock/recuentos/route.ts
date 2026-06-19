@@ -67,14 +67,18 @@ export async function POST(req: NextRequest) {
     const meds = await getMedicamentosParaRecuento(session.area, cnList);
     const medsMap = new Map(meds.map((m) => [m.cn, m]));
 
-    const errores = [...parser.errors];
+    const errores = parser.errors.map((msg) => `[ARCHIVO] ${msg}`);
     const lineasInsert: Array<{ cn: string; stockUnidades: number; stockCajas: number; valorTotal: number | null }> = [];
     const preciosDesdeSap: Array<{ cn: string; precioUnidad: number; precioCaja: number }> = [];
 
     for (const row of parser.rows) {
       const med = medsMap.get(row.cn);
       if (!med) {
-        errores.push(`CN ${row.cn}: no existe en el catalogo del area activa.`);
+        const materialInfo =
+          origen === 'SAP' && 'material' in row
+            ? ` Material SAP: ${String((row as { material?: unknown }).material ?? '').trim()}.`
+            : '';
+        errores.push(`[CATALOGO] CN ${row.cn}: no existe en el catalogo del area activa.${materialInfo}`);
         continue;
       }
 
@@ -90,9 +94,12 @@ export async function POST(req: NextRequest) {
           const stockUnidades = Number(sapRow.stockUnidades);
 
           if (!Number.isFinite(valorTotal) || valorTotal < 0) {
-            errores.push(`CN ${row.cn}: "Valor final" no válido para actualizar precios.`);
+            errores.push(`[PRECIO] CN ${row.cn} (${med.nombre}): "Valor final" no válido para actualizar precios.`);
+          } else if (valorTotal === 0) {
+            // Valor total a cero: no actualizamos precio y no lo tratamos como advertencia.
+            continue;
           } else if (!Number.isFinite(stockUnidades) || stockUnidades <= 0) {
-            errores.push(`CN ${row.cn}: no se puede calcular precio porque Stock de cierre es <= 0.`);
+            errores.push(`[PRECIO] CN ${row.cn} (${med.nombre}): no se puede calcular precio porque Stock de cierre es <= 0.`);
           } else {
             const precioUnidad = roundPrice(valorTotal / stockUnidades);
             const precioCaja = roundPrice(precioUnidad * med.unidadesPorCaja);

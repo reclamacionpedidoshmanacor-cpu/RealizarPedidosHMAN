@@ -15,9 +15,21 @@ export function formatNumber(value: number | null | undefined, decimals = 2): st
 }
 
 export function cnFromSapMaterial(material: string): string {
-  const trimmed = material.trim();
-  if (trimmed.startsWith('14')) return trimmed.slice(2);
-  return trimmed;
+  const trimmed = String(material ?? '').trim();
+  if (!trimmed) return '';
+
+  // SAP suele enviar el material con prefijo 14, separadores o formato numérico.
+  // Normalizamos a CN de 6 dígitos para poder cruzar con catálogo.
+  let digits = trimmed.replace(/\D/g, '');
+  if (!digits) return trimmed;
+
+  if (digits.startsWith('14') && digits.length > 6) {
+    digits = digits.slice(2);
+  }
+
+  if (digits.length > 6) digits = digits.slice(-6);
+  if (digits.length < 6) digits = digits.padStart(6, '0');
+  return digits;
 }
 
 export function isMSE(cn: string): boolean {

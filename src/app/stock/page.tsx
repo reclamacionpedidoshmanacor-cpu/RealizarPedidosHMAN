@@ -77,10 +77,12 @@ export default function StockPage() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [savingAll, setSavingAll] = useState(false);
+  const [deletingPending, setDeletingPending] = useState(false);
   const [data, setData] = useState<ApiResponse | null>(null);
   const [origen, setOrigen] = useState<'SAP' | 'MANUAL'>('SAP');
   const [fechaRecuento, setFechaRecuento] = useState(new Date().toISOString().slice(0, 10));
   const fileRef = useRef<HTMLInputElement>(null);
+  const [lastWarnings, setLastWarnings] = useState<string[]>([]);
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [historicoExpanded, setHistoricoExpanded] = useState<Record<number, boolean>>({});
   const [historicoLineas, setHistoricoLineas] = useState<Record<number, RecuentoLinea[]>>({});
@@ -117,6 +119,7 @@ export default function StockPage() {
     const file = event.target.files?.[0];
     if (!file) return;
     setUploading(true);
+    setLastWarnings([]);
     try {
       const form = new FormData();
       form.append('file', file);
@@ -125,14 +128,18 @@ export default function StockPage() {
       const res = await fetch('/api/stock/recuentos', { method: 'POST', body: form });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo importar recuento.');
+      const advertencias = Array.isArray(payload?.errores)
+        ? payload.errores.map((msg: unknown) => String(msg))
+        : [];
+      setLastWarnings(advertencias);
       const preciosActualizados = Number(payload?.preciosActualizados ?? 0);
       toast.success(
         preciosActualizados > 0
           ? `Recuento creado con ${payload.totalLineas} lineas. Precios actualizados: ${preciosActualizados}.`
           : `Recuento creado con ${payload.totalLineas} lineas.`
       );
-      if (payload.errores?.length) {
-        toast.warning(`Se detectaron ${payload.errores.length} advertencias en la importacion.`);
+      if (advertencias.length > 0) {
+        toast.warning(`Se detectaron ${advertencias.length} advertencias en la importacion. Revisa el detalle debajo.`);
       }
       await load();
     } catch (err) {
@@ -195,6 +202,40 @@ export default function StockPage() {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
       setSavingAll(false);
+    }
+  };
+
+  const eliminarRecuentoPendiente = async () => {
+    if (!data?.pendiente) return;
+    const ok = confirm(
+      '¿Eliminar el recuento pendiente actual? Se borrarán sus líneas y cualquier propuesta en borrador vinculada.'
+    );
+    if (!ok) return;
+
+    setDeletingPending(true);
+    try {
+      const res = await fetch(`/api/stock/recuentos/${data.pendiente.id}`, { method: 'DELETE' });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo eliminar el recuento pendiente.');
+      toast.success(
+        `Recuento eliminado (${payload?.lineasEliminadas ?? 0} lineas, ${payload?.propuestasEliminadas ?? 0} propuestas borrador).`
+      );
+      setLastWarnings([]);
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setDeletingPending(false);
+    }
+  };
+
+  const copiarAdvertencias = async () => {
+    if (lastWarnings.length === 0) return;
+    try {
+      await navigator.clipboard.writeText(lastWarnings.join('\n'));
+      toast.success('Advertencias copiadas al portapapeles.');
+    } catch {
+      toast.error('No se pudieron copiar las advertencias.');
     }
   };
 
@@ -280,14 +321,55 @@ export default function StockPage() {
             />
             <button
               onClick={() => fileRef.current?.click()}
-              disabled={uploading}
+              disabled={uploading || !!data?.pendiente}
               className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
             >
-              {uploading ? 'Importando...' : 'Subir Excel de recuento'}
+              {uploading
+                ? 'Importando...'
+                : data?.pendiente
+                  ? 'Hay un recuento pendiente'
+                  : 'Subir Excel de recuento'}
             </button>
           </div>
         </div>
+        {data?.pendiente ? (
+          <p className="mt-3 text-xs text-amber-700">
+            Ya existe un recuento pendiente. Tramítalo o elimínalo para cargar un nuevo archivo.
+          </p>
+        ) : null}
       </div>
+
+      {lastWarnings.length > 0 ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-amber-800">
+              Advertencias de la última importación ({lastWarnings.length})
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={copiarAdvertencias}
+                className="rounded border border-amber-300 bg-white px-2 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100"
+              >
+                Copiar advertencias
+              </button>
+              <button
+                onClick={() => setLastWarnings([])}
+                className="rounded border border-amber-300 bg-white px-2 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100"
+              >
+                Ocultar
+              </button>
+            </div>
+          </div>
+          <p className="mb-2 text-xs text-amber-700">
+            Formato: [TIPO] detalle. Ejemplo: [ARCHIVO], [CATALOGO], [PRECIO].
+          </p>
+          <textarea
+            readOnly
+            value={lastWarnings.join('\n')}
+            className="h-44 w-full rounded border border-amber-200 bg-white p-2 text-xs text-slate-700"
+          />
+        </div>
+      ) : null}
 
       {loading ? (
         <p className="text-sm text-slate-500">Cargando recuentos...</p>
@@ -311,13 +393,22 @@ export default function StockPage() {
                   <p className="text-xs text-slate-600">
                     Formato de stock en cajas: <span className="font-semibold">0.000,0</span>
                   </p>
-                  <button
-                    onClick={saveRecuentoCompleto}
-                    disabled={savingAll}
-                    className="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
-                  >
-                    {savingAll ? 'Guardando recuento...' : 'Guardar recuento completo'}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={eliminarRecuentoPendiente}
+                      disabled={deletingPending}
+                      className="rounded-lg border border-rose-300 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                    >
+                      {deletingPending ? 'Eliminando...' : 'Eliminar recuento pendiente'}
+                    </button>
+                    <button
+                      onClick={saveRecuentoCompleto}
+                      disabled={savingAll}
+                      className="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
+                    >
+                      {savingAll ? 'Guardando recuento...' : 'Guardar recuento completo'}
+                    </button>
+                  </div>
                 </div>
                 <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
                   <table className="min-w-full text-sm">

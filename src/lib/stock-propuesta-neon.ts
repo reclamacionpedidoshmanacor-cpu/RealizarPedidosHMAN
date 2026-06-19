@@ -194,6 +194,72 @@ export async function actualizarLineaRecuento(
   return rows.length > 0;
 }
 
+export type EliminarRecuentoResult =
+  | { ok: true; lineasEliminadas: number; propuestasEliminadas: number }
+  | { ok: false; reason: 'not_found_or_not_pending' | 'linked_non_draft_proposal'; propuestaEstado?: string };
+
+export async function eliminarRecuentoPendiente(
+  importacionId: number,
+  area: string
+): Promise<EliminarRecuentoResult> {
+  const sql = getDb();
+
+  const recuentoRows = (await sql`
+    SELECT id
+    FROM importaciones_stock
+    WHERE id = ${importacionId} AND area = ${area} AND estado = 'pendiente'
+    LIMIT 1;
+  `) as Array<{ id: number }>;
+
+  if (recuentoRows.length === 0) {
+    return { ok: false, reason: 'not_found_or_not_pending' };
+  }
+
+  const propuestas = (await sql`
+    SELECT id, estado
+    FROM propuestas
+    WHERE importacion_stock_id = ${importacionId};
+  `) as Array<{ id: number; estado: string }>;
+
+  const propuestaNoBorrador = propuestas.find((p) => p.estado !== 'borrador');
+  if (propuestaNoBorrador) {
+    return { ok: false, reason: 'linked_non_draft_proposal', propuestaEstado: propuestaNoBorrador.estado };
+  }
+
+  for (const propuesta of propuestas) {
+    await sql`DELETE FROM propuestas_lineas WHERE propuesta_id = ${num(propuesta.id)};`;
+  }
+
+  if (propuestas.length > 0) {
+    await sql`
+      DELETE FROM propuestas
+      WHERE importacion_stock_id = ${importacionId} AND estado = 'borrador';
+    `;
+  }
+
+  const lineasEliminadas = (await sql`
+    DELETE FROM stock_registros
+    WHERE importacion_id = ${importacionId}
+    RETURNING id;
+  `) as Array<{ id: number }>;
+
+  const recuentoEliminado = (await sql`
+    DELETE FROM importaciones_stock
+    WHERE id = ${importacionId} AND area = ${area} AND estado = 'pendiente'
+    RETURNING id;
+  `) as Array<{ id: number }>;
+
+  if (recuentoEliminado.length === 0) {
+    return { ok: false, reason: 'not_found_or_not_pending' };
+  }
+
+  return {
+    ok: true,
+    lineasEliminadas: lineasEliminadas.length,
+    propuestasEliminadas: propuestas.length,
+  };
+}
+
 export async function actualizarPreciosCatalogoDesdeSap(
   area: string,
   updates: Array<{ cn: string; precioUnidad: number; precioCaja: number }>
