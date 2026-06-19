@@ -14,7 +14,13 @@ function fmtDate(iso: string): string {
 }
 
 function truncate(text: string, maxChars: number): string {
-  return text.length > maxChars ? text.slice(0, maxChars - 1) + '…' : text;
+  const t = text.length > maxChars ? text.slice(0, maxChars - 1) + '...' : text;
+  return t;
+}
+
+/** Elimina caracteres fuera del rango WinAnsi (0x00-0xFF) que pdf-lib no puede codificar */
+function safe(text: string): string {
+  return text.replace(/[^\x00-\xFF]/g, '');
 }
 
 /* ── Clase de ayuda para layout de texto ── */
@@ -106,9 +112,9 @@ async function buildPdf(
   const w = new PageWriter(doc, regular, bold);
 
   /* ── Cabecera ── */
-  w.text('ALBARÁN DE REPOSICIÓN', MARGIN, { size: 18, font: bold, color: rgb(0.05, 0.2, 0.45) });
+  w.text('ALBARAN DE REPOSICION', MARGIN, { size: 18, font: bold, color: rgb(0.05, 0.2, 0.45) });
   w.moveDown(22);
-  w.text('Farmacia Hospitalaria — Pacientes Externos', MARGIN, { size: 11, font: regular, color: rgb(0.35, 0.35, 0.35) });
+  w.text('Farmacia Hospitalaria - Pacientes Externos', MARGIN, { size: 11, font: regular, color: rgb(0.35, 0.35, 0.35) });
   w.moveDown(14);
   w.line(rgb(0.6, 0.6, 0.6), 1);
   w.moveDown(12);
@@ -133,7 +139,7 @@ async function buildPdf(
     w.ensureSpace(60);
 
     /* Título ubicación */
-    w.text(`📍 ${ubicacion}`, MARGIN, { size: 12, font: bold, color: rgb(0.07, 0.23, 0.52) });
+    w.text(`Ubicacion: ${safe(ubicacion)}`, MARGIN, { size: 12, font: bold, color: rgb(0.07, 0.23, 0.52) });
     w.moveDown(16);
 
     /* Cabecera columnas */
@@ -150,10 +156,10 @@ async function buildPdf(
     /* Filas */
     for (const l of items) {
       w.textRow([
-        { text: l.cn,                        x: COL.cn,  maxWidth: COL_W.cn,  size: 9 },
-        { text: l.principioActivo ?? '—',    x: COL.pa,  maxWidth: COL_W.pa,  size: 9 },
-        { text: l.nombre,                    x: COL.med, maxWidth: COL_W.med, size: 9, font: oblique, color: rgb(0.35, 0.35, 0.35) },
-        { text: String(l.cantidadCajas),     x: COL.qty, maxWidth: COL_W.qty, size: 9, font: bold, align: 'right' },
+        { text: safe(l.cn),                           x: COL.cn,  maxWidth: COL_W.cn,  size: 9 },
+        { text: safe(l.principioActivo ?? '-'),        x: COL.pa,  maxWidth: COL_W.pa,  size: 9 },
+        { text: safe(l.nombre),                        x: COL.med, maxWidth: COL_W.med, size: 9, font: oblique, color: rgb(0.35, 0.35, 0.35) },
+        { text: String(l.cantidadCajas),               x: COL.qty, maxWidth: COL_W.qty, size: 9, font: bold, align: 'right' },
       ], 15);
     }
 
@@ -167,7 +173,7 @@ async function buildPdf(
   const totalCajas = lineas.reduce((s, l) => s + l.cantidadCajas, 0);
   w.text(`Total líneas: ${lineas.length}   |   Total cajas: ${totalCajas}`, PAGE_W - MARGIN - 200, { size: 10, font: bold });
   w.moveDown(20);
-  w.text('Documento generado automáticamente — Farmacia Oncológica', MARGIN, { size: 8, font: regular, color: rgb(0.6, 0.6, 0.6) });
+  w.text('Documento generado automaticamente - Farmacia Oncologica', MARGIN, { size: 8, font: regular, color: rgb(0.6, 0.6, 0.6) });
 
   return doc.save();
 }
