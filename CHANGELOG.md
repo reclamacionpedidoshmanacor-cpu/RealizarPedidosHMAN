@@ -36,6 +36,21 @@ Historial de cambios del proyecto ordenado del más reciente al más antiguo.
 ### Lib — stock-propuesta-neon.ts
 - Nueva función `getResumenOperativo(area)`: consolida en una sola llamada los contadores de recuentos pendientes, propuestas en borrador, última propuesta tramitada, y alertas de stock (bajo mínimo / bajo punto de pedido).
 
+### Ajustes aplicados después de validación en entorno
+- Tendencias: excluidos del análisis `Fungible` y `Fluido`.
+- Tendencias: sólo se analizan CN presentes en `medicamentos` del área activa (`m.area = area` y `m.activo = TRUE`).
+- Etiqueta de tarjeta: se muestra **principio activo + marca comercial**; se elimina visualización de `tipo_componente`.
+- Curva Inicio: ventana visible ajustada a **6 meses**.
+- Curva Inicio: pedidos recibidos obtenidos por query directa por CN en `PedidosPendientes` y agregación mensual robusta de cantidades (parseo tolerante a formatos con coma/punto/texto).
+- Texto UI actualizado: explica explícitamente ventana visible 6 meses y análisis de tendencia en comparación 3+3 meses.
+- Historial de propuestas: nueva opción **Ver/Ocultar** para desplegar el detalle de líneas de cada propuesta sin deshacerla.
+- Nueva API `GET /api/propuestas/[id]/detalle` con control de área para consultar propuesta + líneas en modo lectura.
+
+### Pendiente para retomar (bloqueado por datos)
+- Cargar histórico de consumo depurado con datos suficientes para detectar tendencias reales.
+- Incorporar `DIA` (y semana en origen si aplica) en próximos ficheros para mejorar granularidad semanal.
+- Revalidar en `Inicio` la curva consumo/pedidos con 2-3 CN de control una vez cargado el histórico final.
+
 ---
 
 ## [v0.8] — 19 jun 2026

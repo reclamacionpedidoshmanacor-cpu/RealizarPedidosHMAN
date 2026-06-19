@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { MOTIVOS_AJUSTE } from '@/lib/propuesta';
 
@@ -64,6 +64,11 @@ type PropuestaResumen = {
   excelGeneradoEn: string | null;
 };
 
+type PropuestaDetalle = {
+  propuesta: Propuesta;
+  lineas: Linea[];
+};
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -92,6 +97,9 @@ export default function PropuestaPage() {
 
   const [historial,       setHistorial]       = useState<PropuestaResumen[]>([]);
   const [loadingHistorial, setLoadingHistorial] = useState(false);
+  const [expandedHistorialId, setExpandedHistorialId] = useState<number | null>(null);
+  const [detalleByPropuesta, setDetalleByPropuesta] = useState<Record<number, PropuestaDetalle>>({});
+  const [loadingDetalleId, setLoadingDetalleId] = useState<number | null>(null);
 
   // ── Carga propuesta activa ────────────────────────────────────────────────
   const load = async () => {
@@ -244,6 +252,29 @@ export default function PropuestaPage() {
 
   const descargarExcel = (propuestaId: number) =>
     window.open(`/api/propuestas/${propuestaId}/excel`, '_blank');
+
+  const toggleDetalleHistorial = async (propuestaId: number) => {
+    if (expandedHistorialId === propuestaId) {
+      setExpandedHistorialId(null);
+      return;
+    }
+
+    setExpandedHistorialId(propuestaId);
+    if (detalleByPropuesta[propuestaId]) return;
+
+    setLoadingDetalleId(propuestaId);
+    try {
+      const res = await fetch(`/api/propuestas/${propuestaId}/detalle`, { cache: 'no-store' });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo cargar el detalle.');
+      setDetalleByPropuesta(prev => ({ ...prev, [propuestaId]: payload as PropuestaDetalle }));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado al cargar el detalle.');
+      setExpandedHistorialId(null);
+    } finally {
+      setLoadingDetalleId(null);
+    }
+  };
 
   const setLinea = (id: number, patch: Partial<DraftEdit>) =>
     setEdits(prev => ({ ...prev, [id]: { ...prev[id], ...patch } }));
@@ -550,55 +581,112 @@ export default function PropuestaPage() {
               </thead>
               <tbody>
                 {historial.map((p, idx) => (
-                  <tr key={p.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
-                    <td className="px-4 py-2.5">
-                      <span className="font-mono text-xs text-slate-500">#{p.id}</span>
-                      <p className="text-xs text-slate-400">{fmt(p.fechaGeneracion)}</p>
-                    </td>
-                    <td className="px-4 py-2.5 text-xs text-slate-600">
-                      {p.recuentoId ? `#${p.recuentoId}` : '—'}
-                      {p.recuentoFecha && <p className="text-slate-400">{fmt(p.recuentoFecha)}</p>}
-                    </td>
-                    <td className="px-4 py-2.5 text-xs text-slate-600">
-                      {p.recuentoOrigen ? (ORIGEN_LABEL[p.recuentoOrigen] ?? p.recuentoOrigen) : '—'}
-                    </td>
-                    <td className="px-4 py-2.5 text-center text-xs text-slate-600">{p.totalLineas}</td>
-                    <td className="px-4 py-2.5 text-center">
-                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                        p.estado === 'tramitada'
-                          ? 'bg-teal-50 text-teal-700 ring-1 ring-teal-200'
-                          : 'bg-amber-50 text-amber-700 ring-1 ring-amber-200'
-                      }`}>
-                        {p.estado.charAt(0).toUpperCase() + p.estado.slice(1)}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2.5 text-xs text-slate-500">{fmt(p.tramitadaEn)}</td>
-                    <td className="px-4 py-2.5 text-center">
-                      <div className="flex items-center justify-center gap-1.5">
-                        {p.estado === 'tramitada' && (
-                          <>
-                            <button
-                              onClick={() => descargarExcel(p.id)}
-                              className="rounded border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-medium text-teal-700 hover:bg-teal-100 transition-colors"
-                              title="Descargar Excel"
-                            >
-                              Excel
-                            </button>
-                            <button
-                              onClick={() => handleDeshacerDesdeHistorial(p)}
-                              className="rounded border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 transition-colors"
-                              title="Revertir a borrador"
-                            >
-                              Deshacer
-                            </button>
-                          </>
-                        )}
-                        {p.estado === 'borrador' && (
-                          <span className="text-[11px] text-slate-400 italic">En edición</span>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
+                  <Fragment key={p.id}>
+                    <tr className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
+                      <td className="px-4 py-2.5">
+                        <span className="font-mono text-xs text-slate-500">#{p.id}</span>
+                        <p className="text-xs text-slate-400">{fmt(p.fechaGeneracion)}</p>
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-slate-600">
+                        {p.recuentoId ? `#${p.recuentoId}` : '—'}
+                        {p.recuentoFecha && <p className="text-slate-400">{fmt(p.recuentoFecha)}</p>}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-slate-600">
+                        {p.recuentoOrigen ? (ORIGEN_LABEL[p.recuentoOrigen] ?? p.recuentoOrigen) : '—'}
+                      </td>
+                      <td className="px-4 py-2.5 text-center text-xs text-slate-600">{p.totalLineas}</td>
+                      <td className="px-4 py-2.5 text-center">
+                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                          p.estado === 'tramitada'
+                            ? 'bg-teal-50 text-teal-700 ring-1 ring-teal-200'
+                            : 'bg-amber-50 text-amber-700 ring-1 ring-amber-200'
+                        }`}>
+                          {p.estado.charAt(0).toUpperCase() + p.estado.slice(1)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-slate-500">{fmt(p.tramitadaEn)}</td>
+                      <td className="px-4 py-2.5 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            onClick={() => void toggleDetalleHistorial(p.id)}
+                            className="rounded border border-indigo-200 bg-indigo-50 px-2 py-1 text-[11px] font-medium text-indigo-700 hover:bg-indigo-100 transition-colors"
+                            title={expandedHistorialId === p.id ? 'Ocultar detalle' : 'Ver detalle'}
+                          >
+                            {expandedHistorialId === p.id ? 'Ocultar' : 'Ver'}
+                          </button>
+                          {p.estado === 'tramitada' && (
+                            <>
+                              <button
+                                onClick={() => descargarExcel(p.id)}
+                                className="rounded border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-medium text-teal-700 hover:bg-teal-100 transition-colors"
+                                title="Descargar Excel"
+                              >
+                                Excel
+                              </button>
+                              <button
+                                onClick={() => handleDeshacerDesdeHistorial(p)}
+                                className="rounded border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+                                title="Revertir a borrador"
+                              >
+                                Deshacer
+                              </button>
+                            </>
+                          )}
+                          {p.estado === 'borrador' && (
+                            <span className="text-[11px] text-slate-400 italic">En edición</span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+
+                    {expandedHistorialId === p.id && (
+                      <tr className="bg-slate-50/70 border-b border-slate-200">
+                        <td className="px-4 py-3" colSpan={7}>
+                          {loadingDetalleId === p.id && (
+                            <p className="text-xs text-slate-400">Cargando líneas…</p>
+                          )}
+
+                          {loadingDetalleId !== p.id && detalleByPropuesta[p.id] && (
+                            <div className="rounded-lg border border-slate-200 bg-white overflow-x-auto">
+                              <table className="min-w-full text-xs">
+                                <thead>
+                                  <tr className="border-b border-slate-200 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
+                                    <th className="px-3 py-2 text-left">CN</th>
+                                    <th className="px-3 py-2 text-left">Ppio activo / marca</th>
+                                    <th className="px-3 py-2 text-center">Stock</th>
+                                    <th className="px-3 py-2 text-center">Calculado</th>
+                                    <th className="px-3 py-2 text-center">Validado</th>
+                                    <th className="px-3 py-2 text-left">Motivo</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {detalleByPropuesta[p.id].lineas.map((linea, lineIdx) => (
+                                    <tr key={linea.id} className={lineIdx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
+                                      <td className="px-3 py-2 font-mono text-[11px] text-slate-600">{linea.cn}</td>
+                                      <td className="px-3 py-2">
+                                        <p className="font-semibold text-slate-700">{linea.principioActivo ?? linea.nombreMedicamento ?? '—'}</p>
+                                        {linea.principioActivo && linea.nombreMedicamento && (
+                                          <p className="text-[11px] italic text-slate-400">{linea.nombreMedicamento}</p>
+                                        )}
+                                      </td>
+                                      <td className="px-3 py-2 text-center tabular-nums text-slate-600">{Number(linea.stockActual).toFixed(1)}</td>
+                                      <td className="px-3 py-2 text-center tabular-nums text-slate-600">{linea.cajasPropuestas}</td>
+                                      <td className="px-3 py-2 text-center tabular-nums text-slate-700 font-semibold">{linea.cajasValidadas ?? linea.cajasPropuestas}</td>
+                                      <td className="px-3 py-2 text-slate-500">
+                                        {linea.motivoAjuste === 'Otro'
+                                          ? linea.motivoAjusteOtro ?? 'Otro'
+                                          : linea.motivoAjuste ?? '—'}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
