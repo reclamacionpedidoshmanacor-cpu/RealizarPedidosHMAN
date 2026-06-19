@@ -10,14 +10,16 @@ export async function GET(req: NextRequest) {
 
   const { searchParams } = new URL(req.url);
   const importacionId = Number(searchParams.get('importacionId'));
+  const fechaDesde = searchParams.get('fechaDesde');
+  const fechaHasta = searchParams.get('fechaHasta');
   if (!Number.isFinite(importacionId) || importacionId <= 0) {
     return NextResponse.json({ error: 'importacionId requerido.' }, { status: 400 });
   }
 
   try {
     const [medicamentos, temporal] = await Promise.all([
-      getResumenConsumo(importacionId),
-      getTemporalGlobal(importacionId),
+      getResumenConsumo(importacionId, fechaDesde, fechaHasta),
+      getTemporalGlobal(importacionId, fechaDesde, fechaHasta),
     ]);
     return NextResponse.json({ medicamentos, temporal });
   } catch (err) {

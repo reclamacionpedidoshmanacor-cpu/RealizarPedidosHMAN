@@ -71,16 +71,25 @@ function normalize(s: string): string {
 }
 
 function findCol(headers: string[], candidates: string[]): number {
+  const normalizedCandidates = candidates.map(normalize);
+
+  // 1) Match exacto (prioritario)
+  const exactIdx = headers.findIndex((h) => normalizedCandidates.includes(normalize(h)));
+  if (exactIdx !== -1) return exactIdx;
+
+  // 2) Match por prefijo (ej: "viales dispensados (ud)")
+  const prefixedIdx = headers.findIndex((h) => {
+    const nh = normalize(h);
+    return normalizedCandidates.some((c) =>
+      nh.startsWith(`${c} `) || nh.startsWith(`${c}(`) || nh.startsWith(`${c}-`)
+    );
+  });
+  if (prefixedIdx !== -1) return prefixedIdx;
+
+  // 3) Match parcial como último recurso
   return headers.findIndex((h) => {
-    const normalizedHeader = normalize(h);
-    return candidates.some((candidate) => {
-      const normalizedCandidate = normalize(candidate);
-      return (
-        normalizedHeader === normalizedCandidate ||
-        normalizedHeader.includes(normalizedCandidate) ||
-        normalizedCandidate.includes(normalizedHeader)
-      );
-    });
+    const nh = normalize(h);
+    return normalizedCandidates.some((c) => nh.includes(c));
   });
 }
 

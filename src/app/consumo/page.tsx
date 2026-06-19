@@ -35,6 +35,7 @@ type TemporalItem = {
 type ResumenMedicamento = {
   cn: string;
   componente: string;
+  tipoComponente: string;
   medicamento: string;
   totalViales: number;
   totalPacientes: number;
@@ -80,6 +81,8 @@ export default function ConsumoPage() {
   const [tab,           setTab]           = useState<'medicamentos' | 'temporal'>('medicamentos');
   const [expanded,      setExpanded]      = useState<Record<string, boolean>>({});
   const [search,        setSearch]        = useState('');
+  const [fechaDesde,    setFechaDesde]    = useState('');
+  const [fechaHasta,    setFechaHasta]    = useState('');
 
   // ── Cargar lista de importaciones ────────────────────────────────────────
   const loadImportaciones = async () => {
@@ -100,12 +103,15 @@ export default function ConsumoPage() {
   };
 
   // ── Cargar resumen de la importación seleccionada ─────────────────────
-  const loadResumen = async (id: number) => {
+  const loadResumen = async (id: number, desde?: string, hasta?: string) => {
     setLoadingRes(true);
     setResumen(null);
     setExpanded({});
     try {
-      const res = await fetch(`/api/consumo/resumen?importacionId=${id}`, { cache: 'no-store' });
+      const params = new URLSearchParams({ importacionId: String(id) });
+      if (desde) params.set('fechaDesde', desde);
+      if (hasta) params.set('fechaHasta', hasta);
+      const res = await fetch(`/api/consumo/resumen?${params.toString()}`, { cache: 'no-store' });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? 'Error al cargar resumen.');
       setResumen(data);
@@ -119,8 +125,16 @@ export default function ConsumoPage() {
   useEffect(() => { void loadImportaciones(); }, []);
 
   useEffect(() => {
-    if (selectedId) void loadResumen(selectedId);
-  }, [selectedId]);
+    if (!selectedId) return;
+    const imp = importaciones.find((i) => i.id === selectedId);
+    if (!imp) return;
+    setFechaDesde(imp.periodoInicio);
+    setFechaHasta(imp.periodoFin);
+  }, [selectedId, importaciones]);
+
+  useEffect(() => {
+    if (selectedId) void loadResumen(selectedId, fechaDesde, fechaHasta);
+  }, [selectedId, fechaDesde, fechaHasta]);
 
   // ── Subir Excel ───────────────────────────────────────────────────────
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -157,6 +171,7 @@ export default function ConsumoPage() {
   const medicamentosFiltrados = (resumen?.medicamentos ?? []).filter(m =>
     !search ||
     m.componente.toLowerCase().includes(search.toLowerCase()) ||
+    m.tipoComponente.toLowerCase().includes(search.toLowerCase()) ||
     m.medicamento.toLowerCase().includes(search.toLowerCase()) ||
     m.cn.includes(search)
   );
@@ -220,6 +235,40 @@ export default function ConsumoPage() {
                 Importado el {fmt(importSeleccionada.importadoEn)}
               </span>
             )}
+          </div>
+
+          <div className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white px-3 py-3">
+            <div>
+              <label className="block text-[11px] uppercase tracking-wide text-slate-400 font-medium mb-1">Fecha desde</label>
+              <input
+                type="date"
+                value={fechaDesde}
+                onChange={(e) => setFechaDesde(e.target.value)}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] uppercase tracking-wide text-slate-400 font-medium mb-1">Fecha hasta</label>
+              <input
+                type="date"
+                value={fechaHasta}
+                onChange={(e) => setFechaHasta(e.target.value)}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700"
+              />
+            </div>
+            <button
+              onClick={() => {
+                if (!importSeleccionada) return;
+                setFechaDesde(importSeleccionada.periodoInicio);
+                setFechaHasta(importSeleccionada.periodoFin);
+              }}
+              className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+            >
+              Restaurar período de importación
+            </button>
+            <p className="text-[11px] text-slate-400">
+              El análisis se recalcula al cambiar fechas.
+            </p>
           </div>
 
           {/* ── KPIs ───────────────────────────────────────────────── */}
@@ -286,10 +335,10 @@ export default function ConsumoPage() {
                         >
                           <td className="px-4 py-3">
                             <span className="inline-block rounded bg-slate-100 px-1.5 py-px font-mono text-[11px] text-slate-500 tracking-wide mb-0.5">{med.cn}</span>
-                            <p className="font-semibold text-slate-800 leading-snug">{med.componente || '—'}</p>
-                            {med.medicamento && (
-                              <p className="text-[11px] italic text-slate-400 font-sans">{med.medicamento}</p>
-                            )}
+                            <p className="font-semibold text-slate-800 leading-snug">{med.medicamento || med.componente || '—'}</p>
+                            <p className="text-[11px] italic text-slate-400 font-sans">
+                              {med.tipoComponente || med.componente || '—'}
+                            </p>
                           </td>
                           <td className="px-4 py-3 text-right font-semibold tabular-nums text-slate-800">{fmtNum(med.totalViales)}</td>
                           <td className="px-4 py-3 text-right tabular-nums text-slate-600">{fmtNum(med.totalPacientes)}</td>

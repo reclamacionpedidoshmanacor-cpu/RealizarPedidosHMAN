@@ -71,6 +71,7 @@ export type ImportacionConsumo = {
 export type ResumenMedicamento = {
   cn: string;
   componente: string;       // principio activo
+  tipoComponente: string;
   medicamento: string;
   totalViales: number;
   totalPacientes: number;
@@ -178,23 +179,32 @@ export async function insertarImportacionConsumo(
 // ---------------------------------------------------------------------------
 // Resumen agrupado por medicamento para una importación
 // ---------------------------------------------------------------------------
-export async function getResumenConsumo(importacionId: number): Promise<ResumenMedicamento[]> {
+export async function getResumenConsumo(
+  importacionId: number,
+  fechaDesde?: string | null,
+  fechaHasta?: string | null,
+): Promise<ResumenMedicamento[]> {
   const sql = getDb();
+  const desde = fechaDesde ?? null;
+  const hasta = fechaHasta ?? null;
 
   // Totales por CN
   const totales = (await sql`
     SELECT
       cn,
       COALESCE(MAX(componente), '') AS componente,
+      COALESCE(MAX(tipo_componente), '') AS tipo_componente,
       COALESCE(MAX(medicamento), '') AS medicamento,
       SUM(viales_dispensados)::float AS total_viales,
       SUM(num_pacientes)::int        AS total_pacientes
     FROM consumo_registros
     WHERE importacion_id = ${importacionId}
+      AND (${desde}::date IS NULL OR fecha >= ${desde}::date)
+      AND (${hasta}::date IS NULL OR fecha <= ${hasta}::date)
     GROUP BY cn
     ORDER BY SUM(viales_dispensados) DESC;
   `) as Array<{
-    cn: string; componente: string; medicamento: string;
+    cn: string; componente: string; tipo_componente: string; medicamento: string;
     total_viales: number; total_pacientes: number;
   }>;
 
@@ -209,6 +219,8 @@ export async function getResumenConsumo(importacionId: number): Promise<ResumenM
       SUM(num_pacientes)::int        AS pacientes
     FROM consumo_registros
     WHERE importacion_id = ${importacionId}
+      AND (${desde}::date IS NULL OR fecha >= ${desde}::date)
+      AND (${hasta}::date IS NULL OR fecha <= ${hasta}::date)
     GROUP BY cn, diagnostico, indicacion, protocolo
     ORDER BY cn, SUM(viales_dispensados) DESC;
   `) as Array<{
@@ -225,6 +237,8 @@ export async function getResumenConsumo(importacionId: number): Promise<ResumenM
       SUM(num_pacientes)::int        AS pacientes
     FROM consumo_registros
     WHERE importacion_id = ${importacionId}
+      AND (${desde}::date IS NULL OR fecha >= ${desde}::date)
+      AND (${hasta}::date IS NULL OR fecha <= ${hasta}::date)
     GROUP BY cn, anio, mes
     ORDER BY cn, anio, mes;
   `) as Array<{
@@ -234,6 +248,7 @@ export async function getResumenConsumo(importacionId: number): Promise<ResumenM
   return totales.map(t => ({
     cn: t.cn,
     componente: t.componente,
+    tipoComponente: t.tipo_componente,
     medicamento: t.medicamento,
     totalViales: Number(t.total_viales),
     totalPacientes: num(t.total_pacientes),
@@ -269,15 +284,23 @@ export type TemporalGlobal = {
   pacientes: number;
 };
 
-export async function getTemporalGlobal(importacionId: number): Promise<TemporalGlobal[]> {
+export async function getTemporalGlobal(
+  importacionId: number,
+  fechaDesde?: string | null,
+  fechaHasta?: string | null,
+): Promise<TemporalGlobal[]> {
   const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   const sql = getDb();
+  const desde = fechaDesde ?? null;
+  const hasta = fechaHasta ?? null;
   const rows = (await sql`
     SELECT anio, mes,
            SUM(viales_dispensados)::float AS viales,
            SUM(num_pacientes)::int        AS pacientes
     FROM consumo_registros
     WHERE importacion_id = ${importacionId}
+      AND (${desde}::date IS NULL OR fecha >= ${desde}::date)
+      AND (${hasta}::date IS NULL OR fecha <= ${hasta}::date)
     GROUP BY anio, mes
     ORDER BY anio, mes;
   `) as Array<{ anio: number; mes: number; viales: number; pacientes: number }>;
