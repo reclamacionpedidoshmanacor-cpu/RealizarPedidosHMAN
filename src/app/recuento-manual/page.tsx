@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { AREA_IDS, type AreaId } from '@/lib/areas';
@@ -368,6 +369,14 @@ export default function RecuentoManualPage() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-100 to-slate-200 flex flex-col items-center justify-center p-6">
         <div className="w-full max-w-2xl space-y-8">
+          <div className="flex justify-start">
+            <Link
+              href="/inicio"
+              className="rounded-xl border-2 border-slate-300 bg-white px-5 py-3 text-lg font-bold text-slate-600 shadow-sm hover:bg-slate-50 active:scale-95"
+            >
+              ← Volver a Inicio
+            </Link>
+          </div>
           <div className="text-center space-y-2">
             <div className="text-6xl">📋</div>
             <h1 className="text-4xl font-extrabold text-slate-800 tracking-tight">Recuento Manual</h1>
