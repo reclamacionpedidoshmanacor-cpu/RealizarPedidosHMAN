@@ -7,15 +7,13 @@ export interface ConsumoRow {
   anio: number;
   mes: number;
   dia: number | null;
-  semanaIso: number | null; // semana ISO 8601 calculada desde DIA si disponible
-  fecha: string;            // ISO yyyy-MM-dd construida desde AÑO+MES+DIA
+  semanaIso: number | null;
+  fecha: string;            // ISO yyyy-MM-dd (lunes de semana ISO, o fecha derivada de mes/día)
   servicio: string;
   uh: string;              // Unidad Hospitalaria
-  edadPaciente: string;
   indicacion: string;
   diagnostico: string;
   protocolo: string;
-  numCiclo: string;
   tipoTerapia: string;
   tipoComponente: string;
   componente: string;      // Principio activo
@@ -36,15 +34,14 @@ export interface ConsumoParseResult {
 // Aliases de columnas (normalizados)
 // ---------------------------------------------------------------------------
 const COL_ANIO       = ['año', 'anio', 'ano', 'year'];
+const COL_SEMANA     = ['semana', 'semana del año', 'semana del ano', 'week', 'num semana', 'n semana'];
 const COL_MES        = ['mes', 'month'];
 const COL_DIA        = ['dia', 'día', 'day'];
 const COL_SERVICIO   = ['servicio'];
 const COL_UH         = ['uh', 'unidad hospitalaria', 'unidad'];
-const COL_EDAD       = ['edad del paciente', 'edad paciente', 'edad'];
 const COL_INDICACION = ['indicacion', 'indicación'];
 const COL_DIAGNOSTICO = ['diagnostico', 'diagnóstico', 'diagnostico'];
 const COL_PROTOCOLO  = ['protocolo'];
-const COL_CICLO      = ['nº ciclo', 'n ciclo', 'num ciclo', 'numero ciclo', 'número ciclo', 'ciclo'];
 const COL_TIPO_TERAPIA    = ['tipo de terapia', 'tipo terapia', 'terapia'];
 const COL_TIPO_COMPONENTE = ['tipo de componente', 'tipo componente'];
 const COL_COMPONENTE = ['componente'];  // principio activo
@@ -109,13 +106,29 @@ function buildFecha(anio: number, mes: number, dia: number | null): string {
   return `${anio}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
 
-/** Calcula el número de semana ISO 8601 a partir de una fecha. */
+function toIsoDateUTC(d: Date): string {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** Lunes de la semana ISO indicada. */
+function isoWeekStartDate(anio: number, semana: number): Date {
+  const base = new Date(Date.UTC(anio, 0, 1 + (semana - 1) * 7));
+  const day = base.getUTCDay(); // 0 domingo ... 6 sábado
+  const diff = day <= 4 ? 1 - day : 8 - day; // mover al lunes ISO
+  base.setUTCDate(base.getUTCDate() + diff);
+  return base;
+}
+
+/** Calcula semana ISO desde una fecha concreta. */
 function calcIsoWeek(anio: number, mes: number, dia: number): number {
-  const d = new Date(anio, mes - 1, dia);
-  const dayOfWeek = d.getDay() || 7; // lunes=1, domingo=7
-  d.setDate(d.getDate() + 4 - dayOfWeek);
-  const yearStart = new Date(d.getFullYear(), 0, 1);
-  return Math.ceil(((d.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7);
+  const d = new Date(Date.UTC(anio, mes - 1, dia));
+  const dow = d.getUTCDay() || 7; // lunes=1, domingo=7
+  d.setUTCDate(d.getUTCDate() + 4 - dow);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86_400_000) + 1) / 7);
 }
 
 // ---------------------------------------------------------------------------
@@ -141,15 +154,14 @@ export function parseConsumoExcel(buffer: Buffer): ConsumoParseResult {
 
   const headers = (raw[0] as string[]).map(String);
   const idxAnio           = findCol(headers, COL_ANIO);
+  const idxSemana         = findCol(headers, COL_SEMANA);
   const idxMes            = findCol(headers, COL_MES);
   const idxDia            = findCol(headers, COL_DIA);
   const idxServicio       = findCol(headers, COL_SERVICIO);
   const idxUH             = findCol(headers, COL_UH);
-  const idxEdad           = findCol(headers, COL_EDAD);
   const idxIndicacion     = findCol(headers, COL_INDICACION);
   const idxDiagnostico    = findCol(headers, COL_DIAGNOSTICO);
   const idxProtocolo      = findCol(headers, COL_PROTOCOLO);
-  const idxCiclo          = findCol(headers, COL_CICLO);
   const idxTipoTerapia    = findCol(headers, COL_TIPO_TERAPIA);
   const idxTipoComponente = findCol(headers, COL_TIPO_COMPONENTE);
   const idxComponente     = findCol(headers, COL_COMPONENTE);
@@ -160,7 +172,8 @@ export function parseConsumoExcel(buffer: Buffer): ConsumoParseResult {
 
   // Columnas obligatorias
   const missing: string[] = [];
-  if (idxAnio === -1 || idxMes === -1)  missing.push('"AÑO" y "MES"');
+  if (idxAnio === -1) missing.push('"AÑO"');
+  if (idxSemana === -1 && idxMes === -1) missing.push('"SEMANA" o "MES"');
   if (idxCN === -1)       missing.push('"CN"');
   if (idxViales === -1)   missing.push('"VIALES DISPENSADOS"');
   if (missing.length) {
@@ -179,26 +192,48 @@ export function parseConsumoExcel(buffer: Buffer): ConsumoParseResult {
     if (!cn) continue; // fila vacía
 
     const anio = Math.round(toNum(row[idxAnio]));
-    const mes  = Math.round(toNum(row[idxMes]));
-    if (!anio || !mes) {
-      errors.push(`Fila ${i + 1}: año o mes no válido (AÑO=${row[idxAnio]}, MES=${row[idxMes]})`);
+    if (!anio) {
+      errors.push(`Fila ${i + 1}: año no válido (AÑO=${row[idxAnio]})`);
       continue;
     }
 
-    const dia = idxDia !== -1 ? Math.round(toNum(row[idxDia])) || null : null;
-    const semanaIso = dia && dia > 0 ? calcIsoWeek(anio, mes, dia) : null;
-    const fecha = buildFecha(anio, mes, dia);
+    // Modo preferente: AÑO + SEMANA
+    const semanaRaw = idxSemana !== -1 ? Math.round(toNum(row[idxSemana])) : 0;
+    const hasSemana = Number.isFinite(semanaRaw) && semanaRaw >= 1 && semanaRaw <= 53;
+
+    let mes = 0;
+    let dia: number | null = null;
+    let semanaIso: number | null = null;
+    let fecha = '';
+
+    if (hasSemana) {
+      semanaIso = semanaRaw;
+      const monday = isoWeekStartDate(anio, semanaIso);
+      mes = monday.getUTCMonth() + 1;
+      fecha = toIsoDateUTC(monday);
+    } else {
+      // Compatibilidad: AÑO + MES (+ DIA opcional)
+      const mesRaw = idxMes !== -1 ? Math.round(toNum(row[idxMes])) : 0;
+      if (!mesRaw || mesRaw < 1 || mesRaw > 12) {
+        errors.push(`Fila ${i + 1}: semana o mes no válido (SEMANA=${idxSemana !== -1 ? row[idxSemana] : 'N/A'}, MES=${idxMes !== -1 ? row[idxMes] : 'N/A'})`);
+        continue;
+      }
+      mes = mesRaw;
+      dia = idxDia !== -1 ? Math.round(toNum(row[idxDia])) || null : null;
+      const diaForWeek = dia && dia > 0 ? dia : 1;
+      semanaIso = calcIsoWeek(anio, mes, diaForWeek);
+      fecha = buildFecha(anio, mes, dia);
+    }
+
     fechas.push(fecha);
 
     rows.push({
       anio, mes, dia, semanaIso, fecha,
       servicio:       idxServicio       !== -1 ? toStr(row[idxServicio])       : '',
       uh:             idxUH             !== -1 ? toStr(row[idxUH])             : '',
-      edadPaciente:   idxEdad           !== -1 ? toStr(row[idxEdad])           : '',
       indicacion:     idxIndicacion     !== -1 ? toStr(row[idxIndicacion])     : '',
       diagnostico:    idxDiagnostico    !== -1 ? toStr(row[idxDiagnostico])    : '',
       protocolo:      idxProtocolo      !== -1 ? toStr(row[idxProtocolo])      : '',
-      numCiclo:       idxCiclo          !== -1 ? toStr(row[idxCiclo])          : '',
       tipoTerapia:    idxTipoTerapia    !== -1 ? toStr(row[idxTipoTerapia])    : '',
       tipoComponente: idxTipoComponente !== -1 ? toStr(row[idxTipoComponente]) : '',
       componente:     idxComponente     !== -1 ? toStr(row[idxComponente])     : '',

@@ -35,11 +35,9 @@ export async function ensureConsumoTables(): Promise<void> {
       fecha              DATE NOT NULL,
       servicio           TEXT,
       uh                 TEXT,
-      edad_paciente      TEXT,
       indicacion         TEXT,
       diagnostico        TEXT,
       protocolo          TEXT,
-      num_ciclo          TEXT,
       tipo_terapia       TEXT,
       tipo_componente    TEXT,
       componente         TEXT,
@@ -147,8 +145,8 @@ export async function insertarImportacionConsumo(
     await sql`
       INSERT INTO consumo_registros (
         importacion_id, anio, mes, dia, semana_iso, fecha,
-        servicio, uh, edad_paciente,
-        indicacion, diagnostico, protocolo, num_ciclo,
+        servicio, uh,
+        indicacion, diagnostico, protocolo,
         tipo_terapia, tipo_componente, componente,
         cn, medicamento, viales_dispensados, num_pacientes
       )
@@ -161,11 +159,9 @@ export async function insertarImportacionConsumo(
         ${rows.map(r => r.fecha)}::date[],
         ${rows.map(r => r.servicio || null)}::text[],
         ${rows.map(r => r.uh || null)}::text[],
-        ${rows.map(r => r.edadPaciente || null)}::text[],
         ${rows.map(r => r.indicacion || null)}::text[],
         ${rows.map(r => r.diagnostico || null)}::text[],
         ${rows.map(r => r.protocolo || null)}::text[],
-        ${rows.map(r => r.numCiclo || null)}::text[],
         ${rows.map(r => r.tipoTerapia || null)}::text[],
         ${rows.map(r => r.tipoComponente || null)}::text[],
         ${rows.map(r => r.componente || null)}::text[],
