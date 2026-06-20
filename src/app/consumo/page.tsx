@@ -25,6 +25,18 @@ type ResumenData = {
   periodoFin: string | null;
 };
 
+type DiagnosticoGrupo =
+  | 'mama'
+  | 'pulmon'
+  | 'digestivo'
+  | 'ginecologico'
+  | 'urologico'
+  | 'piel'
+  | 'cabeza-cuello'
+  | 'snc'
+  | 'hematologia'
+  | 'otros';
+
 function fmt(d: string | null) {
   if (!d) return '—';
   return new Date(d).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -32,6 +44,56 @@ function fmt(d: string | null) {
 
 function fmtNum(n: number) {
   return n.toLocaleString('es-ES', { maximumFractionDigits: 1 });
+}
+
+function normalizeDx(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function classifyDiagnostico(text: string): DiagnosticoGrupo {
+  const dx = normalizeDx(text);
+  if (!dx || dx === '—') return 'otros';
+
+  const has = (keywords: string[]) => keywords.some((k) => dx.includes(k));
+
+  if (has(['mama', 'mamario', 'breast'])) return 'mama';
+  if (has(['colon', 'recto', 'colorrectal', 'gastric', 'gastrico', 'estomago', 'pancreas', 'hepato', 'higado', 'esofag', 'biliar', 'colangio'])) return 'digestivo';
+  if (has(['pulmon', 'pulmonar', 'bronco', 'nsclc', 'sclc', 'microcitico', 'adenocarcinoma'])) return 'pulmon';
+  if (has(['ovario', 'endometrio', 'utero', 'cervix', 'cervical', 'vulva'])) return 'ginecologico';
+  if (has(['prostata', 'vejiga', 'renal', 'rinon', 'urotelial', 'testiculo'])) return 'urologico';
+  if (has(['melanoma', 'piel', 'cutaneo'])) return 'piel';
+  if (has(['cabeza', 'cuello', 'orofaring', 'laringe', 'hipofaring', 'nasofaring'])) return 'cabeza-cuello';
+  if (has(['glioblastoma', 'glioma', 'snc', 'cerebral', 'meningioma'])) return 'snc';
+  if (has(['linfoma', 'hodgkin', 'leucemia', 'mieloma', 'mielofibrosis', 'pti', 'anemia'])) return 'hematologia';
+  return 'otros';
+}
+
+function getGrupoColorClasses(grupo: DiagnosticoGrupo): { bg: string; text: string; ring: string; label: string } {
+  switch (grupo) {
+    case 'mama':
+      return { bg: 'bg-rose-50', text: 'text-rose-700', ring: 'ring-rose-200', label: 'Mama' };
+    case 'pulmon':
+      return { bg: 'bg-sky-50', text: 'text-sky-700', ring: 'ring-sky-200', label: 'Pulmón' };
+    case 'digestivo':
+      return { bg: 'bg-amber-50', text: 'text-amber-700', ring: 'ring-amber-200', label: 'Digestivo' };
+    case 'ginecologico':
+      return { bg: 'bg-violet-50', text: 'text-violet-700', ring: 'ring-violet-200', label: 'Ginecológico' };
+    case 'urologico':
+      return { bg: 'bg-cyan-50', text: 'text-cyan-700', ring: 'ring-cyan-200', label: 'Urológico' };
+    case 'piel':
+      return { bg: 'bg-orange-50', text: 'text-orange-700', ring: 'ring-orange-200', label: 'Piel' };
+    case 'cabeza-cuello':
+      return { bg: 'bg-teal-50', text: 'text-teal-700', ring: 'ring-teal-200', label: 'Cabeza y cuello' };
+    case 'snc':
+      return { bg: 'bg-indigo-50', text: 'text-indigo-700', ring: 'ring-indigo-200', label: 'SNC' };
+    case 'hematologia':
+      return { bg: 'bg-fuchsia-50', text: 'text-fuchsia-700', ring: 'ring-fuchsia-200', label: 'Hematología' };
+    default:
+      return { bg: 'bg-slate-50', text: 'text-slate-700', ring: 'ring-slate-200', label: 'Otros' };
+  }
 }
 
 function toIsoDateUTC(d: Date) {
@@ -392,6 +454,22 @@ export default function ConsumoPage() {
                     {expanded[med.cn] && (
                       <tr className="border-t border-slate-100 bg-teal-50/30">
                         <td colSpan={3} className="px-6 py-3">
+                          <div className="mb-2 flex flex-wrap gap-1.5">
+                            {[
+                              'mama', 'pulmon', 'digestivo', 'ginecologico', 'urologico',
+                              'piel', 'cabeza-cuello', 'snc', 'hematologia', 'otros',
+                            ].map((g) => {
+                              const c = getGrupoColorClasses(g as DiagnosticoGrupo);
+                              return (
+                                <span
+                                  key={g}
+                                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ring-1 ${c.bg} ${c.text} ${c.ring}`}
+                                >
+                                  {c.label}
+                                </span>
+                              );
+                            })}
+                          </div>
                           <div className="rounded-lg border border-slate-200 bg-white overflow-x-auto">
                             <table className="min-w-full table-fixed text-xs">
                               <colgroup>
@@ -412,8 +490,17 @@ export default function ConsumoPage() {
                                 {buildDiagnosticoRows(med.desglose).map((d, i) => (
                                   <tr key={`${med.cn}-${d.diagnostico}-${d.indicacion}-${d.protocolo}-${i}`} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}>
                                     {d.showDiagnostico && (
-                                      <td rowSpan={d.diagnosticoRowSpan} className="px-3 py-1.5 align-top font-medium text-slate-700">
-                                        {d.diagnostico}
+                                      <td rowSpan={d.diagnosticoRowSpan} className="px-3 py-1.5 align-top">
+                                        {(() => {
+                                          const grupo = classifyDiagnostico(d.diagnostico);
+                                          const color = getGrupoColorClasses(grupo);
+                                          return (
+                                            <div className={`rounded-md px-2 py-1 ring-1 ${color.bg} ${color.text} ${color.ring}`}>
+                                              <p className="font-medium leading-tight">{d.diagnostico}</p>
+                                              <p className="text-[10px] opacity-80 mt-0.5">{color.label}</p>
+                                            </div>
+                                          );
+                                        })()}
                                       </td>
                                     )}
                                     <td className="px-3 py-1.5 text-slate-600">{d.indicacion}</td>
