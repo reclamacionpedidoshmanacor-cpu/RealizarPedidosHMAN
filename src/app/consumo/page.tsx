@@ -37,6 +37,19 @@ type DiagnosticoGrupo =
   | 'hematologia'
   | 'otros';
 
+const DIAGNOSTICO_GROUP_ORDER: DiagnosticoGrupo[] = [
+  'mama',
+  'pulmon',
+  'digestivo',
+  'ginecologico',
+  'urologico',
+  'piel',
+  'cabeza-cuello',
+  'snc',
+  'hematologia',
+  'otros',
+];
+
 function fmt(d: string | null) {
   if (!d) return '—';
   return new Date(d).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -138,7 +151,16 @@ function groupDesgloseByDiagnostico(items: DesgloseItem[]) {
     prev.push(item);
     groups.set(key, prev);
   }
-  return Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0], 'es'));
+  const rank = (dx: string) => {
+    const g = classifyDiagnostico(dx);
+    const idx = DIAGNOSTICO_GROUP_ORDER.indexOf(g);
+    return idx === -1 ? 999 : idx;
+  };
+  return Array.from(groups.entries()).sort((a, b) => {
+    const byGroup = rank(a[0]) - rank(b[0]);
+    if (byGroup !== 0) return byGroup;
+    return a[0].localeCompare(b[0], 'es');
+  });
 }
 
 type DiagnosticoRow = {
