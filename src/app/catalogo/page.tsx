@@ -59,6 +59,7 @@ export default function CatalogoPage() {
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [showNuevo, setShowNuevo] = useState(false);
   const [omitidos, setOmitidos] = useState<Array<{ cn: string; nombre: string; areaExistente: string }>>([]);
+  const [movingCn, setMovingCn] = useState<string | null>(null);
   const [nuevoData, setNuevoData] = useState({ ...NUEVO_EMPTY });
   const [savingNuevo, setSavingNuevo] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -107,10 +108,36 @@ export default function CatalogoPage() {
       if (!res.ok) { toast.error(data.error ?? 'Error al importar'); return; }
       toast.success(`Importado: ${data.insertados} nuevos, ${data.actualizados} actualizados (${data.via})`);
       if (data.errores?.length) toast.warning(`${data.errores.length} advertencias de formato — revisa la consola`);
-      if (data.omitidos?.length) setOmitidos(data.omitidos);
+      setOmitidos(data.omitidos ?? []);
       fetchMeds();
     } catch { toast.error('Error de conexión'); }
     finally { setImporting(false); if (fileRef.current) fileRef.current.value = ''; }
+  };
+
+  const moverConflictoAAreaActual = async (item: { cn: string; nombre: string; areaExistente: string }) => {
+    const ok = confirm(
+      `El CN ${item.cn} está en el área "${item.areaExistente}".\n\n¿Quieres moverlo al área activa (${getArea()})?`
+    );
+    if (!ok) return;
+
+    setMovingCn(item.cn);
+    try {
+      const res = await fetch('/api/catalogo/conflictos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cn: item.cn, accion: 'mover-a-area-actual' }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? 'No se pudo mover el CN.');
+
+      setOmitidos((prev) => prev.filter((o) => o.cn !== item.cn));
+      toast.success(`CN ${item.cn} movido de ${item.areaExistente} a ${getArea()}.`);
+      await fetchMeds();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setMovingCn(null);
+    }
   };
 
   const filtered = useMemo(() => {
@@ -497,13 +524,31 @@ export default function CatalogoPage() {
                   {omitidos.length} medicamento{omitidos.length > 1 ? 's' : ''} no importado{omitidos.length > 1 ? 's' : ''} — CN ya existe en otra área
                 </p>
                 <p className="text-xs text-amber-700 mb-2">Toma nota antes de cerrar este aviso.</p>
-                <ul className="space-y-1">
+                <ul className="space-y-2">
                   {omitidos.map(o => (
-                    <li key={o.cn} className="text-xs text-amber-900 font-mono bg-amber-100 rounded px-2 py-1">
-                      <span className="font-semibold">{o.cn}</span>
-                      {' — '}
-                      <span>{o.nombre}</span>
-                      <span className="ml-2 text-amber-600">(registrado en: {o.areaExistente})</span>
+                    <li key={o.cn} className="text-xs text-amber-900 bg-amber-100 rounded px-2 py-2">
+                      <div className="font-mono">
+                        <span className="font-semibold">{o.cn}</span>
+                        {' — '}
+                        <span>{o.nombre}</span>
+                        <span className="ml-2 text-amber-700">(registrado en: {o.areaExistente})</span>
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={() => void moverConflictoAAreaActual(o)}
+                          disabled={movingCn === o.cn}
+                          className="rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-semibold text-teal-700 hover:bg-teal-50 disabled:opacity-50"
+                        >
+                          {movingCn === o.cn ? 'Moviendo…' : 'Mover a esta área'}
+                        </button>
+                        <button
+                          onClick={() => setOmitidos((prev) => prev.filter((x) => x.cn !== o.cn))}
+                          disabled={movingCn === o.cn}
+                          className="rounded border border-amber-300 bg-white px-2 py-1 text-[11px] font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-50"
+                        >
+                          Mantener en área actual
+                        </button>
+                      </div>
                     </li>
                   ))}
                 </ul>
