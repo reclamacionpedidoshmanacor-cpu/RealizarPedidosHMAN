@@ -83,6 +83,10 @@ function fmt(date: string | null) {
   return new Date(date).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
+function fmtUnidades(value: number) {
+  return new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 }).format(value);
+}
+
 // ---------------------------------------------------------------------------
 // Página principal
 // ---------------------------------------------------------------------------
@@ -378,10 +382,20 @@ export default function PropuestaPage() {
                   <tr className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                     <th className="px-4 py-3 text-left">Ppio activo / marca</th>
                     <th className="px-4 py-3 text-center">Stock objetivo</th>
-                    <th className="px-4 py-3 text-center">Stock actual</th>
+                    <th className="px-4 py-3 text-center">Stock actual (uds)</th>
+                    <th className="px-4 py-3 text-center">
+                      <span>Stock actual</span>
+                      <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
+                    </th>
                     <th className="px-4 py-3 text-center">En tránsito</th>
-                    <th className="px-4 py-3 text-center">Calculado</th>
-                    <th className="px-4 py-3 text-center">Validado</th>
+                    <th className="px-4 py-3 text-center">
+                      <span>Calculado</span>
+                      <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
+                    </th>
+                    <th className="px-4 py-3 text-center">
+                      <span>Validado</span>
+                      <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
+                    </th>
                     <th className="px-4 py-3 text-left">Motivo ajuste</th>
                   </tr>
                 </thead>
@@ -431,7 +445,14 @@ export default function PropuestaPage() {
                           </span>
                         </td>
 
-                        {/* Stock actual — azul corporativo / rojo si bajo mínimo */}
+                        {/* Stock actual en unidades (informativo) */}
+                        <td className="px-4 py-3 text-center">
+                          <span className="inline-block rounded-md bg-slate-100 px-3 py-1 text-base font-semibold tabular-nums text-slate-700 ring-1 ring-slate-200">
+                            {fmtUnidades(Number(linea.stockActual) * Number(linea.unidadesPorCaja))}
+                          </span>
+                        </td>
+
+                        {/* Stock actual (nº cajas) — azul corporativo / rojo si bajo mínimo */}
                         <td className="px-4 py-3 text-center">
                           <span className={`inline-block rounded-md px-3 py-1 text-base font-semibold tabular-nums ring-1 ${
                             bajoMinimo
@@ -686,10 +707,20 @@ export default function PropuestaPage() {
                                   <tr className="border-b border-slate-200 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
                                     <th className="px-3 py-2 text-left">CN</th>
                                     <th className="px-3 py-2 text-left">Ppio activo / marca</th>
-                                    <th className="px-3 py-2 text-center">Stock</th>
+                                    <th className="px-3 py-2 text-center">Stock (uds)</th>
+                                    <th className="px-3 py-2 text-center">
+                                      <span>Stock</span>
+                                      <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
+                                    </th>
                                     <th className="px-3 py-2 text-center">En tránsito</th>
-                                    <th className="px-3 py-2 text-center">Calculado</th>
-                                    <th className="px-3 py-2 text-center">Validado</th>
+                                    <th className="px-3 py-2 text-center">
+                                      <span>Calculado</span>
+                                      <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
+                                    </th>
+                                    <th className="px-3 py-2 text-center">
+                                      <span>Validado</span>
+                                      <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
+                                    </th>
                                     <th className="px-3 py-2 text-left">Motivo</th>
                                   </tr>
                                 </thead>
@@ -702,6 +733,9 @@ export default function PropuestaPage() {
                                         {linea.principioActivo && linea.nombreMedicamento && (
                                           <p className="text-[11px] italic text-slate-400">{linea.nombreMedicamento}</p>
                                         )}
+                                      </td>
+                                      <td className="px-3 py-2 text-center tabular-nums text-slate-700">
+                                        {fmtUnidades(Number(linea.stockActual) * Number(linea.unidadesPorCaja))}
                                       </td>
                                       <td className="px-3 py-2 text-center tabular-nums text-slate-600">{Number(linea.stockActual).toFixed(1)}</td>
                                       <td className="px-3 py-2 text-center tabular-nums text-violet-700">{Number(linea.stockTransito ?? 0).toFixed(1)}</td>
