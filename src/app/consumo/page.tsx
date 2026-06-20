@@ -45,6 +45,37 @@ function groupDesgloseByDiagnostico(items: DesgloseItem[]) {
   return Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0], 'es'));
 }
 
+type DiagnosticoRow = {
+  diagnostico: string;
+  indicacion: string;
+  protocolo: string;
+  viales: number;
+  showDiagnostico: boolean;
+  diagnosticoRowSpan: number;
+};
+
+function buildDiagnosticoRows(items: DesgloseItem[]): DiagnosticoRow[] {
+  const rows: DiagnosticoRow[] = [];
+  for (const [diagnostico, group] of groupDesgloseByDiagnostico(items)) {
+    const sorted = [...group].sort((a, b) => {
+      const byIndicacion = (a.indicacion || '—').localeCompare((b.indicacion || '—'), 'es');
+      if (byIndicacion !== 0) return byIndicacion;
+      return (a.protocolo || '—').localeCompare((b.protocolo || '—'), 'es');
+    });
+    sorted.forEach((row, idx) => {
+      rows.push({
+        diagnostico,
+        indicacion: row.indicacion || '—',
+        protocolo: row.protocolo || '—',
+        viales: row.viales,
+        showDiagnostico: idx === 0,
+        diagnosticoRowSpan: idx === 0 ? sorted.length : 0,
+      });
+    });
+  }
+  return rows;
+}
+
 export default function ConsumoPage() {
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -235,7 +266,7 @@ export default function ConsumoPage() {
               <thead>
                 <tr className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                   <th className="px-4 py-3 text-left">Principio activo / marca</th>
-                  <th className="px-4 py-3 text-right">Viales</th>
+                  <th className="px-4 py-3 text-right">Diagnósticos</th>
                   <th className="px-4 py-3 text-center">Desglose</th>
                 </tr>
               </thead>
@@ -248,7 +279,9 @@ export default function ConsumoPage() {
                         <p className="font-semibold text-slate-800 leading-snug">{med.componente || '—'}</p>
                         <p className="text-[11px] italic text-slate-400 font-sans">{med.medicamento || '—'}</p>
                       </td>
-                      <td className="px-4 py-3 text-right font-semibold tabular-nums text-slate-800">{fmtNum(med.totalViales)}</td>
+                      <td className="px-4 py-3 text-right font-semibold tabular-nums text-slate-800">
+                        {groupDesgloseByDiagnostico(med.desglose).length}
+                      </td>
                       <td className="px-4 py-3 text-center">
                         <button
                           onClick={() => setExpanded(p => ({ ...p, [med.cn]: !p[med.cn] }))}
@@ -262,32 +295,37 @@ export default function ConsumoPage() {
                     {expanded[med.cn] && (
                       <tr className="border-t border-slate-100 bg-teal-50/30">
                         <td colSpan={3} className="px-6 py-3">
-                          <div className="space-y-3">
-                            {groupDesgloseByDiagnostico(med.desglose).map(([diagnostico, items]) => (
-                              <div key={diagnostico} className="rounded-lg border border-slate-200 bg-white overflow-hidden">
-                                <div className="px-3 py-2 bg-slate-50 border-b border-slate-200">
-                                  <p className="text-xs font-semibold text-slate-700">{diagnostico}</p>
-                                </div>
-                                <table className="min-w-full text-xs">
-                                  <thead>
-                                    <tr className="border-b border-slate-100 text-[11px] uppercase tracking-wide text-slate-400">
-                                      <th className="px-3 py-2 text-left">Indicación</th>
-                                      <th className="px-3 py-2 text-left">Protocolo</th>
-                                      <th className="px-3 py-2 text-right">Viales</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {items.map((d, i) => (
-                                      <tr key={`${diagnostico}-${d.indicacion}-${d.protocolo}-${i}`} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}>
-                                        <td className="px-3 py-1.5 text-slate-600">{d.indicacion}</td>
-                                        <td className="px-3 py-1.5 text-slate-600">{d.protocolo}</td>
-                                        <td className="px-3 py-1.5 text-right font-semibold tabular-nums text-slate-800">{fmtNum(d.viales)}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            ))}
+                          <div className="rounded-lg border border-slate-200 bg-white overflow-x-auto">
+                            <table className="min-w-full table-fixed text-xs">
+                              <colgroup>
+                                <col className="w-[26%]" />
+                                <col className="w-[26%]" />
+                                <col className="w-[34%]" />
+                                <col className="w-[14%]" />
+                              </colgroup>
+                              <thead>
+                                <tr className="border-b border-slate-100 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-400">
+                                  <th className="px-3 py-2 text-left">Diagnóstico</th>
+                                  <th className="px-3 py-2 text-left">Indicación</th>
+                                  <th className="px-3 py-2 text-left">Protocolo</th>
+                                  <th className="px-3 py-2 text-right">Viales</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {buildDiagnosticoRows(med.desglose).map((d, i) => (
+                                  <tr key={`${med.cn}-${d.diagnostico}-${d.indicacion}-${d.protocolo}-${i}`} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}>
+                                    {d.showDiagnostico && (
+                                      <td rowSpan={d.diagnosticoRowSpan} className="px-3 py-1.5 align-top font-medium text-slate-700">
+                                        {d.diagnostico}
+                                      </td>
+                                    )}
+                                    <td className="px-3 py-1.5 text-slate-600">{d.indicacion}</td>
+                                    <td className="px-3 py-1.5 text-slate-600">{d.protocolo}</td>
+                                    <td className="px-3 py-1.5 text-right font-semibold tabular-nums text-slate-800">{fmtNum(d.viales)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
                           </div>
                         </td>
                       </tr>
