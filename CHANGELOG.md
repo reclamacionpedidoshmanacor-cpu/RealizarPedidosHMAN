@@ -58,11 +58,21 @@ Historial de cambios del proyecto ordenado del más reciente al más antiguo.
 - Consumo: filtrado estricto por CN del catálogo del área (`INNER JOIN medicamentos ... m.area = area`) para evitar medicamentos ajenos al catálogo activo.
 - Consumo: en el listado principal se muestra **principio activo** (estilo principal) y marca comercial en línea secundaria.
 - Consumo: se elimina la vista de evolución temporal de esta pestaña para Oncología.
+- Consumo: importación temporal simplificada a **Año + Semana manuales** (eliminado el uso de año+mes+día para evitar confusiones).
 
 ### Pendiente para retomar (bloqueado por datos)
 - Cargar histórico de consumo depurado con datos suficientes para detectar tendencias reales.
 - Incorporar `DIA` (y semana en origen si aplica) en próximos ficheros para mejorar granularidad semanal.
 - Revalidar en `Inicio` la curva consumo/pedidos con 2-3 CN de control una vez cargado el histórico final.
+- Consumo (Oncología) — mejoras de visualización pendientes al cargar datos reales:
+  - Mantener cada diagnóstico en su **caja/rectángulo** con columnas alineadas.
+  - Orden por defecto:
+    - `PPIO/Marca`: A→Z
+    - `Diagnóstico`: mayor→menor (por viales)
+  - Añadir controles para invertir orden (`PPIO/Marca` A↔Z y `Diagnóstico` mayor↔menor/A→Z).
+  - Cabecera de diagnóstico con **colores suaves corporativos** por grupo tumoral.
+  - Asignación de grupos por **diccionario de palabras clave** (editable):
+    - mama, pulmón, digestivo, ginecológico, urológico, piel, cabeza y cuello, SNC, y `otros`.
 
 ---
 

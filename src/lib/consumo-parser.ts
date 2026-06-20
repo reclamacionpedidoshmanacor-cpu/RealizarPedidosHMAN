@@ -8,7 +8,7 @@ export interface ConsumoRow {
   mes: number;
   dia: number | null;
   semanaIso: number | null;
-  fecha: string;            // ISO yyyy-MM-dd (lunes de semana ISO, o fecha derivada de mes/día)
+  fecha: string;            // ISO yyyy-MM-dd (lunes de semana ISO)
   servicio: string;
   uh: string;              // Unidad Hospitalaria
   indicacion: string;
@@ -35,8 +35,6 @@ export interface ConsumoParseResult {
 // ---------------------------------------------------------------------------
 const COL_ANIO       = ['año', 'anio', 'ano', 'year'];
 const COL_SEMANA     = ['semana', 'semana del año', 'semana del ano', 'week', 'num semana', 'n semana'];
-const COL_MES        = ['mes', 'month'];
-const COL_DIA        = ['dia', 'día', 'day'];
 const COL_SERVICIO   = ['servicio'];
 const COL_UH         = ['uh', 'unidad hospitalaria', 'unidad'];
 const COL_INDICACION = ['indicacion', 'indicación'];
@@ -101,11 +99,6 @@ function toStr(v: unknown): string {
   return String(v ?? '').trim();
 }
 
-function buildFecha(anio: number, mes: number, dia: number | null): string {
-  const d = dia && dia > 0 ? dia : 1;
-  return `${anio}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-}
-
 function toIsoDateUTC(d: Date): string {
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, '0');
@@ -120,15 +113,6 @@ function isoWeekStartDate(anio: number, semana: number): Date {
   const diff = day <= 4 ? 1 - day : 8 - day; // mover al lunes ISO
   base.setUTCDate(base.getUTCDate() + diff);
   return base;
-}
-
-/** Calcula semana ISO desde una fecha concreta. */
-function calcIsoWeek(anio: number, mes: number, dia: number): number {
-  const d = new Date(Date.UTC(anio, mes - 1, dia));
-  const dow = d.getUTCDay() || 7; // lunes=1, domingo=7
-  d.setUTCDate(d.getUTCDate() + 4 - dow);
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  return Math.ceil((((d.getTime() - yearStart.getTime()) / 86_400_000) + 1) / 7);
 }
 
 // ---------------------------------------------------------------------------
@@ -155,8 +139,6 @@ export function parseConsumoExcel(buffer: Buffer): ConsumoParseResult {
   const headers = (raw[0] as string[]).map(String);
   const idxAnio           = findCol(headers, COL_ANIO);
   const idxSemana         = findCol(headers, COL_SEMANA);
-  const idxMes            = findCol(headers, COL_MES);
-  const idxDia            = findCol(headers, COL_DIA);
   const idxServicio       = findCol(headers, COL_SERVICIO);
   const idxUH             = findCol(headers, COL_UH);
   const idxIndicacion     = findCol(headers, COL_INDICACION);
@@ -172,8 +154,6 @@ export function parseConsumoExcel(buffer: Buffer): ConsumoParseResult {
 
   // Columnas obligatorias
   const missing: string[] = [];
-  if (idxAnio === -1) missing.push('"AÑO"');
-  if (idxSemana === -1 && idxMes === -1) missing.push('"SEMANA" o "MES"');
   if (idxCN === -1)       missing.push('"CN"');
   if (idxViales === -1)   missing.push('"VIALES DISPENSADOS"');
   if (missing.length) {
@@ -191,39 +171,16 @@ export function parseConsumoExcel(buffer: Buffer): ConsumoParseResult {
     const cn = toStr(row[idxCN]);
     if (!cn) continue; // fila vacía
 
-    const anio = Math.round(toNum(row[idxAnio]));
-    if (!anio) {
-      errors.push(`Fila ${i + 1}: año no válido (AÑO=${row[idxAnio]})`);
-      continue;
-    }
-
-    // Modo preferente: AÑO + SEMANA
-    const semanaRaw = idxSemana !== -1 ? Math.round(toNum(row[idxSemana])) : 0;
-    const hasSemana = Number.isFinite(semanaRaw) && semanaRaw >= 1 && semanaRaw <= 53;
-
-    let mes = 0;
-    let dia: number | null = null;
-    let semanaIso: number | null = null;
-    let fecha = '';
-
-    if (hasSemana) {
-      semanaIso = semanaRaw;
-      const monday = isoWeekStartDate(anio, semanaIso);
-      mes = monday.getUTCMonth() + 1;
-      fecha = toIsoDateUTC(monday);
-    } else {
-      // Compatibilidad: AÑO + MES (+ DIA opcional)
-      const mesRaw = idxMes !== -1 ? Math.round(toNum(row[idxMes])) : 0;
-      if (!mesRaw || mesRaw < 1 || mesRaw > 12) {
-        errors.push(`Fila ${i + 1}: semana o mes no válido (SEMANA=${idxSemana !== -1 ? row[idxSemana] : 'N/A'}, MES=${idxMes !== -1 ? row[idxMes] : 'N/A'})`);
-        continue;
-      }
-      mes = mesRaw;
-      dia = idxDia !== -1 ? Math.round(toNum(row[idxDia])) || null : null;
-      const diaForWeek = dia && dia > 0 ? dia : 1;
-      semanaIso = calcIsoWeek(anio, mes, diaForWeek);
-      fecha = buildFecha(anio, mes, dia);
-    }
+    // La semana final la fija /api/consumo/importar con valores manuales.
+    // Si el Excel trae AÑO/SEMANA se usan solo como base informativa.
+    const nowYear = new Date().getFullYear();
+    const anio = idxAnio !== -1 ? (Math.round(toNum(row[idxAnio])) || nowYear) : nowYear;
+    const semanaRaw = idxSemana !== -1 ? Math.round(toNum(row[idxSemana])) : 1;
+    const semanaIso = Number.isFinite(semanaRaw) && semanaRaw >= 1 && semanaRaw <= 53 ? semanaRaw : 1;
+    const monday = isoWeekStartDate(anio, semanaIso);
+    const mes = monday.getUTCMonth() + 1;
+    const dia: number | null = null;
+    const fecha = toIsoDateUTC(monday);
 
     fechas.push(fecha);
 

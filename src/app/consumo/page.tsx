@@ -34,6 +34,17 @@ function fmtNum(n: number) {
   return n.toLocaleString('es-ES', { maximumFractionDigits: 1 });
 }
 
+function getIsoWeekAndYearToday() {
+  const now = new Date();
+  const d = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  const dow = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dow);
+  const isoYear = d.getUTCFullYear();
+  const yearStart = new Date(Date.UTC(isoYear, 0, 1));
+  const week = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return { isoYear, week };
+}
+
 function groupDesgloseByDiagnostico(items: DesgloseItem[]) {
   const groups = new Map<string, DesgloseItem[]>();
   for (const item of items) {
@@ -77,6 +88,7 @@ function buildDiagnosticoRows(items: DesgloseItem[]): DiagnosticoRow[] {
 }
 
 export default function ConsumoPage() {
+  const initialWeek = getIsoWeekAndYearToday();
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [loadingRes, setLoadingRes] = useState(true);
@@ -85,6 +97,8 @@ export default function ConsumoPage() {
   const [tipoFiltro, setTipoFiltro] = useState('todos');
   const [fechaDesde, setFechaDesde] = useState('');
   const [fechaHasta, setFechaHasta] = useState('');
+  const [anioManual, setAnioManual] = useState(initialWeek.isoYear);
+  const [semanaManual, setSemanaManual] = useState(initialWeek.week);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [soloOncologiaMsg, setSoloOncologiaMsg] = useState<string | null>(null);
 
@@ -130,10 +144,12 @@ export default function ConsumoPage() {
     try {
       const form = new FormData();
       form.append('file', file);
+      form.append('anioManual', String(anioManual));
+      form.append('semanaManual', String(semanaManual));
       const res = await fetch('/api/consumo/importar', { method: 'POST', body: form });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'Error al importar.');
-      toast.success(`Importado: ${payload.totalLineas} filas · ${fmt(payload.periodoInicio)} – ${fmt(payload.periodoFin)}`);
+      toast.success(`Importado: ${payload.totalLineas} filas · Semana ${semanaManual}/${anioManual}`);
       if (payload.advertencias?.length) toast.warning(`${payload.advertencias.length} advertencia(s) en la importación.`);
       setFechaDesde(payload.periodoInicio);
       setFechaHasta(payload.periodoFin);
@@ -186,10 +202,33 @@ export default function ConsumoPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-800 mb-1">Consumo</h1>
           <p className="text-sm text-slate-500">
-            Esta vista aplica a Oncología y trabaja con histórico acumulado del área.
+            Esta vista aplica a Oncología y recoge medicamentos preparados en farmacia y administrados, con histórico acumulado del área.
+            La carga se ancla por Año + Semana indicados al importar.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-end gap-2 flex-wrap justify-end">
+          <div>
+            <label className="block text-[11px] uppercase tracking-wide text-slate-400 font-medium mb-1">Año</label>
+            <input
+              type="number"
+              min={2000}
+              max={2100}
+              value={anioManual}
+              onChange={(e) => setAnioManual(Math.max(2000, Math.min(2100, Number(e.target.value) || initialWeek.isoYear)))}
+              className="w-24 rounded-lg border border-slate-200 px-2 py-2 text-sm text-slate-700"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] uppercase tracking-wide text-slate-400 font-medium mb-1">Semana</label>
+            <input
+              type="number"
+              min={1}
+              max={53}
+              value={semanaManual}
+              onChange={(e) => setSemanaManual(Math.max(1, Math.min(53, Number(e.target.value) || initialWeek.week)))}
+              className="w-20 rounded-lg border border-slate-200 px-2 py-2 text-sm text-slate-700"
+            />
+          </div>
           <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleUpload} />
           <button
             onClick={() => fileRef.current?.click()}
