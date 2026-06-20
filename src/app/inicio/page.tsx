@@ -42,6 +42,16 @@ type CurvaData = {
   pedidos: PedidoMes[];
 };
 
+type BajoMinimoItem = {
+  cn: string;
+  principioActivo: string | null;
+  nombre: string;
+  stockActualCajas: number;
+  stockActualUnidades: number;
+  stockMinimo: number;
+  puntoPedido: number;
+};
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -70,19 +80,28 @@ function variacionBg(pct: number): string {
 // Componente: tarjeta KPI
 // ---------------------------------------------------------------------------
 function KpiCard({
-  label, value, sub, color, icon,
+  label, value, sub, color, icon, onClick,
 }: {
   label: string; value: string | number; sub?: string; color: string; icon: string;
+  onClick?: () => void;
 }) {
+  const clickable = typeof onClick === 'function';
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm flex items-start gap-4">
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!clickable}
+      className={`w-full bg-white rounded-xl border border-slate-200 p-5 shadow-sm flex items-start gap-4 text-left ${
+        clickable ? 'hover:bg-slate-50 transition-colors cursor-pointer' : 'cursor-default'
+      }`}
+    >
       <div className={`text-2xl mt-0.5 ${color}`}>{icon}</div>
       <div>
         <p className="text-xs text-slate-500 font-medium uppercase tracking-wide leading-tight">{label}</p>
         <p className={`text-3xl font-bold mt-1 ${color}`}>{value}</p>
         {sub && <p className="text-xs text-slate-400 mt-1">{sub}</p>}
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -229,6 +248,10 @@ export default function InicioPage() {
   const [errorOp, setErrorOp] = useState<string | null>(null);
   const [errorTend, setErrorTend] = useState<string | null>(null);
   const [expandedCn, setExpandedCn] = useState<string | null>(null);
+  const [bajoMinimoOpen, setBajoMinimoOpen] = useState(false);
+  const [bajoMinimoLoading, setBajoMinimoLoading] = useState(false);
+  const [bajoMinimoError, setBajoMinimoError] = useState<string | null>(null);
+  const [bajoMinimoItems, setBajoMinimoItems] = useState<BajoMinimoItem[]>([]);
 
   const cargarOperativo = useCallback(() => {
     setLoadingOp(true);
@@ -263,6 +286,27 @@ export default function InicioPage() {
 
   const toggleCurva = (cn: string) => {
     setExpandedCn(prev => prev === cn ? null : cn);
+  };
+
+  const toggleBajoMinimo = () => {
+    const nextOpen = !bajoMinimoOpen;
+    setBajoMinimoOpen(nextOpen);
+    if (!nextOpen) return;
+    if (bajoMinimoItems.length > 0 || bajoMinimoLoading) return;
+
+    setBajoMinimoLoading(true);
+    setBajoMinimoError(null);
+    fetch('/api/inicio/bajo-minimo')
+      .then(r => r.json())
+      .then((d: { medicamentos?: BajoMinimoItem[]; error?: string }) => {
+        if (d.error) {
+          setBajoMinimoError(d.error);
+          return;
+        }
+        setBajoMinimoItems(d.medicamentos ?? []);
+      })
+      .catch(() => setBajoMinimoError('Error al cargar medicamentos bajo mínimo'))
+      .finally(() => setBajoMinimoLoading(false));
   };
 
   return (
@@ -308,7 +352,61 @@ export default function InicioPage() {
               sub={operativo.bajoOPunto > 0 ? `${operativo.bajoOPunto} en o bajo punto de pedido` : undefined}
               color={operativo.bajoMinimo > 0 ? 'text-red-500' : 'text-teal-600'}
               icon={operativo.bajoMinimo > 0 ? '⚠️' : '✓'}
+              onClick={operativo.bajoMinimo > 0 ? toggleBajoMinimo : undefined}
             />
+          </div>
+        )}
+
+        {bajoMinimoOpen && (
+          <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <p className="text-sm font-semibold text-rose-700">
+                Medicamentos bajo stock mínimo
+              </p>
+              <p className="text-xs text-rose-500">
+                Haz clic en un medicamento para abrir Catálogo y revisarlo.
+              </p>
+            </div>
+
+            {bajoMinimoLoading && <p className="text-sm text-slate-500">Cargando listado…</p>}
+            {bajoMinimoError && <p className="text-sm text-rose-600">{bajoMinimoError}</p>}
+
+            {!bajoMinimoLoading && !bajoMinimoError && bajoMinimoItems.length === 0 && (
+              <p className="text-sm text-slate-500">No se han encontrado medicamentos bajo mínimo en el último recuento.</p>
+            )}
+
+            {!bajoMinimoLoading && !bajoMinimoError && bajoMinimoItems.length > 0 && (
+              <div className="space-y-2">
+                {bajoMinimoItems.map((item) => (
+                  <button
+                    key={item.cn}
+                    type="button"
+                    onClick={() => { window.location.href = `/catalogo?q=${encodeURIComponent(item.cn)}`; }}
+                    className="w-full rounded-lg border border-rose-200 bg-white px-3 py-2 text-left hover:bg-rose-100 transition-colors"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-mono text-slate-500">CN {item.cn}</p>
+                        <p className="text-sm font-semibold text-slate-800 truncate">
+                          {item.principioActivo ?? item.nombre}
+                        </p>
+                        {item.principioActivo && (
+                          <p className="text-xs italic text-slate-400 truncate">{item.nombre}</p>
+                        )}
+                      </div>
+                      <div className="text-right text-xs">
+                        <p className="text-rose-700 font-semibold">
+                          Stock: {item.stockActualCajas.toFixed(2)} cajas ({item.stockActualUnidades.toFixed(0)} uds)
+                        </p>
+                        <p className="text-slate-500">
+                          Mínimo: {item.stockMinimo.toFixed(2)} · Punto pedido: {item.puntoPedido.toFixed(2)}
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </section>

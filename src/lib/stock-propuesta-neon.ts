@@ -993,6 +993,61 @@ export type ResumenOperativo = {
   bajoOPunto: number;     // CNs cuyo stock_unidades <= punto_pedido en el último recuento
 };
 
+export type MedicamentoBajoMinimo = {
+  cn: string;
+  principioActivo: string | null;
+  nombre: string;
+  stockActualCajas: number;
+  stockActualUnidades: number;
+  stockMinimo: number;
+  puntoPedido: number;
+};
+
+export async function getMedicamentosBajoMinimo(area: string): Promise<MedicamentoBajoMinimo[]> {
+  const sql = getDb();
+  const rows = (await sql`
+    WITH ultimo AS (
+      SELECT id
+      FROM importaciones_stock
+      WHERE area = ${area}
+      ORDER BY id DESC
+      LIMIT 1
+    )
+    SELECT
+      sr.cn,
+      m.principio_activo,
+      m.nombre,
+      sr.stock_cajas,
+      sr.stock_unidades,
+      so.stock_minimo,
+      so.punto_pedido
+    FROM stock_registros sr
+    JOIN ultimo u ON sr.importacion_id = u.id
+    JOIN medicamentos m ON m.cn = sr.cn AND m.area = ${area} AND m.activo = TRUE
+    JOIN stock_objetivo so ON so.cn = sr.cn
+    WHERE sr.stock_unidades < so.stock_minimo
+    ORDER BY m.principio_activo ASC NULLS LAST, m.nombre ASC;
+  `) as Array<{
+    cn: string;
+    principio_activo: string | null;
+    nombre: string;
+    stock_cajas: number | string;
+    stock_unidades: number | string;
+    stock_minimo: number | string;
+    punto_pedido: number | string;
+  }>;
+
+  return rows.map((r) => ({
+    cn: r.cn,
+    principioActivo: r.principio_activo,
+    nombre: r.nombre,
+    stockActualCajas: num(r.stock_cajas),
+    stockActualUnidades: num(r.stock_unidades),
+    stockMinimo: num(r.stock_minimo),
+    puntoPedido: num(r.punto_pedido),
+  }));
+}
+
 export async function getResumenOperativo(area: string): Promise<ResumenOperativo> {
   const sql = getDb();
 

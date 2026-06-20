@@ -81,6 +81,13 @@ export default function CatalogoPage() {
 
   useEffect(() => { fetchMeds(); }, [fetchMeds]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const q = (params.get('q') ?? '').trim();
+    if (q) setSearch(q);
+  }, []);
+
   const ubicacionesUnicas = useMemo(() =>
     Array.from(new Set(meds.map(m => m.ubicacion).filter(Boolean) as string[])).sort(),
     [meds]
