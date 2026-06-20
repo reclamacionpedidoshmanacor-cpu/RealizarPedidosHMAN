@@ -34,6 +34,29 @@ function fmtNum(n: number) {
   return n.toLocaleString('es-ES', { maximumFractionDigits: 1 });
 }
 
+function toIsoDateUTC(d: Date) {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function isoWeekStartDate(isoYear: number, week: number): Date {
+  const base = new Date(Date.UTC(isoYear, 0, 1 + (week - 1) * 7));
+  const day = base.getUTCDay(); // 0 dom ... 6 sab
+  const diff = day <= 4 ? 1 - day : 8 - day; // lunes ISO
+  base.setUTCDate(base.getUTCDate() + diff);
+  return base;
+}
+
+function normalizeToIsoMonday(dateIso: string): string {
+  const d = new Date(`${dateIso}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return dateIso;
+  const dow = d.getUTCDay() || 7; // lunes=1 ... domingo=7
+  d.setUTCDate(d.getUTCDate() - (dow - 1));
+  return toIsoDateUTC(d);
+}
+
 function getIsoWeekAndYearToday() {
   const now = new Date();
   const d = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
@@ -89,6 +112,7 @@ function buildDiagnosticoRows(items: DesgloseItem[]): DiagnosticoRow[] {
 
 export default function ConsumoPage() {
   const initialWeek = getIsoWeekAndYearToday();
+  const initialMonday = toIsoDateUTC(isoWeekStartDate(initialWeek.isoYear, initialWeek.week));
   const fileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [loadingRes, setLoadingRes] = useState(true);
@@ -99,6 +123,7 @@ export default function ConsumoPage() {
   const [fechaHasta, setFechaHasta] = useState('');
   const [anioManual, setAnioManual] = useState(initialWeek.isoYear);
   const [semanaManual, setSemanaManual] = useState(initialWeek.week);
+  const [lunesReferencia, setLunesReferencia] = useState(initialMonday);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [soloOncologiaMsg, setSoloOncologiaMsg] = useState<string | null>(null);
 
@@ -208,13 +233,42 @@ export default function ConsumoPage() {
         </div>
         <div className="flex items-end gap-2 flex-wrap justify-end">
           <div>
+            <label className="block text-[11px] uppercase tracking-wide text-slate-400 font-medium mb-1">Lunes de referencia</label>
+            <input
+              type="date"
+              value={lunesReferencia}
+              onChange={(e) => {
+                const normalized = normalizeToIsoMonday(e.target.value);
+                if (normalized !== e.target.value) {
+                  toast.info('La fecha se ajustó al lunes de esa semana.');
+                }
+                const iso = getIsoWeekAndYearToday();
+                // Reutilizamos el cálculo ISO existente de forma segura
+                const d = new Date(`${normalized}T00:00:00Z`);
+                const dow = d.getUTCDay() || 7;
+                d.setUTCDate(d.getUTCDate() + 4 - dow);
+                const isoYear = d.getUTCFullYear();
+                const yearStart = new Date(Date.UTC(isoYear, 0, 1));
+                const week = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+                setLunesReferencia(normalized);
+                setAnioManual(Number.isFinite(isoYear) ? isoYear : iso.isoYear);
+                setSemanaManual(Number.isFinite(week) ? week : iso.week);
+              }}
+              className="w-44 rounded-lg border border-slate-200 px-2 py-2 text-sm text-slate-700"
+            />
+          </div>
+          <div>
             <label className="block text-[11px] uppercase tracking-wide text-slate-400 font-medium mb-1">Año</label>
             <input
               type="number"
               min={2000}
               max={2100}
               value={anioManual}
-              onChange={(e) => setAnioManual(Math.max(2000, Math.min(2100, Number(e.target.value) || initialWeek.isoYear)))}
+              onChange={(e) => {
+                const nextYear = Math.max(2000, Math.min(2100, Number(e.target.value) || initialWeek.isoYear));
+                setAnioManual(nextYear);
+                setLunesReferencia(toIsoDateUTC(isoWeekStartDate(nextYear, semanaManual)));
+              }}
               className="w-24 rounded-lg border border-slate-200 px-2 py-2 text-sm text-slate-700"
             />
           </div>
@@ -225,7 +279,11 @@ export default function ConsumoPage() {
               min={1}
               max={53}
               value={semanaManual}
-              onChange={(e) => setSemanaManual(Math.max(1, Math.min(53, Number(e.target.value) || initialWeek.week)))}
+              onChange={(e) => {
+                const nextWeek = Math.max(1, Math.min(53, Number(e.target.value) || initialWeek.week));
+                setSemanaManual(nextWeek);
+                setLunesReferencia(toIsoDateUTC(isoWeekStartDate(anioManual, nextWeek)));
+              }}
               className="w-20 rounded-lg border border-slate-200 px-2 py-2 text-sm text-slate-700"
             />
           </div>
