@@ -207,14 +207,23 @@ export async function loadPedidosRecibidosPorMesByCn(
   const rows = (await sql`
     SELECT
       fecha_documento::text AS fecha_documento,
-      cantidad_pedido::text AS cantidad_pedido
+      recibido_at::text AS recibido_at,
+      por_entregar_cantidad::text AS por_entregar_cantidad,
+      cantidad_recibida::text AS cantidad_recibida
     FROM public.orders
     WHERE anulado  = FALSE
+      -- Regla funcional: si tiene fecha de recibido, se considera recibido.
+      AND recibido_at IS NOT NULL
       AND fecha_documento >= ${fechaDesde}::date
       AND n_mate_prov IS NOT NULL
       AND lpad(right(regexp_replace(n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') = ${cn6}
     ORDER BY fecha_documento ASC;
-  `) as Array<{ fecha_documento: string; cantidad_pedido: string | null }>;
+  `) as Array<{
+    fecha_documento: string;
+    recibido_at: string | null;
+    cantidad_recibida: string | null;
+    por_entregar_cantidad: string | null;
+  }>;
 
   const monthMap = new Map<string, PedidoMesItem>();
   for (const row of rows) {
@@ -224,7 +233,12 @@ export async function loadPedidosRecibidosPorMesByCn(
     const mes = d.getMonth() + 1;
     const key = `${anio}-${mes}`;
     const prev = monthMap.get(key) ?? { anio, mes, cantidad: 0 };
-    const qty = parseNumberMaybe(row.cantidad_pedido) ?? 0;
+    // Regla funcional acordada: tomamos por_entregar_cantidad como cantidad recibida
+    // cuando existe fecha de recibido.
+    const qty =
+      parseNumberMaybe(row.por_entregar_cantidad) ??
+      parseNumberMaybe(row.cantidad_recibida) ??
+      0;
     monthMap.set(key, { ...prev, cantidad: prev.cantidad + qty });
   }
 

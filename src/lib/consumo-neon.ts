@@ -350,15 +350,18 @@ export async function getTendenciasConsumo(area: string): Promise<TendenciaMedic
   // Evolución mensual del período actual (últimos 3 meses naturales) para cada CN encontrado
   const cns = agrupado.map(r => r.cn);
   const temporal = (await sql`
-    SELECT cr.cn, cr.anio, cr.mes,
+    SELECT
+           cr.cn,
+           EXTRACT(YEAR FROM cr.fecha)::int AS anio,
+           EXTRACT(MONTH FROM cr.fecha)::int AS mes,
            SUM(cr.viales_dispensados)::float AS viales
     FROM consumo_registros cr
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
     WHERE ic.area = ${area}
       AND cr.cn = ANY(${cns})
       AND cr.fecha > (CURRENT_DATE - INTERVAL '3 months')::date
-    GROUP BY cr.cn, cr.anio, cr.mes
-    ORDER BY cr.cn, cr.anio, cr.mes;
+    GROUP BY cr.cn, EXTRACT(YEAR FROM cr.fecha), EXTRACT(MONTH FROM cr.fecha)
+    ORDER BY cr.cn, EXTRACT(YEAR FROM cr.fecha), EXTRACT(MONTH FROM cr.fecha);
   `) as Array<{ cn: string; anio: number; mes: number; viales: number }>;
 
   return agrupado.map(r => ({
@@ -390,7 +393,9 @@ export async function getCurvaMedicamento(cn: string, area: string): Promise<Cur
   const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
   // Ventana visible de los últimos 6 meses naturales (relativo a hoy).
   const rows = (await sql`
-    SELECT cr.anio, cr.mes,
+    SELECT
+           EXTRACT(YEAR FROM cr.fecha)::int AS anio,
+           EXTRACT(MONTH FROM cr.fecha)::int AS mes,
            SUM(cr.viales_dispensados)::float AS viales,
            SUM(cr.num_pacientes)::int        AS pacientes
     FROM consumo_registros cr
@@ -398,8 +403,8 @@ export async function getCurvaMedicamento(cn: string, area: string): Promise<Cur
     WHERE ic.area = ${area}
       AND cr.cn = ${cn}
       AND cr.fecha > (CURRENT_DATE - INTERVAL '6 months')::date
-    GROUP BY cr.anio, cr.mes
-    ORDER BY cr.anio, cr.mes;
+    GROUP BY EXTRACT(YEAR FROM cr.fecha), EXTRACT(MONTH FROM cr.fecha)
+    ORDER BY EXTRACT(YEAR FROM cr.fecha), EXTRACT(MONTH FROM cr.fecha);
   `) as Array<{ anio: number; mes: number; viales: number; pacientes: number }>;
   return rows.map(r => ({
     anio: num(r.anio), mes: num(r.mes),

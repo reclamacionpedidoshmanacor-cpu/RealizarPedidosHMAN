@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
     // Fecha inicio de la ventana visible (6 meses naturales)
     const fechaDesde = new Date(Date.now() - 180 * 86_400_000).toISOString().slice(0, 10);
 
-    // Pedidos no anulados (recibidos + pendientes): query directa por CN en PedidosPendientes
+    // Pedidos recibidos no anulados: query directa por CN en PedidosPendientes
     let pedidosMes: { anio: number; mes: number; label: string; cantidad: number }[] = [];
     try {
       const cn6 = toCn6(cn);

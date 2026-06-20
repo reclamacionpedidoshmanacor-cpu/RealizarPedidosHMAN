@@ -214,7 +214,7 @@ function CurvaPanel({ cn, componente, medicamento }: { cn: string; componente: s
                 <Line
                   type="monotone"
                   dataKey="pedidos"
-                  name="Pedidos emitidos (ud)"
+                  name="Pedidos recibidos (ud)"
                   stroke="#6366f1"
                   strokeWidth={2}
                   strokeDasharray="4 2"
@@ -230,7 +230,7 @@ function CurvaPanel({ cn, componente, medicamento }: { cn: string; componente: s
 
       {!loading && !error && !hasPedidos && (
         <p className="text-xs text-slate-400 mt-2">
-          Sin pedidos no anulados en la ventana de 6 meses para este medicamento.
+          Sin pedidos recibidos en la ventana de 6 meses para este medicamento.
         </p>
       )}
     </div>

@@ -68,7 +68,9 @@ export async function POST(req: NextRequest) {
     sunday.setUTCDate(monday.getUTCDate() + 6);
     const fechaMonday = toIsoDateUTC(monday);
     for (const r of rows) {
-      r.anio = anioManual;
+      // Para evitar incoherencias "Dic {año manual}" en semanas ISO que arrancan en diciembre,
+      // guardamos año/mes reales de la fecha asignada.
+      r.anio = monday.getUTCFullYear();
       r.semanaIso = semanaManual;
       r.mes = monday.getUTCMonth() + 1;
       r.dia = null;

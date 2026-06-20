@@ -9,7 +9,7 @@ export async function GET(req: NextRequest) {
   if (!session.ok) return session.response;
   if (session.area !== 'oncologia') {
     return NextResponse.json(
-      { error: 'La pestaña de Consumo para esta área está pendiente de configuración específica.' },
+      { error: 'La pestaña de Consumo (medicamentos preparados en farmacia y administrados) está disponible solo para Oncología por el momento.' },
       { status: 409 }
     );
   }
