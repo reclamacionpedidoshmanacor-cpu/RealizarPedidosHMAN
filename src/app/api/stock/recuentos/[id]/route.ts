@@ -11,8 +11,8 @@ import {
 
 export const runtime = 'nodejs';
 
-function roundOneDecimal(value: number): number {
-  return Math.round(value * 10) / 10;
+function roundTwoDecimals(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 type BulkLineaInput = { cn: string; stockCajas: number };
@@ -29,7 +29,7 @@ function parseBulkLineas(body: unknown): BulkLineaInput[] | null {
     const stockCajas = Number((raw as { stockCajas?: unknown }).stockCajas);
     if (!cn) return null;
     if (!Number.isFinite(stockCajas) || stockCajas < 0) return null;
-    dedup.set(cn, roundOneDecimal(stockCajas));
+    dedup.set(cn, roundTwoDecimals(stockCajas));
   }
 
   return [...dedup.entries()].map(([cn, stockCajas]) => ({ cn, stockCajas }));
@@ -142,7 +142,7 @@ export async function PATCH(
 
     const cn = String((body as { cn?: unknown }).cn ?? '').trim();
     const stockCajasRaw = Number((body as { stockCajas?: unknown }).stockCajas);
-    const stockCajas = roundOneDecimal(stockCajasRaw);
+    const stockCajas = roundTwoDecimals(stockCajasRaw);
 
     if (!cn) return NextResponse.json({ error: 'CN requerido.' }, { status: 400 });
     if (!Number.isFinite(stockCajasRaw) || stockCajasRaw < 0) {

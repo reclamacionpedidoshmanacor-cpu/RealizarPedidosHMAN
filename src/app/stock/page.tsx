@@ -44,8 +44,8 @@ type RecuentoDetalleResponse = {
 };
 
 const stockCajasFormatter = new Intl.NumberFormat('es-ES', {
-  minimumFractionDigits: 1,
-  maximumFractionDigits: 1,
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
 });
 
 const stockUnidadesFormatter = new Intl.NumberFormat('es-ES', {
@@ -53,12 +53,12 @@ const stockUnidadesFormatter = new Intl.NumberFormat('es-ES', {
   maximumFractionDigits: 2,
 });
 
-function roundOneDecimal(value: number): number {
-  return Math.round(value * 10) / 10;
+function roundTwoDecimals(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 function formatStockCajas(value: number): string {
-  return stockCajasFormatter.format(roundOneDecimal(value));
+  return stockCajasFormatter.format(roundTwoDecimals(value));
 }
 
 function formatStockUnidades(value: number): string {
@@ -80,7 +80,7 @@ function parseStockCajasInput(input: string): number | null {
 
   const value = Number(normalized);
   if (!Number.isFinite(value) || value < 0) return null;
-  return roundOneDecimal(value);
+  return roundTwoDecimals(value);
 }
 
 export default function StockPage() {
@@ -199,7 +199,7 @@ export default function StockPage() {
         invalidos.push(linea.cn);
         continue;
       }
-      if (Math.abs(parsed - roundOneDecimal(linea.stockCajas)) > 0.0001) {
+      if (Math.abs(parsed - roundTwoDecimals(linea.stockCajas)) > 0.0001) {
         cambios.push({ cn: linea.cn, stockCajas: parsed });
       }
     }
@@ -503,7 +503,7 @@ export default function StockPage() {
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                   <p className="text-xs text-slate-600">
-                    Formato de stock en cajas: <span className="font-semibold">0.000,0</span>
+                    Formato de stock en cajas: <span className="font-semibold">0.000,00</span>
                   </p>
                   <div className="flex items-center gap-2">
                     <button
