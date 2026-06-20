@@ -97,7 +97,8 @@ export async function GET(req: NextRequest) {
           linea.stockActual,
           linea.puntoPedidoSnap,
           linea.stockMaximoSnap,
-          stockTransito
+          stockTransito,
+          linea.unidadesPorCaja
         );
         const cajasValidadasActual = linea.cajasValidadas ?? linea.cajasPropuestas;
         if (cajasCalculadas === linea.cajasPropuestas && cajasValidadasActual === cajasCalculadas) {

@@ -99,10 +99,11 @@ export async function PATCH(
       const noEncontrados = bulkLineas
         .map((linea) => linea.cn)
         .filter((cn) => !medsMap.has(cn));
-      if (noEncontrados.length > 0) {
+      const lineasValidas = bulkLineas.filter((linea) => medsMap.has(linea.cn));
+      if (lineasValidas.length === 0) {
         return NextResponse.json(
           {
-            error: 'Hay lineas con CN fuera del catalogo del area activa.',
+            error: 'No hay líneas válidas para guardar en el área activa.',
             cns: noEncontrados,
           },
           { status: 404 }
@@ -110,7 +111,7 @@ export async function PATCH(
       }
 
       const erroresActualizacion: string[] = [];
-      for (const linea of bulkLineas) {
+      for (const linea of lineasValidas) {
         const med = medsMap.get(linea.cn);
         if (!med) continue;
         const actualizado = await actualizarLineaRecuento(
@@ -132,7 +133,11 @@ export async function PATCH(
         );
       }
 
-      return NextResponse.json({ ok: true, updated: bulkLineas.length });
+      return NextResponse.json({
+        ok: true,
+        updated: lineasValidas.length,
+        omitidosCatalogo: noEncontrados,
+      });
     }
 
     const cn = String((body as { cn?: unknown }).cn ?? '').trim();

@@ -329,6 +329,48 @@ export async function recalcularTotalLineasRecuento(importacionId: number): Prom
   return num(rows[0]?.total_lineas ?? 0);
 }
 
+export async function sincronizarRecuentoPendienteConCatalogo(
+  importacionId: number,
+  area: string
+): Promise<{ updated: number; cnsSinCatalogo: string[] }> {
+  const sql = getDb();
+  const recuento = (await sql`
+    SELECT id
+    FROM importaciones_stock
+    WHERE id = ${importacionId} AND area = ${area} AND estado = 'pendiente'
+    LIMIT 1;
+  `) as Array<{ id: number }>;
+  if (recuento.length === 0) {
+    throw new Error('El recuento no existe o no está pendiente en el área activa.');
+  }
+
+  const updatedRows = (await sql`
+    UPDATE stock_registros sr
+    SET stock_unidades = sr.stock_cajas * m.unidades_por_caja
+    FROM medicamentos m
+    WHERE sr.importacion_id = ${importacionId}
+      AND m.cn = sr.cn
+      AND m.area = ${area}
+    RETURNING sr.cn;
+  `) as Array<{ cn: string }>;
+
+  const sinCatalogoRows = (await sql`
+    SELECT sr.cn
+    FROM stock_registros sr
+    LEFT JOIN medicamentos m
+      ON m.cn = sr.cn
+      AND m.area = ${area}
+    WHERE sr.importacion_id = ${importacionId}
+      AND m.cn IS NULL
+    ORDER BY sr.cn;
+  `) as Array<{ cn: string }>;
+
+  return {
+    updated: updatedRows.length,
+    cnsSinCatalogo: sinCatalogoRows.map((r) => r.cn),
+  };
+}
+
 export type EliminarRecuentoResult =
   | { ok: true; lineasEliminadas: number; propuestasEliminadas: number }
   | { ok: false; reason: 'not_found_or_not_pending' | 'linked_non_draft_proposal'; propuestaEstado?: string };
@@ -604,7 +646,8 @@ export async function insertarLineasPropuesta(
       r.stockCajas,
       r.puntoPedido,
       r.stockMaximo,
-      r.stockTransito
+      r.stockTransito,
+      r.unidadesPorCaja
     );
     await sql`
       INSERT INTO propuestas_lineas (
@@ -618,6 +661,50 @@ export async function insertarLineasPropuesta(
       );
     `;
   }
+}
+
+export async function reemplazarLineasPropuestaDesdeRecuento(
+  propuestaId: number,
+  importacionId: number,
+  area: string,
+  stockTransitoByCn: Record<string, number>
+): Promise<number> {
+  await ensurePropuestasLineasSchema();
+  const sql = getDb();
+  const filas = await getRecuentoConStockParaPropuesta(importacionId, area);
+
+  await sql`DELETE FROM propuestas_lineas WHERE propuesta_id = ${propuestaId};`;
+  if (filas.length === 0) return 0;
+
+  for (const r of filas) {
+    const unidadesPorCaja = Number(r.unidades_por_caja);
+    const stockTransito = Number(stockTransitoByCn[r.cn] ?? 0);
+    const stockMinimo = Number(r.stock_minimo ?? 0);
+    const puntoPedido = Number(r.punto_pedido ?? 0);
+    const stockMaximo = Number(r.stock_maximo ?? r.stock_minimo ?? 0);
+    const stockActual = Number(r.stock_cajas);
+    const cajasPropuestas = calcularCajasPropuestas(
+      stockActual,
+      puntoPedido,
+      stockMaximo,
+      stockTransito,
+      unidadesPorCaja
+    );
+
+    await sql`
+      INSERT INTO propuestas_lineas (
+        propuesta_id, cn, nombre_medicamento, unidades_por_caja,
+        stock_actual, stock_transito_snap, stock_minimo_snap, punto_pedido_snap, stock_maximo_snap, stock_objetivo_snap,
+        cajas_propuestas, cajas_validadas, ajustado
+      ) VALUES (
+        ${propuestaId}, ${r.cn}, ${r.nombre}, ${unidadesPorCaja},
+        ${stockActual}, ${stockTransito}, ${stockMinimo}, ${puntoPedido}, ${stockMaximo}, ${stockMaximo},
+        ${cajasPropuestas}, ${cajasPropuestas}, false
+      );
+    `;
+  }
+
+  return filas.length;
 }
 
 export async function actualizarStockTransitoSnapshot(

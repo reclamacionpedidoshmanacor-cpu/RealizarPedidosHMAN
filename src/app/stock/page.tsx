@@ -86,6 +86,7 @@ export default function StockPage() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [savingAll, setSavingAll] = useState(false);
+  const [updatingFromCatalog, setUpdatingFromCatalog] = useState(false);
   const [deletingPending, setDeletingPending] = useState(false);
   const [data, setData] = useState<ApiResponse | null>(null);
   const [origen, setOrigen] = useState<'SAP' | 'MANUAL'>('SAP');
@@ -222,11 +223,50 @@ export default function StockPage() {
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo guardar el recuento.');
       toast.success(`Recuento guardado (${payload?.updated ?? cambios.length} lineas actualizadas).`);
+      const omitidosCatalogo = Array.isArray(payload?.omitidosCatalogo)
+        ? (payload.omitidosCatalogo as unknown[]).map((cn) => String(cn))
+        : [];
+      if (omitidosCatalogo.length > 0) {
+        toast.warning(`Se omitieron ${omitidosCatalogo.length} CN fuera del catálogo activo.`);
+      }
       await load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
       setSavingAll(false);
+    }
+  };
+
+  const actualizarDesdeCatalogo = async () => {
+    if (!data?.pendiente) return;
+    if (!confirm('¿Actualizar el recuento pendiente con los datos actuales de catálogo? También se actualizará la propuesta borrador vinculada si existe.')) {
+      return;
+    }
+
+    setUpdatingFromCatalog(true);
+    try {
+      const res = await fetch(`/api/stock/recuentos/${data.pendiente.id}/actualizar`, { method: 'POST' });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo actualizar desde catálogo.');
+
+      const sinCatalogo = Array.isArray(payload?.cnsSinCatalogo)
+        ? (payload.cnsSinCatalogo as unknown[]).map((cn) => String(cn))
+        : [];
+
+      toast.success(
+        payload?.propuestaActualizada
+          ? `Recuento actualizado (${payload?.lineasRecuentoActualizadas ?? 0} líneas). Propuesta borrador regenerada (${payload?.lineasPropuesta ?? 0} líneas).`
+          : `Recuento actualizado (${payload?.lineasRecuentoActualizadas ?? 0} líneas).`
+      );
+      if (sinCatalogo.length > 0) {
+        toast.warning(`Hay ${sinCatalogo.length} CN del recuento sin catálogo activo.`);
+      }
+
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setUpdatingFromCatalog(false);
     }
   };
 
@@ -455,6 +495,14 @@ export default function StockPage() {
                     Formato de stock en cajas: <span className="font-semibold">0.000,0</span>
                   </p>
                   <div className="flex items-center gap-2">
+                    <button
+                      onClick={actualizarDesdeCatalogo}
+                      disabled={updatingFromCatalog}
+                      className="rounded-lg border border-indigo-300 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-50"
+                      title="Sincroniza el recuento pendiente con el catálogo actual y regenera propuesta borrador"
+                    >
+                      {updatingFromCatalog ? 'Actualizando...' : 'Actualizar desde catálogo'}
+                    </button>
                     <button
                       onClick={eliminarRecuentoPendiente}
                       disabled={deletingPending}
