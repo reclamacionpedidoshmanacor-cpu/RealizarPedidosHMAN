@@ -53,6 +53,11 @@ Historial de cambios del proyecto ordenado del más reciente al más antiguo.
 - Consumo: desglose por medicamento ordenado alfabéticamente por diagnóstico > indicación > protocolo, mostrando solo viales (sin pacientes por línea).
 - Consumo: evolución temporal enfocada en pacientes reportados, preparaciones y medicamentos distintos por mes.
 - Consumo: mantiene visibilidad/filtrado por `tipo_componente` (incluido Fluido).
+- Consumo: `num_pacientes` se interpreta como valor reportado por línea (no deduplicable entre líneas por protección de datos); por eso se mantiene en vista temporal agregada y se elimina del desglose clínico.
+- Consumo: esta implementación se limita a **Oncología**; en otras áreas se muestra aviso de configuración pendiente.
+- Consumo: filtrado estricto por CN del catálogo del área (`INNER JOIN medicamentos ... m.area = area`) para evitar medicamentos ajenos al catálogo activo.
+- Consumo: en el listado principal se muestra **principio activo** (estilo principal) y marca comercial en línea secundaria.
+- Consumo: se elimina la vista de evolución temporal de esta pestaña para Oncología.
 
 ### Pendiente para retomar (bloqueado por datos)
 - Cargar histórico de consumo depurado con datos suficientes para detectar tendencias reales.

@@ -11,6 +11,12 @@ export const runtime = 'nodejs';
 export async function POST(req: NextRequest) {
   const session = requireApiSession(req);
   if (!session.ok) return session.response;
+  if (session.area !== 'oncologia') {
+    return NextResponse.json(
+      { error: 'La importación de Consumo para esta área está pendiente de configuración específica.' },
+      { status: 409 }
+    );
+  }
 
   try {
     const form = await req.formData();

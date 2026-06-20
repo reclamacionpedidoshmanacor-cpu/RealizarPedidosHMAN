@@ -456,18 +456,20 @@ export async function getResumenConsumoArea(
   const totales = (await sql`
     SELECT
       cr.cn,
-      COALESCE(MAX(cr.componente), '') AS componente,
+      COALESCE(MAX(m.principio_activo), MAX(cr.componente), '') AS componente,
       COALESCE(MAX(cr.tipo_componente), '') AS tipo_componente,
-      COALESCE(MAX(cr.medicamento), '') AS medicamento,
+      COALESCE(MAX(m.nombre), MAX(cr.medicamento), '') AS medicamento,
       SUM(cr.viales_dispensados)::float AS total_viales,
       SUM(cr.num_pacientes)::int        AS total_pacientes
     FROM consumo_registros cr
     INNER JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+    INNER JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
     WHERE ic.area = ${area}
       AND (${desde}::date IS NULL OR cr.fecha >= ${desde}::date)
       AND (${hasta}::date IS NULL OR cr.fecha <= ${hasta}::date)
     GROUP BY cr.cn
-    ORDER BY COALESCE(MAX(cr.componente), '') ASC, COALESCE(MAX(cr.medicamento), '') ASC;
+    ORDER BY COALESCE(MAX(m.principio_activo), MAX(cr.componente), '') ASC,
+             COALESCE(MAX(m.nombre), MAX(cr.medicamento), '') ASC;
   `) as Array<{
     cn: string; componente: string; tipo_componente: string; medicamento: string;
     total_viales: number; total_pacientes: number;
@@ -482,6 +484,7 @@ export async function getResumenConsumoArea(
       SUM(cr.viales_dispensados)::float AS viales
     FROM consumo_registros cr
     INNER JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+    INNER JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
     WHERE ic.area = ${area}
       AND (${desde}::date IS NULL OR cr.fecha >= ${desde}::date)
       AND (${hasta}::date IS NULL OR cr.fecha <= ${hasta}::date)
@@ -499,6 +502,7 @@ export async function getResumenConsumoArea(
       SUM(cr.num_pacientes)::int        AS pacientes
     FROM consumo_registros cr
     INNER JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+    INNER JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
     WHERE ic.area = ${area}
       AND (${desde}::date IS NULL OR cr.fecha >= ${desde}::date)
       AND (${hasta}::date IS NULL OR cr.fecha <= ${hasta}::date)

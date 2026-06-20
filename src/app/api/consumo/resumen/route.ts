@@ -7,6 +7,12 @@ export const runtime = 'nodejs';
 export async function GET(req: NextRequest) {
   const session = requireApiSession(req);
   if (!session.ok) return session.response;
+  if (session.area !== 'oncologia') {
+    return NextResponse.json(
+      { error: 'La pestaña de Consumo para esta área está pendiente de configuración específica.' },
+      { status: 409 }
+    );
+  }
 
   const { searchParams } = new URL(req.url);
   const fechaDesde = searchParams.get('fechaDesde');
