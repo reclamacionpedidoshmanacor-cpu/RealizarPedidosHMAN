@@ -97,6 +97,7 @@ export default function PropuestaPage() {
 
   const [historial,       setHistorial]       = useState<PropuestaResumen[]>([]);
   const [loadingHistorial, setLoadingHistorial] = useState(false);
+  const [deletingHistorialId, setDeletingHistorialId] = useState<number | null>(null);
   const [expandedHistorialId, setExpandedHistorialId] = useState<number | null>(null);
   const [detalleByPropuesta, setDetalleByPropuesta] = useState<Record<number, PropuestaDetalle>>({});
   const [loadingDetalleId, setLoadingDetalleId] = useState<number | null>(null);
@@ -273,6 +274,30 @@ export default function PropuestaPage() {
       setExpandedHistorialId(null);
     } finally {
       setLoadingDetalleId(null);
+    }
+  };
+
+  const handleEliminarPropuestaHistorial = async (propuestaId: number) => {
+    const ok = confirm(`¿Eliminar la propuesta #${propuestaId} del historial?`);
+    if (!ok) return;
+    setDeletingHistorialId(propuestaId);
+    try {
+      const res = await fetch(`/api/propuestas/${propuestaId}`, { method: 'DELETE' });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo eliminar la propuesta.');
+      toast.success(`Propuesta #${propuestaId} eliminada.`);
+      setExpandedHistorialId((prev) => (prev === propuestaId ? null : prev));
+      setDetalleByPropuesta((prev) => {
+        const next = { ...prev };
+        delete next[propuestaId];
+        return next;
+      });
+      await loadHistorial();
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setDeletingHistorialId(null);
     }
   };
 
@@ -635,6 +660,14 @@ export default function PropuestaPage() {
                           {p.estado === 'borrador' && (
                             <span className="text-[11px] text-slate-400 italic">En edición</span>
                           )}
+                          <button
+                            onClick={() => void handleEliminarPropuestaHistorial(p.id)}
+                            disabled={deletingHistorialId === p.id}
+                            className="rounded border border-rose-300 px-2 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50 transition-colors"
+                            title="Eliminar propuesta"
+                          >
+                            {deletingHistorialId === p.id ? '…' : '🗑'}
+                          </button>
                         </div>
                       </td>
                     </tr>

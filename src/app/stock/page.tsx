@@ -97,6 +97,7 @@ export default function StockPage() {
   const [historicoLineas, setHistoricoLineas] = useState<Record<number, RecuentoLinea[]>>({});
   const [historicoLoading, setHistoricoLoading] = useState<Record<number, boolean>>({});
   const [recoveringId, setRecoveringId] = useState<number | null>(null);
+  const [deletingHistoricoId, setDeletingHistoricoId] = useState<number | null>(null);
   const [sendingEmailId, setSendingEmailId] = useState<number | null>(null);
 
   /* ── Pedidos de Reposición (solo UPE) ── */
@@ -304,6 +305,28 @@ export default function StockPage() {
     }
   };
 
+  const eliminarRecuentoHistorico = async (recuentoId: number) => {
+    const ok = confirm(
+      `¿Eliminar el recuento histórico #${recuentoId}? Esta acción también borrará propuestas vinculadas a ese recuento.`
+    );
+    if (!ok) return;
+
+    setDeletingHistoricoId(recuentoId);
+    try {
+      const res = await fetch(`/api/stock/recuentos/${recuentoId}/historial`, { method: 'DELETE' });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo eliminar el recuento histórico.');
+      toast.success(
+        `Recuento #${recuentoId} eliminado (${payload?.lineasEliminadas ?? 0} líneas, ${payload?.propuestasEliminadas ?? 0} propuestas).`
+      );
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setDeletingHistoricoId(null);
+    }
+  };
+
   const enviarPedidoReposicionEmail = async (pedidoId: number) => {
     setSendingEmailId(pedidoId);
     try {
@@ -506,12 +529,13 @@ export default function StockPage() {
                     <th className="px-3 py-2 text-left">Propuesta</th>
                     <th className="px-3 py-2 text-left">Detalle</th>
                     <th className="px-3 py-2 text-left">Recuperar</th>
+                    <th className="px-3 py-2 text-left">Eliminar</th>
                   </tr>
                 </thead>
                 <tbody>
                   {(data?.historico ?? []).length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-3 py-4 text-slate-500">
+                      <td colSpan={9} className="px-3 py-4 text-slate-500">
                         No hay recuentos historicos.
                       </td>
                     </tr>
@@ -546,10 +570,21 @@ export default function StockPage() {
                               <span className="text-xs text-slate-400">—</span>
                             )}
                           </td>
+                          <td className="px-3 py-2">
+                            <button
+                              onClick={() => void eliminarRecuentoHistorico(it.id)}
+                              disabled={deletingHistoricoId === it.id}
+                              className="inline-flex h-7 w-7 items-center justify-center rounded border border-rose-300 text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                              title="Eliminar recuento histórico"
+                              aria-label={`Eliminar recuento ${it.id}`}
+                            >
+                              {deletingHistoricoId === it.id ? '…' : '🗑'}
+                            </button>
+                          </td>
                         </tr>
                         {historicoExpanded[it.id] && (
                           <tr className="border-t border-slate-100 bg-slate-50">
-                            <td colSpan={8} className="px-3 py-3">
+                            <td colSpan={9} className="px-3 py-3">
                               {historicoLoading[it.id] ? (
                                 <p className="text-sm text-slate-500">Cargando detalle...</p>
                               ) : (historicoLineas[it.id] ?? []).length === 0 ? (

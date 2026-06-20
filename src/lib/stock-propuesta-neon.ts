@@ -395,6 +395,63 @@ export async function eliminarRecuentoPendiente(
   };
 }
 
+export type EliminarRecuentoHistoricoResult =
+  | { ok: true; lineasEliminadas: number; propuestasEliminadas: number }
+  | { ok: false; reason: 'not_found_or_pending' };
+
+export async function eliminarRecuentoHistorico(
+  importacionId: number,
+  area: string
+): Promise<EliminarRecuentoHistoricoResult> {
+  const sql = getDb();
+
+  const recuentoRows = (await sql`
+    SELECT id
+    FROM importaciones_stock
+    WHERE id = ${importacionId} AND area = ${area} AND estado <> 'pendiente'
+    LIMIT 1;
+  `) as Array<{ id: number }>;
+
+  if (recuentoRows.length === 0) {
+    return { ok: false, reason: 'not_found_or_pending' };
+  }
+
+  const propuestas = (await sql`
+    SELECT id
+    FROM propuestas
+    WHERE importacion_stock_id = ${importacionId} AND area = ${area};
+  `) as Array<{ id: number }>;
+
+  for (const propuesta of propuestas) {
+    const propuestaId = num(propuesta.id);
+    await sql`DELETE FROM propuestas_lineas WHERE propuesta_id = ${propuestaId};`;
+    await sql`UPDATE importaciones_stock SET propuesta_id = NULL WHERE propuesta_id = ${propuestaId} AND area = ${area};`;
+    await sql`DELETE FROM propuestas WHERE id = ${propuestaId} AND area = ${area};`;
+  }
+
+  const lineasEliminadas = (await sql`
+    DELETE FROM stock_registros
+    WHERE importacion_id = ${importacionId}
+    RETURNING id;
+  `) as Array<{ id: number }>;
+
+  const recuentoEliminado = (await sql`
+    DELETE FROM importaciones_stock
+    WHERE id = ${importacionId} AND area = ${area} AND estado <> 'pendiente'
+    RETURNING id;
+  `) as Array<{ id: number }>;
+
+  if (recuentoEliminado.length === 0) {
+    return { ok: false, reason: 'not_found_or_pending' };
+  }
+
+  return {
+    ok: true,
+    lineasEliminadas: lineasEliminadas.length,
+    propuestasEliminadas: propuestas.length,
+  };
+}
+
 export async function actualizarPreciosCatalogoDesdeSap(
   area: string,
   updates: Array<{ cn: string; precioUnidad: number; precioCaja: number }>
@@ -710,6 +767,46 @@ export async function deshacerPropuesta(propuestaId: number, importacionStockId:
     SET estado = 'pendiente', generado_en = null, propuesta_id = null
     WHERE id = ${importacionStockId};
   `;
+}
+
+export type EliminarPropuestaResult =
+  | { ok: true; lineasEliminadas: number }
+  | { ok: false; reason: 'not_found' };
+
+export async function eliminarPropuestaById(
+  propuestaId: number,
+  area: string
+): Promise<EliminarPropuestaResult> {
+  const sql = getDb();
+  const propuestaRows = (await sql`
+    SELECT id
+    FROM propuestas
+    WHERE id = ${propuestaId} AND area = ${area}
+    LIMIT 1;
+  `) as Array<{ id: number }>;
+
+  if (propuestaRows.length === 0) {
+    return { ok: false, reason: 'not_found' };
+  }
+
+  const lineasEliminadas = (await sql`
+    DELETE FROM propuestas_lineas
+    WHERE propuesta_id = ${propuestaId}
+    RETURNING id;
+  `) as Array<{ id: number }>;
+
+  await sql`
+    UPDATE importaciones_stock
+    SET propuesta_id = NULL
+    WHERE propuesta_id = ${propuestaId} AND area = ${area};
+  `;
+
+  await sql`
+    DELETE FROM propuestas
+    WHERE id = ${propuestaId} AND area = ${area};
+  `;
+
+  return { ok: true, lineasEliminadas: lineasEliminadas.length };
 }
 
 export async function getLineasParaExcel(propuestaId: number): Promise<Array<{
