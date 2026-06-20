@@ -26,6 +26,7 @@ type RecuentoLinea = {
   cn: string;
   principioActivo: string | null;
   nombre: string;
+  unidadesPorCaja: number;
   stockCajas: number;
   stockUnidades: number;
   valorTotal: number | null;
@@ -222,7 +223,17 @@ export default function StockPage() {
       });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo guardar el recuento.');
-      toast.success(`Recuento guardado (${payload?.updated ?? cambios.length} lineas actualizadas).`);
+      let propuestaSyncMsg = '';
+      try {
+        const syncRes = await fetch(`/api/stock/recuentos/${data.pendiente.id}/actualizar`, { method: 'POST' });
+        const syncPayload = await syncRes.json();
+        if (syncRes.ok && syncPayload?.propuestaActualizada) {
+          propuestaSyncMsg = ` Propuesta borrador sincronizada (${syncPayload?.lineasPropuesta ?? 0} líneas).`;
+        }
+      } catch {
+        // Silencioso: el recuento ya quedó guardado.
+      }
+      toast.success(`Recuento guardado (${payload?.updated ?? cambios.length} lineas actualizadas).${propuestaSyncMsg}`);
       const omitidosCatalogo = Array.isArray(payload?.omitidosCatalogo)
         ? (payload.omitidosCatalogo as unknown[]).map((cn) => String(cn))
         : [];
@@ -553,7 +564,21 @@ export default function StockPage() {
                               className="w-28 rounded border border-slate-300 px-2 py-1 text-center"
                             />
                           </td>
-                          <td className="px-3 py-2 text-center">{formatStockUnidades(linea.stockUnidades)}</td>
+                          <td className="px-3 py-2 text-center">
+                            {(() => {
+                              const parsed = parseStockCajasInput(
+                                edits[linea.cn] ?? formatStockCajas(linea.stockCajas)
+                              );
+                              if (parsed == null) return formatStockUnidades(linea.stockUnidades);
+                              const unidadesPreview = parsed * (linea.unidadesPorCaja > 0 ? linea.unidadesPorCaja : 1);
+                              const changed = Math.abs(unidadesPreview - linea.stockUnidades) > 0.0001;
+                              return (
+                                <span className={changed ? 'font-semibold text-indigo-700' : undefined}>
+                                  {formatStockUnidades(unidadesPreview)}
+                                </span>
+                              );
+                            })()}
+                          </td>
                         </tr>
                       ))}
                     </tbody>

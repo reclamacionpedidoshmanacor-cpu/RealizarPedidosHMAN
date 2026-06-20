@@ -54,6 +54,7 @@ export type RecuentoLinea = {
   cn: string;
   principioActivo: string | null;
   nombre: string;
+  unidadesPorCaja: number;
   stockCajas: number;
   stockUnidades: number;
   valorTotal: number | null;
@@ -118,18 +119,19 @@ export async function getRecuentosByArea(area: string): Promise<{
 export async function getLineasRecuento(importacionId: number): Promise<RecuentoLinea[]> {
   const sql = getDb();
   const rows = (await sql`
-    SELECT sr.cn, m.principio_activo, m.nombre, sr.stock_cajas, sr.stock_unidades, sr.valor_total
+    SELECT sr.cn, m.principio_activo, m.nombre, m.unidades_por_caja, sr.stock_cajas, sr.stock_unidades, sr.valor_total
     FROM stock_registros sr
     INNER JOIN medicamentos m ON m.cn = sr.cn
     WHERE sr.importacion_id = ${importacionId}
     ORDER BY m.principio_activo ASC NULLS LAST, m.nombre ASC;
   `) as Array<{
-    cn: string; principio_activo: string | null; nombre: string;
+    cn: string; principio_activo: string | null; nombre: string; unidades_por_caja: number;
     stock_cajas: string; stock_unidades: string; valor_total: string | null;
   }>;
 
   return rows.map((r) => ({
     cn: r.cn, principioActivo: r.principio_activo, nombre: r.nombre,
+    unidadesPorCaja: num(r.unidades_por_caja) > 0 ? num(r.unidades_por_caja) : 1,
     stockCajas: num(r.stock_cajas), stockUnidades: num(r.stock_unidades),
     valorTotal: numOrNull(r.valor_total),
   }));
