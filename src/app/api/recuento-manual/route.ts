@@ -3,7 +3,6 @@ import { isValidArea, type AreaId } from '@/lib/areas';
 import { listMedicamentosByArea } from '@/lib/catalogo-neon';
 import {
   crearRecuento,
-  eliminarLineaRecuento,
   getLineasRecuento,
   getPendienteRecuento,
   recalcularTotalLineasRecuento,
@@ -238,9 +237,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!pendiente && preparadas.every((linea) => linea.stockUnidades <= 0)) {
+    if (!pendiente && preparadas.length === 0) {
       return NextResponse.json(
-        { error: 'Debes introducir al menos una cantidad mayor que cero para crear el recuento manual.' },
+        { error: 'No hay líneas para guardar en el recuento manual.' },
         { status: 400 }
       );
     }
@@ -260,24 +259,15 @@ export async function POST(req: NextRequest) {
 
     let insertadas = 0;
     let actualizadas = 0;
-    let eliminadas = 0;
     let sinCambios = 0;
 
     for (const linea of preparadas) {
       const actual = existentesByCn.get(linea.cn);
-      const stockActual = actual ? Math.max(0, Math.round(Number(actual.stockUnidades))) : 0;
+      const stockActual = actual != null
+        ? Math.max(0, Math.round(Number(actual.stockUnidades)))
+        : null;
 
-      if (linea.stockUnidades <= 0) {
-        if (stockActual > 0) {
-          const deleted = await eliminarLineaRecuento(importacionId, linea.cn);
-          if (deleted) eliminadas += 1;
-        } else {
-          sinCambios += 1;
-        }
-        continue;
-      }
-
-      if (stockActual === linea.stockUnidades) {
+      if (stockActual !== null && stockActual === linea.stockUnidades) {
         sinCambios += 1;
         continue;
       }
@@ -292,7 +282,7 @@ export async function POST(req: NextRequest) {
       else actualizadas += 1;
     }
 
-    if (insertadas === 0 && actualizadas === 0 && eliminadas === 0) {
+    if (insertadas === 0 && actualizadas === 0) {
       return NextResponse.json(
         { error: 'No hay cambios para guardar en esta ubicacion.' },
         { status: 400 }
@@ -308,7 +298,6 @@ export async function POST(req: NextRequest) {
       ubicacion: ubicacionSeleccionada,
       insertadas,
       actualizadas,
-      eliminadas,
       sinCambios,
     });
     return withAreaCookie(res, area);

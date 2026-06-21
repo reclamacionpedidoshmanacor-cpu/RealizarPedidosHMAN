@@ -193,7 +193,7 @@ export default function RecuentoManualPage() {
       });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo guardar.');
-      toast.success(`✅ Recuento guardado (${payload.insertadas + payload.actualizadas} medicamentos)`);
+      toast.success(`✅ Recuento guardado (${payload.insertadas + payload.actualizadas} líneas)`);
       await cargarUbicacion(ubicacion);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
