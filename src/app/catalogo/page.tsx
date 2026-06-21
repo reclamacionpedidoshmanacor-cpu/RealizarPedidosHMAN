@@ -186,16 +186,19 @@ export default function CatalogoPage() {
         body: JSON.stringify({ soloVacios }),
       });
       const data = await res.json() as { actualizados: number; fallidos: number; total: number; error?: string };
-      if (!res.ok) { toast.error(data.error ?? 'Error al enriquecer'); return; }
+      if (!res.ok) { toast.error(data.error ?? 'Error en el servidor al consultar CIMA'); return; }
       setCimaResultado(data);
       if (data.actualizados > 0) {
         toast.success(`CIMA: ${data.actualizados} medicamentos enriquecidos`);
+        fetchMeds();
+      } else if (data.fallidos > 0) {
+        toast.info(`CIMA consultado: ${data.fallidos} CNs no encontrados en la base de datos de AEMPS`);
         fetchMeds();
       } else {
         toast.info('CIMA: ningún medicamento nuevo encontrado');
       }
     } catch {
-      toast.error('Error de conexión con CIMA');
+      toast.error('Error de red — el servidor no ha podido completar la consulta a CIMA (puede ser un timeout)');
     } finally {
       setCimaEnriqueciendo(false);
     }

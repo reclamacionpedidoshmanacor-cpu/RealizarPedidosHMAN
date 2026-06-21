@@ -330,7 +330,7 @@ function TopMedRow({ m, rank }: { m: TopMed; rank: number }) {
                 <button key={t}
                   onClick={e => { e.stopPropagation(); setTab(t); }}
                   className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors ${tab === t ? 'bg-slate-800 text-white' : 'border border-slate-200 text-slate-600 hover:bg-white'}`}>
-                  {t === 'dx' ? 'Por diagnóstico / indicación' : 'Evolución semanal'}
+                  {t === 'dx' ? 'Por diagnóstico / indicación' : 'Evolución mensual'}
                 </button>
               ))}
             </div>
