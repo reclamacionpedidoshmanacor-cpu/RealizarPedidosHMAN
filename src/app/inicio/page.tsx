@@ -3,10 +3,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   ResponsiveContainer,
-  LineChart,
   ComposedChart,
   Bar,
-  Line,
   ReferenceLine,
   XAxis,
   YAxis,
@@ -27,22 +25,40 @@ type ResumenOperativo = {
   bajoOPunto: number;
 };
 
-type TendenciaMedicamento = {
+type DireccionMovimiento = 'sube' | 'baja' | 'parado' | 'nuevo';
+
+type MovimientoConsumo = {
   cn: string;
   componente: string;
   medicamento: string;
-  periodoActual: number;
+  ppioActivoCima: string | null;
+  unidadesPorCaja: number;
+  direccion: DireccionMovimiento;
+  periodoReciente: number;
   periodoAnterior: number;
-  variacionPct: number;
-  temporalActual: { mes: number; anio: number; label: string; viales: number }[];
+  promedioSemanalReciente: number;
+  promedioSemanalAnterior: number;
+  variacionPct: number | null;
+  deltaVialesPeriodo: number;
+  semanasSeries: { semana: number; anio: number; label: string; viales: number; recepciones: number }[];
 };
 
-type CurvaMes = { anio: number; mes: number; label: string; viales: number; pacientes: number };
-type PedidoMes = { anio: number; mes: number; label: string; cantidad: number };
+type MovimientoGrupoPrincipioActivo = {
+  claveGrupo: string;
+  principioActivo: string;
+  agrupacionAproximada: boolean;
+  presentaciones: MovimientoConsumo[];
+};
 
-type CurvaData = {
-  consumo: CurvaMes[];
-  pedidos: PedidoMes[];
+type MovimientosConsumoResult = {
+  suben: MovimientoGrupoPrincipioActivo[];
+  bajan: MovimientoGrupoPrincipioActivo[];
+  resumen: {
+    totalSuben: number;
+    totalBajan: number;
+    mostrandoSuben: number;
+    mostrandoBajan: number;
+  };
 };
 
 type BajoMinimoItem = {
@@ -128,18 +144,6 @@ function formatFecha(iso: string | null): string {
   }
 }
 
-function variacionColor(pct: number): string {
-  if (pct >= 50) return 'text-red-600';
-  if (pct >= 25) return 'text-orange-500';
-  return 'text-amber-500';
-}
-
-function variacionBg(pct: number): string {
-  if (pct >= 50) return 'bg-red-50 border-red-200';
-  if (pct >= 25) return 'bg-orange-50 border-orange-200';
-  return 'bg-amber-50 border-amber-200';
-}
-
 // ---------------------------------------------------------------------------
 // Helpers semáforo
 // ---------------------------------------------------------------------------
@@ -150,6 +154,17 @@ const SEMAFORO_CFG = {
   azul:   { bg: 'bg-sky-50 border-sky-200',       dot: 'bg-sky-500',      text: 'text-sky-700',      label: 'Sobrestock (>4 sem)' },
   gris:   { bg: 'bg-slate-50 border-slate-200',   dot: 'bg-slate-400',    text: 'text-slate-600',    label: 'Sin datos suficientes' },
 } as const;
+
+const DIRECCION_CFG = {
+  sube:   { label: 'SUBE',   bg: 'bg-orange-50 border-orange-200',  badge: 'bg-orange-100 text-orange-800',  text: 'text-orange-700' },
+  nuevo:  { label: 'NUEVO',  bg: 'bg-emerald-50 border-emerald-200', badge: 'bg-emerald-100 text-emerald-800', text: 'text-emerald-700' },
+  baja:   { label: 'BAJA',   bg: 'bg-sky-50 border-sky-200',        badge: 'bg-sky-100 text-sky-800',        text: 'text-sky-700' },
+  parado: { label: 'PARADO', bg: 'bg-slate-50 border-slate-300',    badge: 'bg-slate-200 text-slate-700',    text: 'text-slate-600' },
+} as const;
+
+function fmtViales(n: number): string {
+  return new Intl.NumberFormat('es-ES', { maximumFractionDigits: 0 }).format(n);
+}
 
 function fmtCobertura(c: number | null): string {
   if (c === null) return '—';
@@ -469,132 +484,147 @@ function KpiCard({
 }
 
 // ---------------------------------------------------------------------------
-// Componente: mini barra de progreso para mostrar variación relativa
+// Componente: tarjeta de movimiento de consumo (por presentación)
 // ---------------------------------------------------------------------------
-function MiniBar({ pct }: { pct: number }) {
-  const w = Math.min(pct, 100);
+function MovimientoCard({
+  mov,
+  expanded,
+  onToggle,
+}: {
+  mov: MovimientoConsumo;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const cfg = DIRECCION_CFG[mov.direccion];
+
   return (
-    <div className="flex items-center gap-2">
-      <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-        <div
-          className={`h-full rounded-full ${pct >= 50 ? 'bg-red-400' : pct >= 25 ? 'bg-orange-400' : 'bg-amber-400'}`}
-          style={{ width: `${w}%` }}
-        />
-      </div>
-      <span className={`text-xs font-semibold tabular-nums ${variacionColor(pct)}`}>
-        +{pct.toFixed(1)}%
-      </span>
+    <div className={`rounded-xl border overflow-hidden ${cfg.bg}`}>
+      <button type="button" onClick={onToggle} className="w-full text-left px-4 py-3 flex items-center gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${cfg.badge}`}>{cfg.label}</span>
+            <span className="text-[11px] font-mono text-slate-400 bg-white/70 px-1.5 py-0.5 rounded">{mov.cn}</span>
+            <span className="text-sm font-semibold text-slate-800">{mov.componente || '—'}</span>
+            {mov.medicamento && (
+              <span className="text-xs text-slate-400 italic truncate">{mov.medicamento}</span>
+            )}
+          </div>
+        </div>
+        <div className="flex-shrink-0 text-right text-xs">
+          <div className="text-slate-500 mb-0.5">8 sem ant. → 8 sem rec.</div>
+          <div className="text-sm font-semibold text-slate-700 tabular-nums">
+            {fmtViales(mov.periodoAnterior)} → {fmtViales(mov.periodoReciente)}
+            <span className="ml-1 text-xs font-normal text-slate-400">viales</span>
+          </div>
+          {mov.variacionPct !== null ? (
+            <div className={`mt-0.5 font-bold ${mov.direccion === 'sube' || mov.direccion === 'nuevo' ? 'text-orange-600' : 'text-sky-600'}`}>
+              {mov.variacionPct > 0 ? '+' : ''}{mov.variacionPct.toFixed(1)}%
+            </div>
+          ) : (
+            <div className="mt-0.5 text-slate-500">sin histórico previo</div>
+          )}
+        </div>
+        <svg
+          className={`w-4 h-4 text-slate-400 flex-shrink-0 transition-transform ${expanded ? 'rotate-180' : ''}`}
+          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {expanded && (
+        <div className="px-4 pb-4 border-t border-white/60 bg-white/50">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3 text-xs">
+            <div>
+              <p className="text-slate-400 uppercase tracking-wide text-[10px]">8 sem recientes</p>
+              <p className="font-semibold text-slate-700">{fmtViales(mov.periodoReciente)} viales</p>
+              <p className="text-slate-400 text-[10px]">Prom. {fmtViales(mov.promedioSemanalReciente)}/sem</p>
+            </div>
+            <div>
+              <p className="text-slate-400 uppercase tracking-wide text-[10px]">8 sem anteriores</p>
+              <p className="font-semibold text-slate-700">{fmtViales(mov.periodoAnterior)} viales</p>
+              <p className="text-slate-400 text-[10px]">Prom. {fmtViales(mov.promedioSemanalAnterior)}/sem</p>
+            </div>
+            <div>
+              <p className="text-slate-400 uppercase tracking-wide text-[10px]">Cambio período</p>
+              <p className={`font-semibold ${mov.deltaVialesPeriodo >= 0 ? 'text-orange-600' : 'text-sky-600'}`}>
+                {mov.deltaVialesPeriodo >= 0 ? '+' : ''}{fmtViales(mov.deltaVialesPeriodo)} viales
+              </p>
+            </div>
+            <div>
+              <p className="text-slate-400 uppercase tracking-wide text-[10px]">Múltiplo pedido</p>
+              <p className="font-semibold text-slate-700">{mov.unidadesPorCaja} uds/caja</p>
+            </div>
+          </div>
+          <CurvaSemanalAlertas series={mov.semanasSeries} promedioSemanal={mov.promedioSemanalReciente} />
+        </div>
+      )}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Componente: panel de curva expandible
+// Componente: bloque agrupado por principio activo (movimientos)
 // ---------------------------------------------------------------------------
-function CurvaPanel({ cn, componente, medicamento }: { cn: string; componente: string; medicamento: string }) {
-  const [data, setData] = useState<CurvaData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+function GrupoMovimientoSection({
+  grupo,
+  expandedCn,
+  onToggleCn,
+}: {
+  grupo: MovimientoGrupoPrincipioActivo;
+  expandedCn: string | null;
+  onToggleCn: (cn: string) => void;
+}) {
+  const [grupoOpen, setGrupoOpen] = useState(true);
 
-  useEffect(() => {
-    setLoading(true);
-    setError(null);
-    fetch(`/api/inicio/curva?cn=${encodeURIComponent(cn)}`)
-      .then(r => r.json())
-      .then((d: CurvaData & { error?: string }) => {
-        if (d.error) { setError(d.error); return; }
-        setData(d);
-      })
-      .catch(() => setError('Error al cargar la curva'))
-      .finally(() => setLoading(false));
-  }, [cn]);
-
-  // Fusionar consumo y pedidos por etiqueta mes
-  const chartData = (() => {
-    if (!data) return [];
-    const map = new Map<string, { label: string; consumo?: number; pedidos?: number }>();
-    for (const c of data.consumo) {
-      map.set(c.label, { label: c.label, consumo: c.viales });
-    }
-    for (const p of data.pedidos) {
-      const prev = map.get(p.label) ?? { label: p.label };
-      map.set(p.label, { ...prev, pedidos: p.cantidad });
-    }
-    return Array.from(map.values()).sort((a, b) => {
-      const ia = data.consumo.findIndex(x => x.label === a.label);
-      const ib = data.consumo.findIndex(x => x.label === b.label);
-      return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
-    });
-  })();
-
-  const hasPedidos = chartData.some(d => d.pedidos !== undefined);
+  if (grupo.presentaciones.length === 1) {
+    const m = grupo.presentaciones[0];
+    return (
+      <MovimientoCard
+        mov={m}
+        expanded={expandedCn === m.cn}
+        onToggle={() => onToggleCn(m.cn)}
+      />
+    );
+  }
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl p-5 mt-2">
-      <p className="text-xs text-slate-500 mb-1 uppercase tracking-wide font-medium">Evolución mensual</p>
-      <p className="text-sm font-semibold text-slate-700 mb-4">
-        {componente} <span className="text-slate-400 font-normal">· {medicamento}</span>
-      </p>
+    <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
+      <button
+        type="button"
+        onClick={() => setGrupoOpen(o => !o)}
+        className="w-full text-left px-4 py-3 flex items-center gap-3 bg-slate-50 hover:bg-slate-100/80 transition-colors"
+      >
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-semibold text-slate-800">{grupo.principioActivo}</span>
+            {grupo.agrupacionAproximada && (
+              <span className="text-[10px] font-medium text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">
+                agrupación aprox.
+              </span>
+            )}
+            <span className="text-[11px] text-slate-400">{grupo.presentaciones.length} presentaciones</span>
+          </div>
+        </div>
+        <svg
+          className={`w-4 h-4 text-slate-400 flex-shrink-0 transition-transform ${grupoOpen ? 'rotate-180' : ''}`}
+          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
 
-      {loading && <p className="text-sm text-slate-400 text-center py-6">Cargando curva…</p>}
-      {error && <p className="text-sm text-red-500 text-center py-6">{error}</p>}
-
-      {!loading && !error && data && (
-        chartData.length === 0 ? (
-          <p className="text-sm text-slate-400 text-center py-6">Sin datos disponibles.</p>
-        ) : (
-          <ResponsiveContainer width="100%" height={220}>
-            <LineChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis
-                dataKey="label"
-                tick={{ fontSize: 11, fill: '#94a3b8' }}
-                tickLine={false}
-                axisLine={false}
-              />
-              <YAxis
-                tick={{ fontSize: 11, fill: '#94a3b8' }}
-                tickLine={false}
-                axisLine={false}
-                width={36}
-              />
-              <Tooltip
-                contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e2e8f0' }}
-                labelStyle={{ fontWeight: 600, color: '#334155' }}
-              />
-              {hasPedidos && <Legend iconType="circle" iconSize={8} wrapperStyle={{ fontSize: 12 }} />}
-              <Line
-                type="monotone"
-                dataKey="consumo"
-                name="Consumo (viales)"
-                stroke="#0f766e"
-                strokeWidth={2}
-                dot={{ r: 3, fill: '#0f766e' }}
-                activeDot={{ r: 5 }}
-                connectNulls
-              />
-              {hasPedidos && (
-                <Line
-                  type="monotone"
-                  dataKey="pedidos"
-                  name="Pedidos recibidos (ud)"
-                  stroke="#6366f1"
-                  strokeWidth={2}
-                  strokeDasharray="4 2"
-                  dot={{ r: 3, fill: '#6366f1' }}
-                  activeDot={{ r: 5 }}
-                  connectNulls
-                />
-              )}
-            </LineChart>
-          </ResponsiveContainer>
-        )
-      )}
-
-      {!loading && !error && !hasPedidos && (
-        <p className="text-xs text-slate-400 mt-2">
-          Sin pedidos recibidos en la ventana de 6 meses para este medicamento.
-        </p>
+      {grupoOpen && (
+        <div className="p-2 space-y-2 border-t border-slate-100">
+          {grupo.presentaciones.map(m => (
+            <MovimientoCard
+              key={m.cn}
+              mov={m}
+              expanded={expandedCn === m.cn}
+              onToggle={() => onToggleCn(m.cn)}
+            />
+          ))}
+        </div>
       )}
     </div>
   );
@@ -605,12 +635,13 @@ function CurvaPanel({ cn, componente, medicamento }: { cn: string; componente: s
 // ---------------------------------------------------------------------------
 export default function InicioPage() {
   const [operativo, setOperativo] = useState<ResumenOperativo | null>(null);
-  const [tendencias, setTendencias] = useState<TendenciaMedicamento[]>([]);
+  const [movimientos, setMovimientos] = useState<MovimientosConsumoResult | null>(null);
+  const [movTab, setMovTab] = useState<'suben' | 'bajan'>('suben');
   const [loadingOp, setLoadingOp] = useState(true);
-  const [loadingTend, setLoadingTend] = useState(true);
+  const [loadingMov, setLoadingMov] = useState(true);
   const [errorOp, setErrorOp] = useState<string | null>(null);
-  const [errorTend, setErrorTend] = useState<string | null>(null);
-  const [expandedCn, setExpandedCn] = useState<string | null>(null);
+  const [errorMov, setErrorMov] = useState<string | null>(null);
+  const [expandedMovCn, setExpandedMovCn] = useState<string | null>(null);
   const [bajoMinimoOpen, setBajoMinimoOpen] = useState(false);
   const [bajoMinimoLoading, setBajoMinimoLoading] = useState(false);
   const [bajoMinimoError, setBajoMinimoError] = useState<string | null>(null);
@@ -636,22 +667,22 @@ export default function InicioPage() {
       .finally(() => setLoadingOp(false));
   }, []);
 
-  const cargarTendencias = useCallback(() => {
-    setLoadingTend(true);
-    setErrorTend(null);
+  const cargarMovimientos = useCallback(() => {
+    setLoadingMov(true);
+    setErrorMov(null);
     fetch('/api/inicio/tendencias')
       .then(r => r.json())
-      .then((d: { tendencias: TendenciaMedicamento[]; error?: string }) => {
-        if (d.error) { setErrorTend(d.error); return; }
-        setTendencias(d.tendencias ?? []);
+      .then((d: MovimientosConsumoResult & { error?: string }) => {
+        if (d.error) { setErrorMov(d.error); return; }
+        setMovimientos(d);
       })
-      .catch(() => setErrorTend('Error al cargar las tendencias'))
-      .finally(() => setLoadingTend(false));
+      .catch(() => setErrorMov('Error al cargar movimientos de consumo'))
+      .finally(() => setLoadingMov(false));
   }, []);
 
   useEffect(() => {
     cargarOperativo();
-    cargarTendencias();
+    cargarMovimientos();
     // Cargar alertas al montar
     setAlertasLoading(true);
     fetch('/api/inicio/alertas-compra')
@@ -662,11 +693,9 @@ export default function InicioPage() {
       })
       .catch(() => setAlertasError('Error al cargar alertas'))
       .finally(() => setAlertasLoading(false));
-  }, [cargarOperativo, cargarTendencias]);
+  }, [cargarOperativo, cargarMovimientos]);
 
-  const toggleCurva = (cn: string) => {
-    setExpandedCn(prev => prev === cn ? null : cn);
-  };
+  const gruposMovActuales = movTab === 'suben' ? (movimientos?.suben ?? []) : (movimientos?.bajan ?? []);
 
   const toggleBajoMinimo = () => {
     const nextOpen = !bajoMinimoOpen;
@@ -892,91 +921,84 @@ export default function InicioPage() {
       </section>
 
       {/* ------------------------------------------------------------------ */}
-      {/* BLOQUE 3 — Tendencias de consumo                                    */}
+      {/* BLOQUE 3 — Movimientos de consumo                                   */}
       {/* ------------------------------------------------------------------ */}
       <section>
         <h2 className="text-base font-semibold text-slate-700 mb-1 flex items-center gap-2">
           <span className="inline-block w-1 h-4 bg-indigo-500 rounded-full" />
-          Tendencias de consumo
+          Movimientos de consumo
         </h2>
         <p className="text-xs text-slate-400 mb-3">
-          Ventana visible: últimos 6 meses. El indicador de tendencia marca aumento &gt;10% comparando los 3 meses más recientes frente a los 3 anteriores.
-          Haz clic en un medicamento para ver la evolución mensual y los pedidos recibidos.
+          Compara las últimas 8 semanas frente a las 8 anteriores (misma ventana que alertas de compra).
+          Agrupado por principio activo CIMA; cada presentación mantiene sus propias cifras.
+          Umbral relevante: variación &gt;25% con cambio ≥2 viales/sem o ≥1 caja/sem.
         </p>
 
-        {loadingTend && (
-          <p className="text-sm text-slate-400">Cargando tendencias…</p>
-        )}
-        {errorTend && (
-          <p className="text-sm text-red-500">{errorTend}</p>
+        {movimientos && !loadingMov && (
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <button
+              type="button"
+              onClick={() => setMovTab('suben')}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold border transition-colors ${
+                movTab === 'suben'
+                  ? 'bg-orange-50 border-orange-300 text-orange-800'
+                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              ↑ Suben / Nuevos ({movimientos.resumen.totalSuben})
+            </button>
+            <button
+              type="button"
+              onClick={() => setMovTab('bajan')}
+              className={`rounded-lg px-3 py-1.5 text-xs font-semibold border transition-colors ${
+                movTab === 'bajan'
+                  ? 'bg-sky-50 border-sky-300 text-sky-800'
+                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              ↓ Bajan / Parados ({movimientos.resumen.totalBajan})
+            </button>
+            {movTab === 'suben' && movimientos.resumen.totalSuben > movimientos.resumen.mostrandoSuben && (
+              <span className="text-[11px] text-slate-400">
+                Mostrando top {movimientos.resumen.mostrandoSuben} de {movimientos.resumen.totalSuben}
+              </span>
+            )}
+            {movTab === 'bajan' && movimientos.resumen.totalBajan > movimientos.resumen.mostrandoBajan && (
+              <span className="text-[11px] text-slate-400">
+                Mostrando top {movimientos.resumen.mostrandoBajan} de {movimientos.resumen.totalBajan}
+              </span>
+            )}
+          </div>
         )}
 
-        {!loadingTend && !errorTend && tendencias.length === 0 && (
+        {loadingMov && (
+          <p className="text-sm text-slate-400">Calculando movimientos…</p>
+        )}
+        {errorMov && (
+          <p className="text-sm text-red-500">{errorMov}</p>
+        )}
+
+        {!loadingMov && !errorMov && gruposMovActuales.length === 0 && (
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center">
-            <p className="text-sm text-slate-500 font-medium">Sin tendencias detectadas</p>
+            <p className="text-sm text-slate-500 font-medium">
+              {movTab === 'suben' ? 'Sin subidas relevantes' : 'Sin bajadas ni paradas relevantes'}
+            </p>
             <p className="text-xs text-slate-400 mt-1">
-              No hay medicamentos con un aumento de consumo superior al 10% en el período analizado,
-              o aún no se han importado datos de consumo para esta área.
+              No hay medicamentos con cambio significativo en esta dirección en las últimas 16 semanas,
+              o aún no hay datos de consumo importados.
             </p>
           </div>
         )}
 
-        {!loadingTend && tendencias.length > 0 && (
-          <div className="space-y-2">
-            {tendencias.map(t => (
-              <div key={t.cn}>
-                <button
-                  onClick={() => toggleCurva(t.cn)}
-                  className={`w-full text-left rounded-xl border p-4 transition-colors ${
-                    expandedCn === t.cn
-                      ? 'border-indigo-300 bg-indigo-50'
-                      : `border ${variacionBg(t.variacionPct)}`
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-xs font-mono text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
-                          {t.cn}
-                        </span>
-                        <span className="font-semibold text-slate-800 text-sm">{t.componente || '—'}</span>
-                        {t.medicamento && (
-                          <span className="text-xs text-slate-400 italic">{t.medicamento}</span>
-                        )}
-                      </div>
-                      <div className="mt-2 max-w-xs">
-                        <MiniBar pct={t.variacionPct} />
-                      </div>
-                    </div>
-
-                    <div className="flex-shrink-0 text-right">
-                      <div className="text-xs text-slate-500 mb-0.5">Período anterior → actual</div>
-                      <div className="text-sm font-semibold text-slate-700 tabular-nums">
-                        {t.periodoAnterior.toFixed(0)} → {t.periodoActual.toFixed(0)}
-                        <span className="ml-1 text-xs font-normal text-slate-400">viales</span>
-                      </div>
-                      <div className="mt-1">
-                        <span className={`text-xs font-bold ${variacionColor(t.variacionPct)}`}>
-                          ↑ +{t.variacionPct.toFixed(1)}%
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="flex-shrink-0 text-slate-400">
-                      <svg
-                        className={`w-4 h-4 transition-transform ${expandedCn === t.cn ? 'rotate-180' : ''}`}
-                        fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
-                      >
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                      </svg>
-                    </div>
-                  </div>
-                </button>
-
-                {expandedCn === t.cn && (
-                  <CurvaPanel cn={t.cn} componente={t.componente} medicamento={t.medicamento} />
-                )}
-              </div>
+        {!loadingMov && !errorMov && gruposMovActuales.length > 0 && (
+          <div className="space-y-3">
+            {gruposMovActuales.map(g => (
+              <GrupoMovimientoSection
+                key={g.claveGrupo}
+                grupo={g}
+                expandedCn={expandedMovCn}
+                onToggleCn={cn => setExpandedMovCn(prev => prev === cn ? null : cn)}
+              />
             ))}
           </div>
         )}

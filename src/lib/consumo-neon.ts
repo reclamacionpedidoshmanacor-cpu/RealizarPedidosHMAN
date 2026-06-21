@@ -287,98 +287,270 @@ export type TemporalGlobal = {
 };
 
 // ---------------------------------------------------------------------------
-// Tendencias de consumo para el panel Inicio
-// Compara los últimos 3 meses naturales vs los 3 meses anteriores (relativo a hoy).
-// Devuelve sólo los medicamentos con variación > +10 %.
+// Movimientos de consumo para el panel Inicio
+// Ventana: últimas 8 semanas vs 8 semanas anteriores (112 días).
+// Clasificación: sube | baja | parado | nuevo (umbrales alineados con alertas).
 // ---------------------------------------------------------------------------
-export type TendenciaMedicamento = {
+export type DireccionMovimiento = 'sube' | 'baja' | 'parado' | 'nuevo';
+
+export type MovimientoConsumo = {
   cn: string;
   componente: string;
   medicamento: string;
-  periodoActual: number;
+  ppioActivoCima: string | null;
+  unidadesPorCaja: number;
+  direccion: DireccionMovimiento;
+  periodoReciente: number;
   periodoAnterior: number;
-  variacionPct: number;       // porcentaje de variación, ej: 25.3
-  temporalActual: { mes: number; anio: number; label: string; viales: number }[];
+  promedioSemanalReciente: number;
+  promedioSemanalAnterior: number;
+  variacionPct: number | null;
+  deltaVialesPeriodo: number;
+  semanasSeries: { semana: number; anio: number; label: string; viales: number; recepciones: number }[];
 };
 
-export async function getTendenciasConsumo(area: string): Promise<TendenciaMedicamento[]> {
-  const sql = getDb();
-  const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+export type MovimientoGrupoPrincipioActivo = {
+  claveGrupo: string;
+  principioActivo: string;
+  agrupacionAproximada: boolean;
+  presentaciones: MovimientoConsumo[];
+};
 
-  // Ventana temporal relativa a hoy (no al último dato cargado).
-  // Excluye Fungible y Fluido, y solo incluye CNs presentes en el catálogo del área.
+export type MovimientosConsumoResult = {
+  suben: MovimientoGrupoPrincipioActivo[];
+  bajan: MovimientoGrupoPrincipioActivo[];
+  resumen: {
+    totalSuben: number;
+    totalBajan: number;
+    mostrandoSuben: number;
+    mostrandoBajan: number;
+  };
+};
+
+const MOVIMIENTOS_TOP_LIMIT = 15;
+
+function claveGrupoMovimiento(m: Pick<MovimientoConsumo, 'ppioActivoCima' | 'componente' | 'cn' | 'medicamento'>): {
+  clave: string;
+  nombre: string;
+  aproximada: boolean;
+} {
+  const cima = m.ppioActivoCima?.trim();
+  if (cima) return { clave: cima.toLowerCase(), nombre: cima, aproximada: false };
+  const pa = m.componente?.trim();
+  if (pa) return { clave: `pa:${pa.toLowerCase()}`, nombre: pa, aproximada: true };
+  return { clave: `cn:${m.cn}`, nombre: m.medicamento || m.cn, aproximada: true };
+}
+
+function clasificarMovimiento(rec: number, ant: number, upx: number): DireccionMovimiento | null {
+  if (rec === 0 && ant === 0) return null;
+
+  const cambioAbsVialesSem = Math.abs((rec - ant) / 8);
+  const cambioAbsCajasSem = cambioAbsVialesSem / Math.max(1, upx);
+
+  if (ant === 0 && rec > 0) {
+    return rec >= 2 ? 'nuevo' : null;
+  }
+
+  if (rec === 0 && ant > 0) {
+    return ant >= 2 ? 'parado' : null;
+  }
+
+  const variacionPct = ((rec - ant) / ant) * 100;
+
+  if (rec > ant && variacionPct > 25 && (cambioAbsVialesSem >= 2 || cambioAbsCajasSem >= 1)) {
+    return 'sube';
+  }
+
+  if (rec < ant && variacionPct < -25 && (cambioAbsVialesSem >= 2 || cambioAbsCajasSem >= 1)) {
+    return 'baja';
+  }
+
+  return null;
+}
+
+function buildSemanasSeries8(
+  series: Array<{ semana: number; anio: number; viales: number }>,
+): MovimientoConsumo['semanasSeries'] {
+  const semanasFilled: MovimientoConsumo['semanasSeries'] = [];
+  for (let i = 7; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i * 7);
+    const thursday = new Date(d);
+    thursday.setDate(d.getDate() - ((d.getDay() + 6) % 7) + 3);
+    const jan4 = new Date(thursday.getFullYear(), 0, 4);
+    const diffDays = (thursday.getTime() - jan4.getTime()) / 86400000;
+    const sw = Math.round(diffDays / 7) + 1;
+    const sy = thursday.getFullYear();
+    const found = series.find(s => s.semana === sw && s.anio === sy);
+    semanasFilled.push({
+      semana: sw,
+      anio: sy,
+      label: `S${String(sw).padStart(2, '0')}/${String(sy).slice(-2)}`,
+      viales: found ? found.viales : 0,
+      recepciones: 0,
+    });
+  }
+  return semanasFilled;
+}
+
+function agruparMovimientos(
+  movimientos: MovimientoConsumo[],
+  sortPresentaciones: (a: MovimientoConsumo, b: MovimientoConsumo) => number,
+): MovimientoGrupoPrincipioActivo[] {
+  const map = new Map<string, MovimientoConsumo[]>();
+  const meta = new Map<string, { nombre: string; aproximada: boolean }>();
+
+  for (const m of movimientos) {
+    const { clave, nombre, aproximada } = claveGrupoMovimiento(m);
+    if (!map.has(clave)) {
+      map.set(clave, []);
+      meta.set(clave, { nombre, aproximada });
+    }
+    map.get(clave)!.push(m);
+  }
+
+  const grupos: MovimientoGrupoPrincipioActivo[] = [];
+
+  for (const [claveGrupo, presentaciones] of map.entries()) {
+    const sorted = [...presentaciones].sort(sortPresentaciones);
+    const m = meta.get(claveGrupo)!;
+    grupos.push({
+      claveGrupo,
+      principioActivo: m.nombre,
+      agrupacionAproximada: m.aproximada,
+      presentaciones: sorted,
+    });
+  }
+
+  return grupos.sort((a, b) => {
+    const maxA = Math.max(...a.presentaciones.map(p => Math.abs(p.deltaVialesPeriodo)));
+    const maxB = Math.max(...b.presentaciones.map(p => Math.abs(p.deltaVialesPeriodo)));
+    if (maxB !== maxA) return maxB - maxA;
+    return a.principioActivo.localeCompare(b.principioActivo, 'es');
+  });
+}
+
+export async function getMovimientosConsumo(area: string): Promise<MovimientosConsumoResult> {
+  const sql = getDb();
+
   const agrupado = (await sql`
     WITH periods AS (
       SELECT
-        (CURRENT_DATE - INTERVAL '3 months')::date AS split_date,
-        (CURRENT_DATE - INTERVAL '6 months')::date AS start_date
+        (CURRENT_DATE - INTERVAL '56 days')::date AS split_date,
+        (CURRENT_DATE - INTERVAL '112 days')::date AS start_date
     ),
     agrupado AS (
       SELECT
         cr.cn,
-        -- Principio activo y nombre comercial tomados del catálogo (más fiables que el Excel de consumo)
         COALESCE(MAX(m.principio_activo), MAX(cr.componente), '') AS componente,
-        COALESCE(MAX(m.nombre),           MAX(cr.medicamento), '') AS medicamento,
-        SUM(CASE WHEN cr.fecha >  p.split_date                            THEN cr.viales_dispensados ELSE 0 END)::float AS periodo_actual,
+        COALESCE(MAX(m.nombre), MAX(cr.medicamento), '') AS medicamento,
+        NULLIF(TRIM(MAX(m.ppio_activo_cima)), '') AS ppio_activo_cima,
+        MAX(m.unidades_por_caja) AS unidades_por_caja,
+        SUM(CASE WHEN cr.fecha >  p.split_date                            THEN cr.viales_dispensados ELSE 0 END)::float AS periodo_reciente,
         SUM(CASE WHEN cr.fecha <= p.split_date AND cr.fecha > p.start_date THEN cr.viales_dispensados ELSE 0 END)::float AS periodo_anterior
       FROM consumo_registros cr
       JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
-      -- Solo CNs del catálogo de esta área
       JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area} AND m.activo = TRUE
       CROSS JOIN periods p
       WHERE ic.area = ${area}
         AND cr.fecha > p.start_date
-        -- Excluir Fungible y Fluido (insensible a mayúsculas)
         AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
       GROUP BY cr.cn
     )
     SELECT
-      cn, componente, medicamento,
-      periodo_actual, periodo_anterior,
-      ROUND((((periodo_actual / NULLIF(periodo_anterior, 0)) - 1) * 100)::numeric, 1) AS variacion_pct
+      cn, componente, medicamento, ppio_activo_cima, unidades_por_caja,
+      periodo_reciente, periodo_anterior
     FROM agrupado
-    WHERE periodo_anterior > 0
-      AND periodo_actual > periodo_anterior * 1.10
-    ORDER BY variacion_pct DESC;
+    WHERE periodo_reciente > 0 OR periodo_anterior > 0
+    ORDER BY componente, medicamento;
   `) as Array<{
-    cn: string; componente: string; medicamento: string;
-    periodo_actual: number; periodo_anterior: number; variacion_pct: number;
+    cn: string; componente: string; medicamento: string; ppio_activo_cima: string | null;
+    unidades_por_caja: number; periodo_reciente: number; periodo_anterior: number;
   }>;
 
-  if (agrupado.length === 0) return [];
+  if (agrupado.length === 0) {
+    return {
+      suben: [],
+      bajan: [],
+      resumen: { totalSuben: 0, totalBajan: 0, mostrandoSuben: 0, mostrandoBajan: 0 },
+    };
+  }
 
-  // Evolución mensual del período actual (últimos 3 meses naturales) para cada CN encontrado
-  const cns = agrupado.map(r => r.cn);
-  const temporal = (await sql`
+  const movimientos: MovimientoConsumo[] = [];
+
+  for (const r of agrupado) {
+    const rec = num(r.periodo_reciente);
+    const ant = num(r.periodo_anterior);
+    const upx = Math.max(1, num(r.unidades_por_caja));
+    const direccion = clasificarMovimiento(rec, ant, upx);
+    if (!direccion) continue;
+
+    movimientos.push({
+      cn: r.cn,
+      componente: r.componente,
+      medicamento: r.medicamento,
+      ppioActivoCima: r.ppio_activo_cima,
+      unidadesPorCaja: upx,
+      direccion,
+      periodoReciente: rec,
+      periodoAnterior: ant,
+      promedioSemanalReciente: rec / 8,
+      promedioSemanalAnterior: ant / 8,
+      variacionPct: ant > 0 ? ((rec - ant) / ant) * 100 : null,
+      deltaVialesPeriodo: rec - ant,
+      semanasSeries: [],
+    });
+  }
+
+  const cns = movimientos.map(m => m.cn);
+  const seriesRows = cns.length > 0 ? (await sql`
     SELECT
-           cr.cn,
-           EXTRACT(YEAR FROM cr.fecha)::int AS anio,
-           EXTRACT(MONTH FROM cr.fecha)::int AS mes,
-           SUM(cr.viales_dispensados)::float AS viales
+      cr.cn,
+      EXTRACT(ISOYEAR FROM cr.fecha)::int AS iso_year,
+      EXTRACT(WEEK     FROM cr.fecha)::int AS iso_week,
+      SUM(cr.viales_dispensados)::float   AS viales
     FROM consumo_registros cr
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
     WHERE ic.area = ${area}
       AND cr.cn = ANY(${cns})
-      AND cr.fecha > (CURRENT_DATE - INTERVAL '3 months')::date
-    GROUP BY cr.cn, EXTRACT(YEAR FROM cr.fecha), EXTRACT(MONTH FROM cr.fecha)
-    ORDER BY cr.cn, EXTRACT(YEAR FROM cr.fecha), EXTRACT(MONTH FROM cr.fecha);
-  `) as Array<{ cn: string; anio: number; mes: number; viales: number }>;
+      AND cr.fecha > (CURRENT_DATE - INTERVAL '56 days')
+      AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
+    GROUP BY cr.cn, EXTRACT(ISOYEAR FROM cr.fecha), EXTRACT(WEEK FROM cr.fecha)
+    ORDER BY cr.cn, iso_year, iso_week;
+  `) as Array<{ cn: string; iso_year: number; iso_week: number; viales: number }> : [];
 
-  return agrupado.map(r => ({
-    cn: r.cn,
-    componente: r.componente,
-    medicamento: r.medicamento,
-    periodoActual: Number(r.periodo_actual),
-    periodoAnterior: Number(r.periodo_anterior),
-    variacionPct: Number(r.variacion_pct),
-    temporalActual: temporal
-      .filter(t => t.cn === r.cn)
-      .map(t => ({
-        anio: num(t.anio), mes: num(t.mes),
-        label: `${MESES[num(t.mes) - 1]} ${t.anio}`,
-        viales: Number(t.viales),
-      })),
-  }));
+  for (const m of movimientos) {
+    const series = seriesRows
+      .filter(s => s.cn === m.cn)
+      .map(s => ({
+        semana: num(s.iso_week),
+        anio: num(s.iso_year),
+        viales: Number(s.viales),
+      }));
+    m.semanasSeries = buildSemanasSeries8(series);
+  }
+
+  const subenList = movimientos
+    .filter(m => m.direccion === 'sube' || m.direccion === 'nuevo')
+    .sort((a, b) => b.deltaVialesPeriodo - a.deltaVialesPeriodo);
+
+  const bajanList = movimientos
+    .filter(m => m.direccion === 'baja' || m.direccion === 'parado')
+    .sort((a, b) => a.deltaVialesPeriodo - b.deltaVialesPeriodo);
+
+  const topSuben = subenList.slice(0, MOVIMIENTOS_TOP_LIMIT);
+  const topBajan = bajanList.slice(0, MOVIMIENTOS_TOP_LIMIT);
+
+  return {
+    suben: agruparMovimientos(topSuben, (a, b) => b.deltaVialesPeriodo - a.deltaVialesPeriodo),
+    bajan: agruparMovimientos(topBajan, (a, b) => a.deltaVialesPeriodo - b.deltaVialesPeriodo),
+    resumen: {
+      totalSuben: subenList.length,
+      totalBajan: bajanList.length,
+      mostrandoSuben: topSuben.length,
+      mostrandoBajan: topBajan.length,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
