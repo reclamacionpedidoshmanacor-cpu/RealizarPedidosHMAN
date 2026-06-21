@@ -371,21 +371,21 @@ function TopMedRow({ m, rank }: { m: TopMed; rank: number }) {
             )}
 
             {tab === 'chart' && (
-              m.temporalSemanal.length > 0 ? (
+              m.temporalMensual.length > 0 ? (
                 <ResponsiveContainer width="100%" height={160}>
-                  <ComposedChart data={m.temporalSemanal} margin={{ top: 8, right: 16, left: 0, bottom: 18 }}>
+                  <ComposedChart data={m.temporalMensual} margin={{ top: 8, right: 16, left: 0, bottom: 18 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                     <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#94a3b8' }}
                       angle={-25} textAnchor="end" height={42} interval="preserveStartEnd" />
                     <YAxis tickFormatter={v => fmtEurShort(Number(v))} tick={{ fontSize: 10, fill: '#94a3b8' }} width={64} />
                     <Tooltip formatter={(v: unknown) => fmtEur(Number(v ?? 0))} />
-                    {/* Barras atenuadas + línea evolutiva que las une */}
+                    {/* Barras atenuadas + línea evolutiva que las une (gasto mensual) */}
                     <Bar dataKey="gasto" name="Gasto (€)" fill={accent} fillOpacity={0.28} radius={[3, 3, 0, 0]} />
                     <Line dataKey="gasto" name="Evolución" stroke={accent} strokeWidth={2}
                       dot={{ r: 2, fill: accent }} />
                   </ComposedChart>
                 </ResponsiveContainer>
-              ) : <p className="text-xs text-slate-400">Sin datos en el período reciente.</p>
+              ) : <p className="text-xs text-slate-400">Sin datos en el período.</p>
             )}
           </td>
         </tr>
@@ -547,8 +547,8 @@ function GrupoDetallePanel({ gd }: { gd: GrupoDetalle }) {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <TemporalChart data={gd.temporalHistorico} title="Evolución mensual histórica" color={c.chart} />
-        <TemporalChart data={gd.temporalReciente}  title="Detalle semanal — período reciente" color={c.chart + 'cc'} />
+        <TemporalChart data={gd.temporalHistorico} title="Evolución mensual (histórico fiable)" color={c.chart} />
+        <TemporalChart data={gd.temporalReciente}  title="Detalle semanal (semanas reales)" color={c.chart + 'cc'} />
       </div>
 
       <TopProtocolosTable data={gd.topProtocolos} />
@@ -850,12 +850,12 @@ export default function AnalisisPage() {
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <TemporalChart
                   data={datos.temporalHistorico}
-                  title={`Evolución mensual histórica — ${scopeLabel(servicio)}`}
+                  title={`Evolución mensual (histórico fiable) — ${scopeLabel(servicio)}`}
                   color={scopeColor(servicio)}
                 />
                 <TemporalChart
                   data={datos.temporalReciente}
-                  title={`Detalle semanal reciente — ${scopeLabel(servicio)}`}
+                  title={`Detalle semanal (semanas reales) — ${scopeLabel(servicio)}`}
                   color={scopeColor(servicio)}
                 />
               </div>

@@ -6,6 +6,23 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 
 ---
 
+## [0.3.4] — 21 jun 2026 *(Análisis — YoY no solapado y series mensual/semanal)*
+
+### Corregido
+- **YoY inflado por solapamiento**: con períodos de varios años la variación "vs año
+  anterior" comparaba ventanas que se solapaban (ej. +78,6%). Ahora todos los YoY usan
+  **últimos 12 meses vs 12 meses anteriores** (`getYoyRolling`), por grupo y por CN.
+- **Histórico mensual fiable + reciente semanal real**: nueva constante `SEMANA_REAL_DESDE`
+  (2026-06-01). Antes → mensual; después → semanal real. La evolución de cada medicamento
+  pasa a ser mensual (fiable en todo el histórico).
+
+### Backend
+- `getYoyRolling(area)` y helpers `yoyDeGrupos`/`yoyMapByCn`.
+- Se elimina la query de "mismo período año anterior" en `getAnalisisDatos`.
+- `buildTopMeds` → `temporalMensual`; `computeGrupoDetalle` recibe YoY ya calculado.
+
+---
+
 ## [0.3.3] — 21 jun 2026 *(Análisis — alcance Total, YoY mismo-período)*
 
 ### Corregido

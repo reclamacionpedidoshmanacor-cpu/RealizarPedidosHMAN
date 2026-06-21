@@ -4,6 +4,36 @@ Historial de cambios del proyecto ordenado del más reciente al más antiguo.
 
 ---
 
+## [Unreleased] — 21 jun 2026 (v4)
+
+### Pestaña Análisis — YoY corregido y series mensual/semanal fiables
+
+#### Correcciones críticas
+- **YoY ya no se infla por solapamiento de períodos**. Antes, con el preset por
+  defecto "2 años", la variación "vs año anterior" comparaba el período seleccionado
+  (2,5 años) contra el mismo período desplazado un año, que **se solapaba** y daba
+  cifras absurdas (ej. Oncología +78,6%). Ahora todos los YoY (KPI de alcance,
+  tarjetas de grupo y medicamentos) usan **ventanas móviles no solapadas**:
+  últimos 12 meses vs los 12 meses anteriores (`getYoyRolling`), por grupo y por CN.
+- **Histórico por meses, evolución reciente por semanas**: el dato semanal previo a
+  junio 2026 era una estimación; el fiable es el mensual. Se añade la constante
+  `SEMANA_REAL_DESDE` (2026-06-01):
+  - Antes de esa fecha → agregación y visualización **mensual** (correcta).
+  - A partir de esa fecha → **semanas reales**.
+  El gráfico "Evolución de medicamento" pasa a ser **mensual** (fiable en todo el
+  histórico); los gráficos agregados mantienen el doble panel (mensual histórico +
+  semanal reciente) con títulos que indican el origen del dato.
+
+#### Backend
+- `getYoyRolling(area)`: gasto de los últimos 12m y de los 12m anteriores por grupo
+  y por medicamento, para un YoY robusto y no solapado.
+- `getAnalisisDatos`: elimina la query de "mismo período año anterior" (que causaba
+  el solapamiento); el YoY de KPIs/tarjetas/medicamentos sale de `getYoyRolling`.
+- `buildTopMeds`: serie `temporalMensual` (sustituye a la semanal) y YoY por mapa CN.
+- `computeGrupoDetalle`: recibe el YoY del grupo y el mapa CN→YoY ya calculados.
+
+---
+
 ## [Unreleased] — 21 jun 2026 (v3)
 
 ### Pestaña Análisis — Alcance "Total", YoY mismo-período y refinamientos
