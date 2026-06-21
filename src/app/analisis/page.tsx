@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ResponsiveContainer, ComposedChart, BarChart, Bar, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
@@ -20,7 +20,7 @@ import type {
 import { computeYoy } from '@/lib/analisis-neon';
 
 // ---------------------------------------------------------------------------
-// Helpers de formato
+// Formato
 // ---------------------------------------------------------------------------
 function fmtEur(n: number): string {
   return n.toLocaleString('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 });
@@ -34,48 +34,60 @@ function fmtDate(iso: string): string {
   return `${d}/${m}/${y}`;
 }
 
-const NOW = new Date();
-const THIS_YEAR = NOW.getFullYear();
-
-function preset(months: number): { desde: string; hasta: string } {
-  const d = new Date(); d.setMonth(d.getMonth() - months);
-  return { desde: d.toISOString().slice(0, 10), hasta: NOW.toISOString().slice(0, 10) };
-}
-const PRESETS: { label: string; desde: string; hasta: string }[] = [
-  { label: '3 meses',    ...preset(3)  },
-  { label: '6 meses',    ...preset(6)  },
-  { label: 'Año actual', desde: `${THIS_YEAR}-01-01`,     hasta: NOW.toISOString().slice(0, 10) },
-  { label: 'Año ant.',   desde: `${THIS_YEAR - 1}-01-01`, hasta: `${THIS_YEAR - 1}-12-31` },
-  { label: '2 años',     ...preset(24) },
-];
-
-function defaultDesde(): string {
-  const d = new Date(); d.setFullYear(d.getFullYear() - 2); d.setMonth(0); d.setDate(1);
-  return d.toISOString().slice(0, 10);
-}
-function defaultHasta(): string { return NOW.toISOString().slice(0, 10); }
+// ---------------------------------------------------------------------------
+// Colores de servicio
+// ---------------------------------------------------------------------------
+const SERVICIO_COLORS: Record<Servicio, string> = {
+  'oncologia-solida': '#0f766e', // teal-700
+  'hematologia':      '#7c3aed', // violet-700
+};
+const SERVICIO_LABELS: Record<Servicio, string> = {
+  'oncologia-solida': 'Oncología sólida',
+  'hematologia':      'Hematología',
+};
 
 // ---------------------------------------------------------------------------
-// YoY badge (semáforo)
+// Presets de período
+// ---------------------------------------------------------------------------
+const NOW      = new Date();
+const THIS_YEAR = NOW.getFullYear();
+
+function presetDesde(months: number): string {
+  const d = new Date(); d.setMonth(d.getMonth() - months);
+  return d.toISOString().slice(0, 10);
+}
+const PRESETS: { label: string; desde: string; hasta: string }[] = [
+  { label: '3 meses',  desde: presetDesde(3),  hasta: NOW.toISOString().slice(0, 10) },
+  { label: '6 meses',  desde: presetDesde(6),  hasta: NOW.toISOString().slice(0, 10) },
+  { label: 'Año actual',  desde: `${THIS_YEAR}-01-01`,     hasta: NOW.toISOString().slice(0, 10) },
+  { label: 'Año anterior', desde: `${THIS_YEAR - 1}-01-01`, hasta: `${THIS_YEAR - 1}-12-31` },
+  { label: '2 años',  desde: `${THIS_YEAR - 2}-01-01`, hasta: NOW.toISOString().slice(0, 10) },
+];
+
+function defaultDesde() { return `${THIS_YEAR - 2}-01-01`; }
+function defaultHasta() { return NOW.toISOString().slice(0, 10); }
+
+// ---------------------------------------------------------------------------
+// Badge YoY (semáforo: bajar es bueno para gasto)
 // ---------------------------------------------------------------------------
 function YoyBadge({ pct }: { pct: number | null }) {
   if (pct === null) return <span className="text-[10px] text-slate-400">sin dato</span>;
   const down = pct < 0;
   const high = Math.abs(pct) > 10;
-  // Para gasto: bajar es bueno (emerald), subir mucho es malo (red)
-  const cls  = down ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
-    : high ? 'bg-red-50 text-red-700 ring-red-200'
+  const cls  = down
+    ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+    : high
+    ? 'bg-red-50 text-red-700 ring-red-200'
     : 'bg-orange-50 text-orange-700 ring-orange-200';
-  const arrow = down ? '▼' : '▲';
   return (
     <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ${cls}`}>
-      {arrow} {Math.abs(pct).toFixed(1)}% vs año ant.
+      {down ? '▼' : '▲'} {Math.abs(pct).toFixed(1)}% vs año ant.
     </span>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Mini barras anuales (dentro de tarjeta de grupo)
+// Mini barras anuales dentro de las tarjetas de grupo
 // ---------------------------------------------------------------------------
 function MiniAnualBars({ data, color }: { data: { anio: number; gasto: number }[]; color: string }) {
   if (!data.length) return null;
@@ -96,12 +108,14 @@ function MiniAnualBars({ data, color }: { data: { anio: number; gasto: number }[
 // ---------------------------------------------------------------------------
 // KPI card
 // ---------------------------------------------------------------------------
-function KpiCard({ label, value, sub, highlight }: { label: string; value: string; sub?: string; highlight?: boolean }) {
+function KpiCard({ label, value, sub, highlight }: {
+  label: string; value: string; sub?: string; highlight?: boolean;
+}) {
   return (
     <div className={`rounded-xl border px-5 py-4 shadow-sm ${highlight ? 'border-teal-200 bg-teal-50' : 'border-slate-200 bg-white'}`}>
       <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">{label}</p>
       <p className={`mt-1 text-2xl font-bold tabular-nums ${highlight ? 'text-teal-800' : 'text-slate-800'}`}>{value}</p>
-      {sub && <p className="mt-0.5 text-xs text-slate-500">{sub}</p>}
+      {sub && <p className="mt-0.5 text-xs text-slate-500 leading-tight">{sub}</p>}
     </div>
   );
 }
@@ -117,20 +131,110 @@ function GrupoCardUI({ g, selected, onClick }: { g: GrupoCard; selected: boolean
         selected ? `${c.bg} ring-2 ${c.ring} shadow-md` : 'border-slate-200 bg-white hover:shadow-md hover:border-slate-300',
       ].join(' ')}>
       <div className="absolute right-2 top-2"><YoyBadge pct={g.variacionYoy} /></div>
-      <p className={`text-sm font-bold pr-20 ${selected ? c.text : 'text-slate-700'}`}>{g.label}</p>
+      <p className={`text-sm font-bold pr-20 leading-tight ${selected ? c.text : 'text-slate-700'}`}>{g.label}</p>
       <p className="mt-1.5 text-xl font-bold text-slate-800 tabular-nums">{fmtEur(g.totalGasto)}</p>
       <div className="mt-2 h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
         <div className="h-full rounded-full transition-all"
           style={{ width: `${Math.min(g.pctGasto, 100)}%`, backgroundColor: c.chart }} />
       </div>
-      <p className="mt-1 text-[10px] text-slate-400">{Math.round(g.pctGasto * 10) / 10}% del total</p>
+      <p className="mt-1 text-[10px] text-slate-400">{Math.round(g.pctGasto * 10) / 10}% del total área</p>
       <MiniAnualBars data={g.gastoPorAnio} color={c.chart} />
     </button>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Tabla Top 10 protocolos
+// Gráfico anual — siempre muestra el TOTAL; si hay servicio, apila su porción en color
+// ---------------------------------------------------------------------------
+type AnualChartItem = {
+  anio: number;
+  gastoResto: number;     // porción del servicio NO seleccionado (gris)
+  gastoServicio: number;  // porción del servicio seleccionado (color)
+  gastoTotal: number;     // total (para tooltip)
+  variacionYoy?: number | null;
+};
+
+function GastoAnualStackedChart({
+  items,
+  servicio,
+  title,
+}: {
+  items: AnualChartItem[];
+  servicio: Servicio;
+  title: string;
+}) {
+  if (!items.length) return null;
+  const currentYear   = NOW.getFullYear();
+  const svcColor      = SERVICIO_COLORS[servicio];
+  const svcLabel      = SERVICIO_LABELS[servicio];
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-center justify-between mb-1">
+        <h3 className="text-sm font-semibold text-slate-700">{title}</h3>
+        {items.some(d => d.anio === currentYear) && (
+          <span className="text-[10px] text-slate-400 italic">{currentYear}: datos parciales (año en curso)</span>
+        )}
+      </div>
+      <ResponsiveContainer width="100%" height={180}>
+        <BarChart data={items} margin={{ top: 4, right: 16, left: 8, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+          <XAxis dataKey="anio" tick={{ fontSize: 11, fill: '#64748b' }} />
+          <YAxis tickFormatter={v => fmtEur(Number(v))} tick={{ fontSize: 10, fill: '#94a3b8' }} width={78} />
+          <Tooltip
+            content={({ active, payload }) => {
+              if (!active || !payload?.length) return null;
+              const d = payload[0]!.payload as AnualChartItem;
+              const pct = d.gastoTotal > 0 ? Math.round((d.gastoServicio / d.gastoTotal) * 100) : 0;
+              return (
+                <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-lg text-xs space-y-0.5">
+                  <p className="font-bold text-slate-800">
+                    {d.anio}{d.anio === currentYear ? ' (año en curso)' : ''}
+                  </p>
+                  <p className="text-slate-600">Total: <span className="font-semibold">{fmtEur(d.gastoTotal)}</span></p>
+                  {d.gastoServicio > 0 && (
+                    <p style={{ color: svcColor }}>
+                      {svcLabel}: <span className="font-semibold">{fmtEur(d.gastoServicio)}</span> ({pct}%)
+                    </p>
+                  )}
+                  {d.variacionYoy !== null && d.variacionYoy !== undefined && (
+                    <p className={`font-semibold mt-1 ${d.variacionYoy > 10 ? 'text-red-600' : d.variacionYoy < 0 ? 'text-emerald-600' : 'text-orange-600'}`}>
+                      YoY total: {d.variacionYoy > 0 ? '+' : ''}{d.variacionYoy.toFixed(1)}%
+                      {d.anio === currentYear ? ' (parcial)' : ''}
+                    </p>
+                  )}
+                </div>
+              );
+            }}
+          />
+          <Legend wrapperStyle={{ fontSize: 11 }} />
+          {/* Barra inferior: resto del área (gris claro) */}
+          <Bar dataKey="gastoResto" name="Resto del área" stackId="g" fill="#e2e8f0" />
+          {/* Barra superior: porción del servicio seleccionado (color del servicio) */}
+          <Bar dataKey="gastoServicio" name={svcLabel} stackId="g" fill={svcColor} radius={[4, 4, 0, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
+      {/* Leyenda resumen por año */}
+      <div className="mt-2 flex flex-wrap gap-3 text-[10px] text-slate-500">
+        {items.map(d => (
+          <span key={d.anio}>
+            <span className="font-bold text-slate-600">{d.anio}{d.anio === currentYear ? '*' : ''}:</span>{' '}
+            <span className="font-semibold text-slate-800">{fmtEur(d.gastoTotal)}</span>
+            {d.variacionYoy !== undefined && d.variacionYoy !== null && (
+              <> · <YoyBadge pct={d.variacionYoy} /></>
+            )}
+          </span>
+        ))}
+        {items.some(d => d.anio === currentYear) && (
+          <span className="italic text-slate-400">* año en curso — YoY comparado sobre mismo período año anterior</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Top 10 protocolos
 // ---------------------------------------------------------------------------
 function TopProtocolosTable({ data }: { data: TopProtocolo[] }) {
   if (!data.length) return null;
@@ -168,7 +272,7 @@ function TopProtocolosTable({ data }: { data: TopProtocolo[] }) {
 }
 
 // ---------------------------------------------------------------------------
-// Fila de Top 10 medicamentos — expandible con tabs (diagnóstico | evolución)
+// Top 10 medicamentos — expandible: pestaña diagnóstico | evolución semanal
 // ---------------------------------------------------------------------------
 function TopMedRow({ m, rank }: { m: TopMed; rank: number }) {
   const [open, setOpen] = useState(false);
@@ -192,72 +296,68 @@ function TopMedRow({ m, rank }: { m: TopMed; rank: number }) {
         <td className="px-3 py-2.5 text-right text-xs text-slate-500 tabular-nums">{fmtNum(m.totalViales)}</td>
         <td className="px-3 py-2.5 text-right text-xs text-slate-500 tabular-nums">{fmtEur(m.costePorPreparacion)}</td>
         <td className="px-3 py-2.5"><YoyBadge pct={m.variacionYoy} /></td>
-        <td className="px-3 py-2.5 text-xs text-slate-400">{open ? '▲' : '▼'}</td>
+        <td className="px-3 py-2.5 text-xs text-slate-400 select-none">{open ? '▲' : '▼'}</td>
       </tr>
       {open && (
         <tr>
-          <td colSpan={9} className="bg-slate-50 px-6 pb-4 pt-2">
-            {/* Tabs */}
+          <td colSpan={9} className="bg-slate-50/80 px-6 pb-4 pt-2">
             <div className="flex gap-2 mb-3">
-              <button onClick={(e) => { e.stopPropagation(); setTab('dx'); }}
-                className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors ${tab === 'dx' ? 'bg-slate-800 text-white' : 'border border-slate-200 text-slate-600 hover:bg-white'}`}>
-                Por diagnóstico / indicación
-              </button>
-              <button onClick={(e) => { e.stopPropagation(); setTab('chart'); }}
-                className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors ${tab === 'chart' ? 'bg-slate-800 text-white' : 'border border-slate-200 text-slate-600 hover:bg-white'}`}>
-                Evolución semanal
-              </button>
+              {(['dx', 'chart'] as const).map(t => (
+                <button key={t}
+                  onClick={e => { e.stopPropagation(); setTab(t); }}
+                  className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors ${tab === t ? 'bg-slate-800 text-white' : 'border border-slate-200 text-slate-600 hover:bg-white'}`}>
+                  {t === 'dx' ? 'Por diagnóstico / indicación' : 'Evolución semanal'}
+                </button>
+              ))}
             </div>
 
-            {tab === 'dx' && m.desgloseByDx.length > 0 && (
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-[10px] uppercase tracking-wide text-slate-400">
-                    <th className="text-left py-1 font-medium w-[35%]">Diagnóstico</th>
-                    <th className="text-left py-1 font-medium w-[30%]">Indicación</th>
-                    <th className="text-right py-1 font-medium w-[15%]">Preparaciones</th>
-                    <th className="text-right py-1 font-medium w-[20%]">Gasto</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {m.desgloseByDx.map((dx, i) => {
-                    const gc = GRUPO_COLORS[dx.grupo];
-                    return (
-                      <tr key={i} className="hover:bg-slate-100/50">
-                        <td className="py-1.5 pr-2">
-                          <div className="flex items-center gap-1.5">
-                            <span className={`inline-block rounded-full px-1.5 py-0.5 text-[9px] font-bold ring-1 ${gc.bg} ${gc.text} ${gc.ring}`}>
-                              {GRUPO_LABELS[dx.grupo]}
-                            </span>
-                            <span className="text-slate-700">{dx.diagnostico}</span>
-                          </div>
-                        </td>
-                        <td className="py-1.5 pr-2 text-slate-600">{dx.indicacion}</td>
-                        <td className="py-1.5 text-right text-slate-600 tabular-nums">{fmtNum(dx.preparaciones, 0)}</td>
-                        <td className="py-1.5 text-right font-semibold text-slate-800 tabular-nums">{fmtEur(dx.gasto)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
-            {tab === 'dx' && m.desgloseByDx.length === 0 && (
-              <p className="text-xs text-slate-400">Sin desglose disponible.</p>
+            {tab === 'dx' && (
+              m.desgloseByDx.length > 0 ? (
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-[10px] uppercase tracking-wide text-slate-400">
+                      <th className="text-left py-1 w-[38%]">Diagnóstico</th>
+                      <th className="text-left py-1 w-[30%]">Indicación</th>
+                      <th className="text-right py-1 w-[14%]">Prep.</th>
+                      <th className="text-right py-1 w-[18%]">Gasto</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {m.desgloseByDx.map((dx, i) => {
+                      const gc = GRUPO_COLORS[dx.grupo];
+                      return (
+                        <tr key={i} className="hover:bg-slate-100/50">
+                          <td className="py-1.5 pr-2">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className={`inline-block rounded-full px-1.5 py-0.5 text-[9px] font-bold ring-1 ${gc.bg} ${gc.text} ${gc.ring}`}>
+                                {GRUPO_LABELS[dx.grupo]}
+                              </span>
+                              <span className="text-slate-700">{dx.diagnostico}</span>
+                            </div>
+                          </td>
+                          <td className="py-1.5 pr-2 text-slate-600">{dx.indicacion}</td>
+                          <td className="py-1.5 text-right text-slate-600 tabular-nums">{fmtNum(dx.preparaciones, 0)}</td>
+                          <td className="py-1.5 text-right font-semibold text-slate-800 tabular-nums">{fmtEur(dx.gasto)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              ) : <p className="text-xs text-slate-400">Sin desglose disponible.</p>
             )}
 
-            {tab === 'chart' && m.temporalSemanal.length > 0 && (
-              <ResponsiveContainer width="100%" height={120}>
-                <ComposedChart data={m.temporalSemanal} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#94a3b8' }} />
-                  <YAxis tickFormatter={v => fmtEur(Number(v))} tick={{ fontSize: 10, fill: '#94a3b8' }} width={70} />
-                  <Tooltip formatter={(v: unknown) => fmtEur(Number(v ?? 0))} />
-                  <Bar dataKey="gasto" name="Gasto (€)" fill={c.chart} radius={[3, 3, 0, 0]} />
-                </ComposedChart>
-              </ResponsiveContainer>
-            )}
-            {tab === 'chart' && m.temporalSemanal.length === 0 && (
-              <p className="text-xs text-slate-400">Sin datos en el período reciente.</p>
+            {tab === 'chart' && (
+              m.temporalSemanal.length > 0 ? (
+                <ResponsiveContainer width="100%" height={120}>
+                  <ComposedChart data={m.temporalSemanal} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#94a3b8' }} />
+                    <YAxis tickFormatter={v => fmtEur(Number(v))} tick={{ fontSize: 10, fill: '#94a3b8' }} width={72} />
+                    <Tooltip formatter={(v: unknown) => fmtEur(Number(v ?? 0))} />
+                    <Bar dataKey="gasto" name="Gasto (€)" fill={c.chart} radius={[3, 3, 0, 0]} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              ) : <p className="text-xs text-slate-400">Sin datos en el período reciente.</p>
             )}
           </td>
         </tr>
@@ -267,7 +367,7 @@ function TopMedRow({ m, rank }: { m: TopMed; rank: number }) {
 }
 
 // ---------------------------------------------------------------------------
-// Acordeón: Diagnóstico → Indicación (cerrada) → Protocolo (expandible)
+// Acordeón jerárquico: Diagnóstico → Indicación (cerrada) → Protocolo → Medicamentos
 // ---------------------------------------------------------------------------
 function ProtocoloRow({ prot }: { prot: import('@/lib/analisis-neon').ProtocoloDetalle }) {
   const [open, setOpen] = useState(false);
@@ -276,11 +376,10 @@ function ProtocoloRow({ prot }: { prot: import('@/lib/analisis-neon').ProtocoloD
       <button onClick={() => setOpen(v => !v)}
         className="flex w-full items-center justify-between px-4 py-2.5 hover:bg-slate-50 transition-colors">
         <span className="text-xs font-bold text-slate-700 uppercase tracking-wide">{prot.protocolo}</span>
-        <div className="flex items-center gap-4 text-xs">
+        <div className="flex items-center gap-4 text-xs text-right">
           <span className="font-semibold text-slate-800">{fmtEur(prot.totalGasto)}</span>
           <span className="text-slate-500">{prot.totalPreparaciones} prep.</span>
           <span className="text-slate-400">{fmtEur(prot.costePorPreparacion)}/prep.</span>
-          <span className="text-slate-400">~{fmtNum(prot.mediaPackientesSemana)} pac./sem.</span>
           <span className="text-slate-400 ml-2">{open ? '▲' : '▼'}</span>
         </div>
       </button>
@@ -289,10 +388,10 @@ function ProtocoloRow({ prot }: { prot: import('@/lib/analisis-neon').ProtocoloD
           <table className="w-full text-xs">
             <thead>
               <tr className="text-[10px] uppercase tracking-wide text-slate-400">
-                <th className="text-left py-1 font-medium">Medicamento</th>
-                <th className="text-right py-1 font-medium w-24">Preparaciones</th>
-                <th className="text-right py-1 font-medium w-20">Viales</th>
-                <th className="text-right py-1 font-medium w-28">Gasto</th>
+                <th className="text-left py-1">Medicamento</th>
+                <th className="text-right py-1 w-24">Prep.</th>
+                <th className="text-right py-1 w-20">Viales</th>
+                <th className="text-right py-1 w-28">Gasto</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -315,7 +414,7 @@ function ProtocoloRow({ prot }: { prot: import('@/lib/analisis-neon').ProtocoloD
   );
 }
 
-// Indicación: empieza CERRADA para no sobrecargar la vista al abrir un diagnóstico
+// Indicación: empieza cerrada
 function IndicacionSection({ ind }: { ind: IndicacionDetalle }) {
   const [open, setOpen] = useState(false);
   return (
@@ -369,17 +468,15 @@ function DiagnosticoAccordion({ dx }: { dx: DiagnosticoDetalle }) {
 }
 
 // ---------------------------------------------------------------------------
-// Gráfico temporal
+// Gráfico temporal (histórico o semanal)
 // ---------------------------------------------------------------------------
-function TemporalChart({ data, title, color = '#1e3a5f' }: {
+function TemporalChart({ data, title, color = '#475569' }: {
   data: import('@/lib/analisis-neon').TemporalPoint[];
   title: string;
   color?: string;
 }) {
   if (!data.length) return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 px-6 py-8 text-center text-sm text-slate-400">
-      {title} — sin datos.
-    </div>
+    <div className="rounded-xl border border-slate-200 bg-slate-50 px-6 py-8 text-center text-sm text-slate-400">{title} — sin datos.</div>
   );
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -389,8 +486,12 @@ function TemporalChart({ data, title, color = '#1e3a5f' }: {
           <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
           <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#94a3b8' }} />
           <YAxis yAxisId="left" tick={{ fontSize: 10, fill: '#94a3b8' }} />
-          <YAxis yAxisId="right" orientation="right" tickFormatter={v => fmtEur(Number(v))} tick={{ fontSize: 10, fill: '#94a3b8' }} width={72} />
-          <Tooltip formatter={(v: unknown, n: unknown) => { const val = Number(v ?? 0); return n === 'Gasto (€)' ? fmtEur(val) : fmtNum(val, 0); }} />
+          <YAxis yAxisId="right" orientation="right" tickFormatter={v => fmtEur(Number(v))}
+            tick={{ fontSize: 10, fill: '#94a3b8' }} width={72} />
+          <Tooltip formatter={(v: unknown, n: unknown) => {
+            const val = Number(v ?? 0);
+            return n === 'Gasto (€)' ? fmtEur(val) : fmtNum(val, 0);
+          }} />
           <Legend wrapperStyle={{ fontSize: 11 }} />
           <Bar yAxisId="left" dataKey="preparaciones" name="Preparaciones" fill={color} fillOpacity={0.65} radius={[3, 3, 0, 0]} />
           <Line yAxisId="right" dataKey="gasto" name="Gasto (€)" stroke="#0d9488" strokeWidth={2} dot={false} />
@@ -401,95 +502,7 @@ function TemporalChart({ data, title, color = '#1e3a5f' }: {
 }
 
 // ---------------------------------------------------------------------------
-// Gráfico anual — dinámico según servicio seleccionado
-// ---------------------------------------------------------------------------
-type AnualItem = { anio: number; gasto: number; variacionYoy?: number | null; costePorPreparacion?: number };
-
-function computeAnualByServicio(grupos: GrupoCard[], servicio: Servicio): AnualItem[] {
-  const relevant = grupos.filter(g => gruposParaServicio(servicio).includes(g.grupo));
-  const yearMap  = new Map<number, number>();
-  for (const g of relevant) {
-    for (const ya of g.gastoPorAnio) yearMap.set(ya.anio, (yearMap.get(ya.anio) ?? 0) + ya.gasto);
-  }
-  const sorted = [...yearMap.entries()].sort(([a], [b]) => a - b);
-  return sorted.map(([anio, gasto], i) => ({
-    anio, gasto,
-    variacionYoy: i > 0 ? computeYoy(gasto, sorted[i - 1]![1]) : null,
-  }));
-}
-
-function GastoAnualChart({
-  data,
-  title,
-}: {
-  data: AnualItem[];
-  title: string;
-}) {
-  if (!data.length) return null;
-  const currentYear = new Date().getFullYear();
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center justify-between mb-1">
-        <h3 className="text-sm font-semibold text-slate-700">{title}</h3>
-        <span className="text-[10px] text-slate-400">
-          {data.some(d => d.anio === currentYear) && `${currentYear}: datos parciales (año en curso)`}
-        </span>
-      </div>
-      <ResponsiveContainer width="100%" height={170}>
-        <BarChart data={data} margin={{ top: 4, right: 16, left: 8, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-          <XAxis dataKey="anio" tick={{ fontSize: 11, fill: '#64748b' }} />
-          <YAxis tickFormatter={v => fmtEur(Number(v))} tick={{ fontSize: 10, fill: '#94a3b8' }} width={76} />
-          <Tooltip
-            content={({ active, payload }) => {
-              if (!active || !payload?.length) return null;
-              const d = payload[0]!.payload as AnualItem;
-              return (
-                <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-lg text-xs">
-                  <p className="font-bold text-slate-800 mb-1">
-                    {d.anio}{d.anio === currentYear ? ' (año en curso)' : ''}
-                  </p>
-                  <p className="text-slate-700">Gasto: <span className="font-semibold">{fmtEur(d.gasto)}</span></p>
-                  {d.variacionYoy !== null && d.variacionYoy !== undefined && (
-                    <p className={`mt-1 font-semibold ${d.variacionYoy > 10 ? 'text-red-600' : d.variacionYoy < 0 ? 'text-emerald-600' : 'text-orange-600'}`}>
-                      {d.variacionYoy > 0 ? '+' : ''}{d.variacionYoy.toFixed(1)}% vs año anterior
-                      {d.anio === currentYear ? ' (período parcial)' : ''}
-                    </p>
-                  )}
-                </div>
-              );
-            }}
-          />
-          <Bar dataKey="gasto" name="Gasto (€)" radius={[4, 4, 0, 0]}>
-            {data.map((d) => (
-              <rect key={d.anio}
-                fill={d.anio === currentYear ? '#94a3b8' :
-                      d.variacionYoy != null && d.variacionYoy > 10 ? '#ef4444' :
-                      d.variacionYoy != null && d.variacionYoy < 0 ? '#10b981' : '#1e3a5f'}
-              />
-            ))}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
-      {/* Leyenda compacta */}
-      <div className="mt-2 flex flex-wrap gap-3 text-[10px]">
-        {data.map(d => (
-          <div key={d.anio} className="flex items-center gap-1.5">
-            <span className="font-bold text-slate-600">{d.anio}{d.anio === currentYear ? '*' : ''}:</span>
-            <span className="text-slate-800 font-semibold">{fmtEur(d.gasto)}</span>
-            {d.variacionYoy !== undefined && <YoyBadge pct={d.variacionYoy ?? null} />}
-          </div>
-        ))}
-        {data.some(d => d.anio === currentYear) && (
-          <span className="text-slate-400 italic">* Año en curso — comparar con el mismo período del año anterior</span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Panel de detalle del grupo
+// Panel de detalle de grupo tumoral
 // ---------------------------------------------------------------------------
 function GrupoDetallePanel({ gd }: { gd: GrupoDetalle }) {
   const c = GRUPO_COLORS[gd.grupo];
@@ -497,39 +510,36 @@ function GrupoDetallePanel({ gd }: { gd: GrupoDetalle }) {
     <div className="space-y-5">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <KpiCard label="Gasto total" value={fmtEur(gd.kpis.totalGasto)} highlight />
-        <KpiCard label="Coste / preparación" value={fmtEur(gd.kpis.costePorPreparacion)} />
+        <KpiCard label="Coste / prep." value={fmtEur(gd.kpis.costePorPreparacion)} />
         <div className="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
           <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">vs año anterior</p>
           <div className="mt-2"><YoyBadge pct={gd.kpis.variacionYoy} /></div>
         </div>
-        <KpiCard label="Pac. est. / semana" value={fmtNum(gd.kpis.mediaPackientesSemana)} sub="Suma dispensaciones" />
+        <KpiCard label="Pac. est. / sem." value={fmtNum(gd.kpis.mediaPackientesSemana)} sub="Suma dispensaciones" />
       </div>
 
-      {/* Gráficos temporales */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <TemporalChart data={gd.temporalHistorico} title="Evolución mensual histórica (antes del período reciente)" color={c.chart} />
-        <TemporalChart data={gd.temporalReciente}  title="Detalle semanal — período reciente (últimas semanas)" color={c.chart + 'cc'} />
+        <TemporalChart data={gd.temporalHistorico} title="Evolución mensual histórica" color={c.chart} />
+        <TemporalChart data={gd.temporalReciente}  title="Detalle semanal — período reciente" color={c.chart + 'cc'} />
       </div>
 
       <TopProtocolosTable data={gd.topProtocolos} />
 
       {gd.topMedicamentos.length > 0 && (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-          <div className="px-5 py-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-slate-700">Top 10 medicamentos por gasto</h3>
-            <span className="text-xs text-slate-400">Haz clic para ver detalle</span>
+          <div className="px-5 py-3 border-b border-slate-100 bg-slate-50">
+            <h3 className="text-sm font-semibold text-slate-700">Top 10 medicamentos del grupo</h3>
           </div>
           <table className="w-full">
             <thead className="bg-slate-50/50">
               <tr className="text-[10px] uppercase tracking-wide text-slate-400">
-                <th className="px-3 py-2 text-left w-7">#</th>
+                <th className="px-3 py-2 w-7 text-left">#</th>
                 <th className="px-3 py-2 text-left">Medicamento</th>
                 <th className="px-3 py-2 text-right">Gasto</th>
                 <th className="px-3 py-2 text-right">Prep.</th>
                 <th className="px-3 py-2 text-right">Viales</th>
                 <th className="px-3 py-2 text-right">€/prep.</th>
                 <th className="px-3 py-2">YoY</th>
-                <th className="px-3 py-2 w-5" />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -545,7 +555,6 @@ function GrupoDetallePanel({ gd }: { gd: GrupoDetalle }) {
                   <td className="px-3 py-2.5 text-right text-xs text-slate-500 tabular-nums">{fmtNum(m.totalViales)}</td>
                   <td className="px-3 py-2.5 text-right text-xs text-slate-500 tabular-nums">{fmtEur(m.costePorPreparacion)}</td>
                   <td className="px-3 py-2.5"><YoyBadge pct={m.variacionYoy} /></td>
-                  <td className="px-3 py-2.5" />
                 </tr>
               ))}
             </tbody>
@@ -556,7 +565,7 @@ function GrupoDetallePanel({ gd }: { gd: GrupoDetalle }) {
       {gd.diagnosticos.length > 0 && (
         <div>
           <h3 className="text-sm font-semibold text-slate-700 mb-1">Diagnósticos — Indicaciones — Protocolos</h3>
-          <p className="text-xs text-slate-400 mb-3">Ordenados por gasto · despliega diagnóstico → indicación → protocolo</p>
+          <p className="text-xs text-slate-400 mb-3">Ordenados por gasto · clic para desplegar por niveles</p>
           <div className="space-y-2">
             {gd.diagnosticos.map(dx => <DiagnosticoAccordion key={dx.diagnostico} dx={dx} />)}
           </div>
@@ -570,63 +579,75 @@ function GrupoDetallePanel({ gd }: { gd: GrupoDetalle }) {
 // Página principal
 // ---------------------------------------------------------------------------
 export default function AnalisisPage() {
-  const [servicio, setServicio]               = useState<Servicio>('oncologia-solida');
-  const [grupoSeleccionado, setGrupoSel]      = useState<DiagnosticoGrupo | null>(null);
-  const [desde, setDesde]                     = useState(defaultDesde());
-  const [hasta, setHasta]                     = useState(defaultHasta());
-  const [activePreset, setActivePreset]       = useState<string | null>('2 años');
-  const [datos, setDatos]                     = useState<AnalisisDatos | null>(null);
-  const [loading, setLoading]                 = useState(false);
-  const [error, setError]                     = useState<string | null>(null);
+  const [servicio, setServicio]         = useState<Servicio>('oncologia-solida');
+  const [grupoSel, setGrupoSel]         = useState<DiagnosticoGrupo | null>(null);
+  const [desde, setDesde]               = useState(defaultDesde());
+  const [hasta, setHasta]               = useState(defaultHasta());
+  const [activePreset, setActivePreset] = useState<string | null>('2 años');
+  const [datos, setDatos]               = useState<AnalisisDatos | null>(null);
+  const [loading, setLoading]           = useState(false);
+  const [error, setError]               = useState<string | null>(null);
 
-  const fetchDatos = useCallback(async (grupo?: string | null) => {
+  // Auto-fetch reactivo: cualquier cambio de filtro dispara la petición
+  useEffect(() => {
+    let cancelled = false;
     setLoading(true); setError(null);
-    try {
-      const p = new URLSearchParams({ desde, hasta });
-      if (grupo) p.set('grupo', grupo);
-      const res = await fetch(`/api/analisis/datos?${p}`);
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({ error: res.statusText }));
-        throw new Error((j as { error?: string }).error ?? 'Error del servidor');
-      }
-      setDatos(await res.json());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Error inesperado');
-    } finally {
-      setLoading(false);
-    }
-  }, [desde, hasta]);
+    const p = new URLSearchParams({ desde, hasta, servicio });
+    if (grupoSel) p.set('grupo', grupoSel);
+    fetch(`/api/analisis/datos?${p}`)
+      .then(r => r.ok ? r.json() : r.json().then((j: { error?: string }) => Promise.reject(j.error ?? 'Error')))
+      .then(d => { if (!cancelled) setDatos(d); })
+      .catch(e => { if (!cancelled) setError(String(e)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [desde, hasta, servicio, grupoSel]);
 
-  useEffect(() => { fetchDatos(grupoSeleccionado); }, [fetchDatos]); // eslint-disable-line
-
+  // ── Handlers ──
   function handleSelectGrupo(g: DiagnosticoGrupo) {
-    const nuevo = grupoSeleccionado === g ? null : g;
-    setGrupoSel(nuevo);
-    fetchDatos(nuevo);
+    setGrupoSel(prev => prev === g ? null : g);
   }
-
+  function handleSetServicio(s: Servicio) {
+    setServicio(s);
+    setGrupoSel(null); // al cambiar de servicio, reseteamos grupo
+  }
   function applyPreset(p: { label: string; desde: string; hasta: string }) {
     setDesde(p.desde); setHasta(p.hasta); setActivePreset(p.label);
   }
-
   function handleExportar() {
-    const p = new URLSearchParams({ desde, hasta });
-    if (grupoSeleccionado) p.set('grupo', grupoSeleccionado);
+    const p = new URLSearchParams({ desde, hasta, servicio });
+    if (grupoSel) p.set('grupo', grupoSel);
     window.open(`/api/analisis/exportar?${p}`, '_blank');
   }
 
-  // Gráfico anual: global cuando no hay servicio diferenciado, o filtrado por servicio
-  const anualData: AnualItem[] = datos
-    ? (servicio ? computeAnualByServicio(datos.grupos, servicio) : datos.gastoPorAnio)
-    : [];
-  // Fallback: si el servicio no tiene datos en el período, usar global
-  const anualDataFinal = anualData.length > 0 ? anualData : (datos?.gastoPorAnio ?? []);
+  // ── Datos derivados para el gráfico anual apilado ──
+  const anualChartItems: AnualChartItem[] = (() => {
+    if (!datos) return [];
+    // Total por año filtrado al período seleccionado (sumando todos los grupos)
+    const totalByYear = new Map<number, number>();
+    const svcByYear   = new Map<number, number>();
+    const yoyByYear   = new Map<number, number | null>();
 
-  const anualTitle = servicio === 'hematologia'
-    ? 'Gasto histórico anual — Hematología'
-    : servicio === 'oncologia-solida'
-    ? 'Gasto histórico anual — Oncología sólida'
-    : 'Gasto histórico anual — Oncología + Hematología';
+    for (const g of datos.grupos) {
+      const esSvc = gruposParaServicio(servicio).includes(g.grupo);
+      for (const ya of g.gastoPorAnio) {
+        totalByYear.set(ya.anio, (totalByYear.get(ya.anio) ?? 0) + ya.gasto);
+        if (esSvc) svcByYear.set(ya.anio, (svcByYear.get(ya.anio) ?? 0) + ya.gasto);
+      }
+    }
+    // YoY del total por año (de la query global de la BD)
+    for (const d of datos.gastoPorAnio) yoyByYear.set(d.anio, d.variacionYoy ?? null);
+
+    return [...totalByYear.keys()].sort().map(anio => {
+      const tot = totalByYear.get(anio) ?? 0;
+      const svc = svcByYear.get(anio)   ?? 0;
+      return { anio, gastoTotal: tot, gastoServicio: svc, gastoResto: tot - svc, variacionYoy: yoyByYear.get(anio) ?? null };
+    });
+  })();
+
+  // Gasto del servicio seleccionado en el período (para sub-label del KPI)
+  const servicioGasto = datos
+    ? datos.grupos.filter(g => gruposParaServicio(servicio).includes(g.grupo)).reduce((s, g) => s + g.totalGasto, 0)
+    : 0;
 
   const gruposDelServicio = gruposParaServicio(servicio);
   const tarjetas          = (datos?.grupos ?? []).filter(g => gruposDelServicio.includes(g.grupo));
@@ -634,14 +655,12 @@ export default function AnalisisPage() {
   return (
     <div className="w-full px-4 sm:px-6 lg:px-8 py-6 space-y-6">
 
-      {/* ── Cabecera ─────────────────────────────────────────────────────── */}
+      {/* ── Cabecera ──────────────────────────────────────────────────────── */}
       <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-slate-800">Análisis farmaoeconómico</h1>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Medicamentos preparados en Farmacia · <strong>Oncología + Hematología</strong>
-            </p>
+            <p className="text-xs text-slate-500 mt-0.5">Medicamentos preparados en Farmacia · Oncología + Hematología</p>
           </div>
           <button onClick={handleExportar} disabled={!datos}
             className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-40 transition-colors">
@@ -652,13 +671,11 @@ export default function AnalisisPage() {
           </button>
         </div>
 
-        {/* Badges de período rápido + selector manual */}
+        {/* Badges de período + selector manual */}
         <div className="flex flex-wrap items-center gap-2">
           {PRESETS.map(p => (
-            <button key={p.label}
-              onClick={() => applyPreset(p)}
-              className={[
-                'rounded-full px-3 py-1 text-xs font-semibold transition-colors border',
+            <button key={p.label} onClick={() => applyPreset(p)}
+              className={['rounded-full px-3 py-1 text-xs font-semibold transition-colors border',
                 activePreset === p.label
                   ? 'bg-teal-600 text-white border-teal-600'
                   : 'border-slate-200 text-slate-600 hover:bg-slate-50',
@@ -674,10 +691,6 @@ export default function AnalisisPage() {
             <input type="date" value={hasta}
               onChange={e => { setHasta(e.target.value); setActivePreset(null); }}
               className="rounded-lg border border-slate-200 px-2 py-1 text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-400" />
-            <button onClick={() => fetchDatos(grupoSeleccionado)}
-              className="rounded-lg bg-teal-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-teal-700 transition-colors">
-              Aplicar
-            </button>
           </div>
         </div>
       </div>
@@ -694,12 +707,37 @@ export default function AnalisisPage() {
 
       {!loading && datos && (
         <>
-          {/* ── Gráfico anual (dinámico por servicio) ───────────────────── */}
-          <GastoAnualChart data={anualDataFinal} title={anualTitle} />
+          {/* ── Selector de servicio ──────────────────────────────────────── */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Servicio:</span>
+            {(['oncologia-solida', 'hematologia'] as Servicio[]).map(s => (
+              <button key={s} onClick={() => handleSetServicio(s)}
+                className={['rounded-lg px-4 py-1.5 text-sm font-semibold transition-colors',
+                  servicio === s
+                    ? 'text-white shadow'
+                    : 'border border-slate-200 text-slate-600 hover:bg-slate-50',
+                ].join(' ')}
+                style={servicio === s ? { backgroundColor: SERVICIO_COLORS[s] } : {}}>
+                {SERVICIO_LABELS[s]}
+              </button>
+            ))}
+          </div>
 
-          {/* ── KPIs globales ───────────────────────────────────────────── */}
+          {/* ── Gráfico anual apilado (total siempre visible, servicio resaltado) ── */}
+          <GastoAnualStackedChart
+            items={anualChartItems}
+            servicio={servicio}
+            title={`Gasto histórico anual — total área · porción ${SERVICIO_LABELS[servicio]} resaltada`}
+          />
+
+          {/* ── KPIs globales ─────────────────────────────────────────────── */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-            <KpiCard label="Gasto período" value={fmtEur(datos.kpis.totalGasto)} highlight />
+            <KpiCard
+              label="Gasto período (total)"
+              value={fmtEur(datos.kpis.totalGasto)}
+              sub={`${fmtEur(servicioGasto)} en ${SERVICIO_LABELS[servicio]} (${datos.kpis.totalGasto > 0 ? Math.round(servicioGasto / datos.kpis.totalGasto * 100) : 0}%)`}
+              highlight
+            />
             <KpiCard label="€ / preparación" value={fmtEur(datos.kpis.costePorPreparacion)} />
             <div className="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
               <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">vs año anterior</p>
@@ -710,33 +748,19 @@ export default function AnalisisPage() {
             <KpiCard label="Medicamentos" value={String(datos.kpis.medicamentosDistintos)} />
           </div>
 
-          {/* ── Selector de servicio ────────────────────────────────────── */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Servicio:</span>
-            {(['oncologia-solida', 'hematologia'] as Servicio[]).map(s => (
-              <button key={s}
-                onClick={() => { setServicio(s); setGrupoSel(null); }}
-                className={['rounded-lg px-4 py-1.5 text-sm font-semibold transition-colors',
-                  servicio === s ? 'bg-slate-800 text-white shadow' : 'border border-slate-200 text-slate-600 hover:bg-slate-50',
-                ].join(' ')}>
-                {s === 'oncologia-solida' ? 'Oncología sólida' : 'Hematología'}
-              </button>
-            ))}
-          </div>
-
-          {/* ── Tarjetas de grupo ────────────────────────────────────────── */}
+          {/* ── Tarjetas de grupo ─────────────────────────────────────────── */}
           {tarjetas.length > 0 ? (
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">
                 Grupos tumorales — {fmtDate(desde)} al {fmtDate(hasta)}
-                {grupoSeleccionado && (
-                  <button onClick={() => { setGrupoSel(null); fetchDatos(null); }}
-                    className="ml-3 text-teal-600 hover:underline normal-case">✕ Ver todos</button>
+                {grupoSel && (
+                  <button onClick={() => setGrupoSel(null)}
+                    className="ml-3 text-teal-600 hover:underline normal-case font-normal">✕ Ver todos</button>
                 )}
               </p>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
                 {tarjetas.map(g => (
-                  <GrupoCardUI key={g.grupo} g={g} selected={grupoSeleccionado === g.grupo} onClick={() => handleSelectGrupo(g.grupo)} />
+                  <GrupoCardUI key={g.grupo} g={g} selected={grupoSel === g.grupo} onClick={() => handleSelectGrupo(g.grupo)} />
                 ))}
               </div>
             </div>
@@ -746,13 +770,13 @@ export default function AnalisisPage() {
             </div>
           )}
 
-          {/* ── Detalle de grupo ─────────────────────────────────────────── */}
-          {grupoSeleccionado && datos.grupoDetalle && (
+          {/* ── Detalle de grupo tumoral ──────────────────────────────────── */}
+          {grupoSel && datos.grupoDetalle && (
             <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-5">
               <div className="flex items-center justify-between mb-5">
                 <div className="flex items-center gap-2">
-                  <span className={`rounded-full px-3 py-1 text-xs font-bold ring-1 ${GRUPO_COLORS[grupoSeleccionado].bg} ${GRUPO_COLORS[grupoSeleccionado].text} ${GRUPO_COLORS[grupoSeleccionado].ring}`}>
-                    {GRUPO_LABELS[grupoSeleccionado]}
+                  <span className={`rounded-full px-3 py-1 text-xs font-bold ring-1 ${GRUPO_COLORS[grupoSel].bg} ${GRUPO_COLORS[grupoSel].text} ${GRUPO_COLORS[grupoSel].ring}`}>
+                    {GRUPO_LABELS[grupoSel]}
                   </span>
                   <h2 className="text-base font-bold text-slate-800">Análisis detallado</h2>
                 </div>
@@ -768,21 +792,23 @@ export default function AnalisisPage() {
             </div>
           )}
 
-          {/* ── Vista global (sin grupo) ─────────────────────────────────── */}
-          {!grupoSeleccionado && (
+          {/* ── Vista global del servicio (sin grupo específico seleccionado) ── */}
+          {!grupoSel && (
             <div className="space-y-5">
               <TopProtocolosTable data={datos.topProtocolos} />
 
               {datos.topMedicamentos.length > 0 && (
                 <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
                   <div className="px-5 py-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-slate-700">Top 10 medicamentos por gasto — global</h3>
-                    <span className="text-xs text-slate-400">Haz clic para ver detalle por diagnóstico o evolución</span>
+                    <h3 className="text-sm font-semibold text-slate-700">
+                      Top 10 medicamentos — {SERVICIO_LABELS[servicio]}
+                    </h3>
+                    <span className="text-xs text-slate-400">Clic para ver detalle por diagnóstico o evolución</span>
                   </div>
                   <table className="w-full">
                     <thead className="bg-slate-50/50">
                       <tr className="text-[10px] uppercase tracking-wide text-slate-400">
-                        <th className="px-3 py-2 text-left w-7">#</th>
+                        <th className="px-3 py-2 w-7 text-left">#</th>
                         <th className="px-3 py-2 text-left">Medicamento</th>
                         <th className="px-3 py-2 text-left">Grupo</th>
                         <th className="px-3 py-2 text-right">Gasto</th>
@@ -801,8 +827,16 @@ export default function AnalisisPage() {
               )}
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <TemporalChart data={datos.temporalHistorico} title="Evolución mensual histórica (antes del período reciente)" />
-                <TemporalChart data={datos.temporalReciente}  title="Detalle semanal — período reciente (últimas semanas)" />
+                <TemporalChart
+                  data={datos.temporalHistorico}
+                  title={`Evolución mensual histórica — ${SERVICIO_LABELS[servicio]}`}
+                  color={SERVICIO_COLORS[servicio]}
+                />
+                <TemporalChart
+                  data={datos.temporalReciente}
+                  title={`Detalle semanal reciente — ${SERVICIO_LABELS[servicio]}`}
+                  color={SERVICIO_COLORS[servicio]}
+                />
               </div>
             </div>
           )}

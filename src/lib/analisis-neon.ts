@@ -2,8 +2,10 @@ import { neon } from '@neondatabase/serverless';
 import {
   classifyDiagnostico,
   type DiagnosticoGrupo,
+  type Servicio,
   GRUPO_LABELS,
   GRUPO_ORDER,
+  gruposParaServicio,
 } from './diagnostico-grupos';
 
 function getDb() {
@@ -558,6 +560,7 @@ export async function getAnalisisDatos(
   desde: string,
   hasta: string,
   grupoFiltro?: string | null,
+  servicioFiltro?: string | null,
 ): Promise<AnalisisDatos> {
   // Tres queries en paralelo: período actual, mismo período año anterior, gasto por año global
   const [classified, prevRows, gastoPorAnio] = await Promise.all([
@@ -602,7 +605,7 @@ export async function getAnalisisDatos(
       };
     });
 
-  // KPIs globales
+  // KPIs globales (siempre sobre TODO el período, sin filtrar por servicio)
   const totalPrep      = classified.reduce((s, r) => s + r.preparaciones, 0);
   const totalViales    = classified.reduce((s, r) => s + r.viales, 0);
   const totalPacientes = classified.reduce((s, r) => s + r.pacientes, 0);
@@ -618,8 +621,21 @@ export async function getAnalisisDatos(
     variacionYoy: computeYoy(totalGastoGlobal, prevTotalGasto),
   };
 
-  // Temporal dual global
-  const { historic, recent } = splitRows(classified);
+  // Filas filtradas por servicio para tops y temporal global (si no hay grupo específico)
+  // → cuando el usuario está en Hematología, los Top 10 son de hematología, no de toda el área
+  const rowsForTops: ClassifiedRow[] = (servicioFiltro && !grupoFiltro)
+    ? classified.filter(r => gruposParaServicio(servicioFiltro as Servicio).includes(r.grupo))
+    : classified;
+
+  const prevRowsForTops = (servicioFiltro && !grupoFiltro)
+    ? prevRows.filter(r => gruposParaServicio(servicioFiltro as Servicio).includes(r.grupo))
+    : prevRows;
+
+  const prevMedGastoFiltrado = new Map<string, number>();
+  for (const r of prevRowsForTops) prevMedGastoFiltrado.set(r.cn, (prevMedGastoFiltrado.get(r.cn) ?? 0) + r.gasto);
+
+  // Temporal dual: también filtrado por servicio para coherencia visual
+  const { historic, recent } = splitRows(rowsForTops);
 
   // Detalle de grupo
   let grupoDetalle: GrupoDetalle | null = null;
@@ -634,8 +650,8 @@ export async function getAnalisisDatos(
     kpis,
     gastoPorAnio,
     grupos,
-    topProtocolos:    buildTopProtocols(classified),
-    topMedicamentos:  buildTopMeds(classified, 10, prevMedGasto),
+    topProtocolos:     buildTopProtocols(rowsForTops),
+    topMedicamentos:   buildTopMeds(rowsForTops, 10, prevMedGastoFiltrado),
     temporalHistorico: buildMonthlyTemporal(historic),
     temporalReciente:  buildWeeklyTemporal(recent),
     grupoDetalle,

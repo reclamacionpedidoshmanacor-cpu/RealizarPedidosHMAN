@@ -28,12 +28,13 @@ export async function GET(req: NextRequest) {
   }
 
   const { searchParams } = new URL(req.url);
-  const desde = searchParams.get('desde') || defaultDesde();
-  const hasta  = searchParams.get('hasta')  || defaultHasta();
-  const grupo  = searchParams.get('grupo')  || null;
+  const desde    = searchParams.get('desde')    || defaultDesde();
+  const hasta    = searchParams.get('hasta')    || defaultHasta();
+  const grupo    = searchParams.get('grupo')    || null;
+  const servicio = searchParams.get('servicio') || null;
 
   try {
-    const datos = await getAnalisisDatos(session.area, desde, hasta, grupo);
+    const datos = await getAnalisisDatos(session.area, desde, hasta, grupo, servicio);
     return NextResponse.json(datos);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Error inesperado';

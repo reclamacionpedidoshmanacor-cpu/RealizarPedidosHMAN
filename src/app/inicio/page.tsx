@@ -4,7 +4,10 @@ import { useEffect, useState, useCallback } from 'react';
 import {
   ResponsiveContainer,
   LineChart,
+  ComposedChart,
+  Bar,
   Line,
+  ReferenceLine,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -69,6 +72,7 @@ type AlertaCompra = {
   tendenciaRelevante: boolean;
   coberturaSemanas: number | null;
   semaforo: 'rojo' | 'naranja' | 'verde' | 'azul' | 'gris';
+  sugerenciaCajas: number;
   semanasSeries: { semana: number; anio: number; label: string; viales: number; recepciones: number }[];
 };
 
@@ -116,75 +120,81 @@ function fmtCobertura(c: number | null): string {
 // ---------------------------------------------------------------------------
 // Componente: mini curva semanal de consumo (barras CSS puras, sin recharts)
 // ---------------------------------------------------------------------------
-function MiniCurvaSemanal({
+// ---------------------------------------------------------------------------
+// Componente: curva semanal recharts (barras consumo + línea recepciones)
+// ---------------------------------------------------------------------------
+function CurvaSemanalAlertas({
   series, promedioSemanal
 }: {
   series: AlertaCompra['semanasSeries'];
   promedioSemanal: number;
 }) {
   if (series.length === 0) return null;
-  const maxVal = Math.max(
-    ...series.map(s => Math.max(s.viales, s.recepciones)),
-    promedioSemanal * 1.2,
-    1
-  );
   const hasRecepciones = series.some(s => s.recepciones > 0);
 
   return (
-    <div className="mt-3">
-      <div className="flex items-center gap-3 mb-1">
-        <p className="text-[10px] text-slate-400 uppercase tracking-wide">Últimas 16 semanas</p>
-        <div className="flex items-center gap-2 ml-auto">
-          <span className="flex items-center gap-1 text-[9px] text-slate-400">
-            <span className="inline-block w-2 h-2 rounded-sm bg-teal-400" />Consumo
-          </span>
+    <div className="mt-4">
+      <p className="text-[10px] text-slate-400 mb-2 uppercase tracking-wide font-medium">
+        Últimas 8 semanas — Dispensaciones vs Recepciones
+      </p>
+      <ResponsiveContainer width="100%" height={180}>
+        <ComposedChart data={series} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+          <XAxis
+            dataKey="label"
+            tick={{ fontSize: 10, fill: '#94a3b8' }}
+            tickLine={false}
+            axisLine={false}
+          />
+          <YAxis
+            tick={{ fontSize: 10, fill: '#94a3b8' }}
+            tickLine={false}
+            axisLine={false}
+            width={30}
+            allowDecimals={false}
+          />
+          <Tooltip
+            contentStyle={{ fontSize: 11, borderRadius: 8, border: '1px solid #e2e8f0' }}
+            labelStyle={{ fontWeight: 600, color: '#334155', marginBottom: 4 }}
+            formatter={(value: unknown, name: unknown) => [
+              `${Number(value ?? 0).toFixed(0)} uds`,
+              String(name ?? ''),
+            ]}
+          />
+          <Legend
+            iconType="square"
+            iconSize={8}
+            wrapperStyle={{ fontSize: 11, paddingTop: 4 }}
+          />
+          <Bar
+            dataKey="viales"
+            name="Dispensado"
+            fill="#0d9488"
+            fillOpacity={0.85}
+            radius={[3, 3, 0, 0]}
+            maxBarSize={28}
+          />
           {hasRecepciones && (
-            <span className="flex items-center gap-1 text-[9px] text-slate-400">
-              <span className="inline-block w-2 h-2 rounded-sm bg-indigo-400" />Recepcionado
-            </span>
+            <Bar
+              dataKey="recepciones"
+              name="Recepcionado"
+              fill="#6366f1"
+              fillOpacity={0.7}
+              radius={[3, 3, 0, 0]}
+              maxBarSize={28}
+            />
           )}
-          <span className="flex items-center gap-1 text-[9px] text-indigo-400">
-            <span className="inline-block w-3 border-t border-dashed border-indigo-300" />Prom.
-          </span>
-        </div>
-      </div>
-      <div className="flex items-end gap-px h-16 relative">
-        <div
-          className="absolute inset-x-0 border-t border-dashed border-indigo-300 opacity-60"
-          style={{ bottom: `${(promedioSemanal / maxVal) * 100}%` }}
-        />
-        {series.map((s) => {
-          const hV = maxVal > 0 ? Math.max((s.viales / maxVal) * 100, s.viales > 0 ? 4 : 0) : 0;
-          const hR = maxVal > 0 ? Math.max((s.recepciones / maxVal) * 100, s.recepciones > 0 ? 4 : 0) : 0;
-          return (
-            <div
-              key={`${s.anio}-${s.semana}`}
-              className="relative group flex-1 flex flex-row items-end justify-center gap-px"
-            >
-              <div
-                className="flex-1 bg-teal-400 rounded-sm"
-                style={{ height: `${hV}%`, minHeight: s.viales > 0 ? '3px' : '0' }}
-              />
-              {hasRecepciones && (
-                <div
-                  className="flex-1 bg-indigo-400 rounded-sm opacity-80"
-                  style={{ height: `${hR}%`, minHeight: s.recepciones > 0 ? '3px' : '0' }}
-                />
-              )}
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:flex flex-col items-center z-10">
-                <div className="bg-slate-800 text-white text-[10px] rounded px-1.5 py-0.5 whitespace-nowrap shadow">
-                  {s.label}: {s.viales.toFixed(0)} disp.{s.recepciones > 0 ? ` / ${s.recepciones.toFixed(0)} rec.` : ''}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      <div className="flex justify-between text-[9px] text-slate-400 mt-0.5">
-        <span>{series[0]?.label ?? ''}</span>
-        <span className="text-indigo-400">— prom. {promedioSemanal.toFixed(1)}/sem</span>
-        <span>{series[series.length - 1]?.label ?? ''}</span>
-      </div>
+          {promedioSemanal > 0 && (
+            <ReferenceLine
+              y={promedioSemanal}
+              stroke="#6366f1"
+              strokeDasharray="4 2"
+              strokeWidth={1.5}
+              label={{ value: `prom. ${promedioSemanal.toFixed(1)}`, position: 'insideTopRight', fontSize: 9, fill: '#6366f1' }}
+            />
+          )}
+        </ComposedChart>
+      </ResponsiveContainer>
     </div>
   );
 }
@@ -276,7 +286,22 @@ function AlertaCard({ alerta, expanded, onToggle }: {
             <div>Stock máximo: <span className="font-medium text-slate-700">{fmtN(alerta.stockMaximo)} uds</span></div>
             <div>Múltiplo: <span className="font-medium text-slate-700">{alerta.unidadesPorCaja} uds/caja</span></div>
           </div>
-          <MiniCurvaSemanal series={alerta.semanasSeries} promedioSemanal={alerta.promedioSemanal} />
+
+          {alerta.sugerenciaCajas > 0 && (
+            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 flex items-center gap-2">
+              <span className="text-amber-500 text-base">📦</span>
+              <div>
+                <span className="text-xs font-semibold text-amber-800">
+                  Sugerencia: pedir {alerta.sugerenciaCajas} {alerta.sugerenciaCajas === 1 ? 'caja' : 'cajas'}
+                </span>
+                <span className="text-xs text-amber-600 ml-1">
+                  ({(alerta.sugerenciaCajas * alerta.unidadesPorCaja).toFixed(0)} uds · alcanzaría stock máximo de {fmtN(alerta.stockMaximo)} uds)
+                </span>
+              </div>
+            </div>
+          )}
+
+          <CurvaSemanalAlertas series={alerta.semanasSeries} promedioSemanal={alerta.promedioSemanal} />
         </div>
       )}
     </div>

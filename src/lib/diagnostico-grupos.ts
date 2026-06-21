@@ -48,7 +48,7 @@ export const GRUPO_LABELS: Record<DiagnosticoGrupo, string> = {
   mieloma:       'Mieloma',
   mielofibrosis: 'Mielofibrosis',
   pti:           'PTI',
-  'otros-hemato': 'Otros hematológicos',
+  'otros-hemato': 'Otros',
   otros:         'Otros',
 };
 

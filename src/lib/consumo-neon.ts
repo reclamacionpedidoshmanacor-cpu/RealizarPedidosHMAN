@@ -574,6 +574,7 @@ export type AlertaCompra = {
   tendenciaRelevante: boolean;
   coberturaSemanas: number | null; // null si sin consumo reciente
   semaforo: 'rojo' | 'naranja' | 'verde' | 'azul' | 'gris'; // gris = sin datos
+  sugerenciaCajas: number;         // cajas a pedir para llegar a stockMaximo
   semanasSeries: { semana: number; anio: number; label: string; viales: number; recepciones: number }[];
 };
 
@@ -650,7 +651,7 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
     WHERE ic.area = ${area}
       AND cr.cn = ANY(${cns})
-      AND cr.fecha > (CURRENT_DATE - INTERVAL '112 days')
+      AND cr.fecha > (CURRENT_DATE - INTERVAL '56 days')
       AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
     GROUP BY cr.cn, EXTRACT(ISOYEAR FROM cr.fecha), EXTRACT(WEEK FROM cr.fecha)
     ORDER BY cr.cn, iso_year, iso_week;
@@ -698,7 +699,11 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
       semaforo = tendenciaRelevante && !tendenciaCreciente ? 'azul' : 'verde';
     }
 
-    // Series semanales para la mini-gráfica
+    // Sugerencia: cajas a pedir para alcanzar el stock máximo
+    const unidadesNecesarias = Math.max(0, num(r.stock_maximo) - stockU);
+    const sugerenciaCajas = unidadesNecesarias > 0 ? Math.ceil(unidadesNecesarias / upx) : 0;
+
+    // Series semanales para la mini-gráfica (últimas 8 semanas)
     const series = seriesRows
       .filter(s => s.cn === r.cn)
       .map(s => ({
@@ -708,9 +713,9 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
         viales: Number(s.viales),
       }));
 
-    // Llenar huecos de semanas con viales = 0 para los últimas 16 semanas
+    // Llenar 8 semanas con viales = 0 cuando no hay dato
     const semanasFilled: AlertaCompra['semanasSeries'] = [];
-    for (let i = 15; i >= 0; i--) {
+    for (let i = 7; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i * 7);
       // Calcular semana ISO y año ISO
@@ -747,6 +752,7 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
       tendenciaRelevante,
       coberturaSemanas: cobertura,
       semaforo,
+      sugerenciaCajas,
       semanasSeries: semanasFilled,
     } satisfies AlertaCompra;
   }).sort((a, b) => {

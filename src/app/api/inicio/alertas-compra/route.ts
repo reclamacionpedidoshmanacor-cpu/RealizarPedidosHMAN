@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
 
     if (alertas.length > 0) {
       const cns = alertas.map(a => a.cn);
-      const recepcionesPorCn = await loadRecepcionesSemanalPorCns(cns, 112);
+      const recepcionesPorCn = await loadRecepcionesSemanalPorCns(cns, 56);
 
       for (const alerta of alertas) {
         const cnRecepciones = recepcionesPorCn[alerta.cn] ?? [];
