@@ -389,18 +389,21 @@ function buildTopMeds(
 ): TopMed[] {
   type MedAcc = {
     pa: string; nom: string; gasto: number; viales: number; prep: number;
-    grupo: DiagnosticoGrupo; weeks: Map<string, TemporalPoint>;
+    grupo: DiagnosticoGrupo;
+    weeks: Map<string, TemporalPoint>;
+    dxMap: Map<string, DxBreakdown>;
   };
   const medMap = new Map<string, MedAcc>();
 
   for (const r of rows) {
     let m = medMap.get(r.cn);
     if (!m) {
-      m = { pa: r.principio_activo, nom: r.nombre, gasto: 0, viales: 0, prep: 0, grupo: r.grupo, weeks: new Map() };
+      m = { pa: r.principio_activo, nom: r.nombre, gasto: 0, viales: 0, prep: 0, grupo: r.grupo, weeks: new Map(), dxMap: new Map() };
       medMap.set(r.cn, m);
     }
     m.gasto += r.gasto; m.viales += r.viales; m.prep += r.preparaciones;
 
+    // Temporal semanal
     const sem = r.semana_iso;
     const wk  = sem != null && sem > 0 ? `${r.anio}-W${sem}` : `${r.anio}-M${r.mes}`;
     const wp  = m.weeks.get(wk);
@@ -409,6 +412,15 @@ function buildTopMeds(
       wp.preparaciones += r.preparaciones; wp.pacientes += r.pacientes;
     } else {
       m.weeks.set(wk, { anio: r.anio, mes: r.mes, semana: sem, label: weekLabel(r.anio, sem, r.mes), viales: r.viales, gasto: r.gasto, preparaciones: r.preparaciones, pacientes: r.pacientes });
+    }
+
+    // Desglose por diagnóstico + indicación
+    const dxKey = `${r.diagnostico}||${r.indicacion}`;
+    const dx = m.dxMap.get(dxKey);
+    if (dx) {
+      dx.viales += r.viales; dx.gasto += r.gasto; dx.preparaciones += r.preparaciones;
+    } else {
+      m.dxMap.set(dxKey, { diagnostico: r.diagnostico || '—', indicacion: r.indicacion || '—', grupo: r.grupo, viales: r.viales, gasto: r.gasto, preparaciones: r.preparaciones });
     }
   }
 
@@ -424,7 +436,7 @@ function buildTopMeds(
       temporalSemanal: [...m.weeks.values()].sort((a, b) =>
         a.anio !== b.anio ? a.anio - b.anio : (a.semana ?? a.mes) - (b.semana ?? b.mes)
       ),
-      desgloseByDx: [],
+      desgloseByDx: [...m.dxMap.values()].sort((a, b) => b.gasto - a.gasto),
     }));
 }
 
