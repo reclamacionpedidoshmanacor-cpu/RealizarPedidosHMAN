@@ -50,7 +50,6 @@ export async function POST(req: NextRequest) {
     const rows = (await sql`
       SELECT cn FROM medicamentos
       WHERE area = ${session.area}
-        AND activo = TRUE
         AND (${soloVacios} = FALSE OR ppio_activo_cima IS NULL)
       ORDER BY cn;
     `) as Array<{ cn: string }>;
