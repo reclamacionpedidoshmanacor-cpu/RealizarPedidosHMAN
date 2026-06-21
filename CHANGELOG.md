@@ -4,6 +4,39 @@ Historial de cambios del proyecto ordenado del más reciente al más antiguo.
 
 ---
 
+## [Unreleased] — 21 jun 2026 (v3)
+
+### Pestaña Análisis — Alcance "Total", YoY mismo-período y refinamientos
+
+#### Correcciones
+- **YoY del año en curso correcto**: el gráfico de gasto anual ya no compara el año
+  en curso (parcial) contra el año anterior completo. Nueva query
+  `getGastoAnualPorServicio` calcula el YoY del año en curso contra el **mismo período**
+  (mismos meses) del año anterior. Tooltip y leyenda lo indican explícitamente.
+- **Top 10 medicamentos sin grupo en vista condensada**: la columna "Grupo" se elimina
+  de la tabla condensada (un medicamento es suma de varios grupos); el grupo solo
+  aparece al desplegar, en el desglose por diagnóstico.
+
+#### Nuevas funcionalidades
+- **Alcance "Total"**: nuevo botón junto a Oncología/Hematología para ver el gasto
+  total del área (Onco + Hemato) sin filtrar por servicio. Es el alcance por defecto.
+- **Etiquetas de gasto total sobre cada barra** del gráfico anual (formato compacto k€/M€).
+- **Gráfico de evolución de medicamento mejorado**: barras atenuadas + línea evolutiva
+  que las une, ejes con formato compacto y **año indicado en el eje X** (ej. `S23 Jun'25`)
+  para diferenciar semanas de distintos años.
+- **KPI "Gasto período" referido al alcance seleccionado**: muestra el gasto del servicio
+  (o total) con sub-etiqueta del % sobre el total del área. €/prep, YoY, preparaciones,
+  protocolos y medicamentos también se ajustan al alcance.
+
+#### Backend
+- `getGastoAnualPorServicio(area)`: gasto anual histórico desglosado por servicio con
+  YoY mismo-período para el año en curso.
+- `getAnalisisDatos`: KPIs ajustados al alcance (servicio o total) y nuevo campo
+  `gastoAnualServicio`. `weekLabel` incluye el año (2 dígitos).
+- Endpoint de exportación acepta el parámetro `servicio`.
+
+---
+
 ## [Unreleased] — 21 jun 2026 (v2)
 
 ### Pestaña Análisis — Coherencia de servicio y gráfico apilado

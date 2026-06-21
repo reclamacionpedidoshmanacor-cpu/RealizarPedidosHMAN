@@ -6,6 +6,22 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 
 ---
 
+## [0.3.3] — 21 jun 2026 *(Análisis — alcance Total, YoY mismo-período)*
+
+### Corregido
+- YoY del año en curso comparado contra el **mismo período** del año anterior
+  (no contra el año completo), vía `getGastoAnualPorServicio`.
+- Top 10 medicamentos: columna "Grupo" solo al desplegar (la fila condensada es un total).
+
+### Añadido/Mejorado
+- **Alcance "Total"** (Onco + Hemato) como nueva opción y por defecto.
+- Etiquetas de gasto total sobre cada barra del gráfico anual (k€/M€).
+- Gráfico de evolución de medicamento: barras atenuadas + línea evolutiva, año en el eje X.
+- KPI "Gasto período" referido al alcance seleccionado, con % sobre total del área.
+- `weekLabel` con año; exportación acepta parámetro `servicio`.
+
+---
+
 ## [0.3.2] — 21 jun 2026 *(Análisis — coherencia de servicio y gráfico apilado)*
 
 ### Corregido

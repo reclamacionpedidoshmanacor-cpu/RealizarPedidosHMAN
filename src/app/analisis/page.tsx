@@ -184,18 +184,14 @@ function GastoAnualStackedChart({
   const svcColor = scopeColor(servicio);
   const svcLabel = scopeLabel(servicio);
 
-  // Etiqueta con el GASTO TOTAL encima de cada barra (lee el total por índice)
-  const totalLabel = (props: { x?: number | string; y?: number | string; width?: number | string; index?: number }) => {
-    const { x = 0, y = 0, width = 0, index = 0 } = props;
-    const nx = Number(x); const ny = Number(y); const nw = Number(width);
-    const it = items[index];
-    if (!it || it.gastoTotal <= 0) return null;
-    return (
-      <text x={nx + nw / 2} y={ny - 5} textAnchor="middle" fontSize={10} fontWeight={700} fill="#334155">
-        {fmtEurShort(it.gastoTotal)}
-      </text>
-    );
-  };
+  // Etiqueta con el GASTO TOTAL encima de cada barra. Anidada en la barra superior
+  // de la pila: position="top" la sitúa en la cima del total y dataKey="gastoTotal"
+  // muestra el total del área (no la porción del servicio).
+  const totalLabel = (
+    <LabelList dataKey="gastoTotal" position="top"
+      formatter={(v: unknown) => fmtEurShort(Number(v ?? 0))}
+      fill="#334155" fontSize={10} fontWeight={700} />
+  );
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -237,13 +233,13 @@ function GastoAnualStackedChart({
           <Legend wrapperStyle={{ fontSize: 11 }} />
           {isTotal ? (
             <Bar dataKey="gastoTotal" name="Total área" fill={svcColor} radius={[4, 4, 0, 0]}>
-              <LabelList content={totalLabel} />
+              {totalLabel}
             </Bar>
           ) : (
             <>
               <Bar dataKey="gastoResto" name="Resto del área" stackId="g" fill="#e2e8f0" />
               <Bar dataKey="gastoServicio" name={svcLabel} stackId="g" fill={svcColor} radius={[4, 4, 0, 0]}>
-                <LabelList content={totalLabel} />
+                {totalLabel}
               </Bar>
             </>
           )}

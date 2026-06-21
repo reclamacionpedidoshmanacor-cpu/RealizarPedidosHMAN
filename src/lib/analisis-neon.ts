@@ -343,13 +343,15 @@ async function getGastoAnualPorServicio(area: string): Promise<GastoAnualServici
   const years = [...yearMap.keys()].sort((a, b) => a - b);
   if (!years.length) return [];
 
-  const currentYear = years[years.length - 1]!;
-  const curAcc      = yearMap.get(currentYear)!;
-  const lastMonth   = Math.max(...curAcc.porMes.keys());
+  // El año en curso es el año natural real (no simplemente el último con datos),
+  // para no marcar como "parcial" un año pasado que sí está completo.
+  const realYear  = new Date().getFullYear();
+  const curAcc    = yearMap.get(realYear);
+  const lastMonth = curAcc ? Math.max(...curAcc.porMes.keys()) : 12;
 
   return years.map(anio => {
     const acc     = yearMap.get(anio)!;
-    const esCurso = anio === currentYear;
+    const esCurso = anio === realYear;
 
     let prevComparable = 0;
     const prevAcc = yearMap.get(anio - 1);
