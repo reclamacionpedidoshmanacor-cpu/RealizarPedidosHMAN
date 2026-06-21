@@ -368,20 +368,17 @@ function GrupoAlertaSection({
   grupo,
   expandedCn,
   onToggleCn,
-  soloCriticas = false,
-  defaultOpen,
+  defaultOpen = true,
 }: {
   grupo: AlertaGrupoPrincipioActivo;
   expandedCn: string | null;
   onToggleCn: (cn: string) => void;
-  soloCriticas?: boolean;
   defaultOpen?: boolean;
 }) {
-  const [grupoOpen, setGrupoOpen] = useState(defaultOpen ?? grupo.presentaciones.length > 1);
+  const [grupoOpen, setGrupoOpen] = useState(defaultOpen);
 
   if (grupo.presentaciones.length === 1) {
     const a = grupo.presentaciones[0];
-    if (soloCriticas && a.semaforo !== 'rojo' && a.semaforo !== 'naranja') return null;
     return (
       <AlertaCard
         alerta={a}
@@ -390,12 +387,6 @@ function GrupoAlertaSection({
       />
     );
   }
-
-  const visibles = soloCriticas
-    ? grupo.presentaciones.filter(p => p.semaforo === 'rojo' || p.semaforo === 'naranja')
-    : grupo.presentaciones;
-
-  if (visibles.length === 0) return null;
 
   const cfg = SEMAFORO_CFG[grupo.resumenSemaforo.peor];
   const resumen = resumenSemaforoTexto(grupo.resumenSemaforo);
@@ -434,7 +425,7 @@ function GrupoAlertaSection({
 
       {grupoOpen && (
         <div className="p-2 space-y-2 border-t border-slate-100">
-          {visibles.map(a => (
+          {grupo.presentaciones.map(a => (
             <AlertaCard
               key={a.cn}
               alerta={a}
@@ -870,8 +861,6 @@ export default function InicioPage() {
                       grupo={g}
                       expandedCn={expandedAlertaCn}
                       onToggleCn={cn => setExpandedAlertaCn(prev => prev === cn ? null : cn)}
-                      soloCriticas
-                      defaultOpen
                     />
                   ))}
                 {alertasGrupos.every(g => g.resumenSemaforo.rojo === 0 && g.resumenSemaforo.naranja === 0) && (
