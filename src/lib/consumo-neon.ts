@@ -322,12 +322,8 @@ export type MovimientosConsumoResult = {
   resumen: {
     totalSuben: number;
     totalBajan: number;
-    mostrandoSuben: number;
-    mostrandoBajan: number;
   };
 };
-
-const MOVIMIENTOS_TOP_LIMIT = 15;
 
 function claveGrupoMovimiento(m: Pick<MovimientoConsumo, 'ppioActivoCima' | 'componente' | 'cn' | 'medicamento'>): {
   clave: string;
@@ -472,7 +468,7 @@ export async function getMovimientosConsumo(area: string): Promise<MovimientosCo
     return {
       suben: [],
       bajan: [],
-      resumen: { totalSuben: 0, totalBajan: 0, mostrandoSuben: 0, mostrandoBajan: 0 },
+      resumen: { totalSuben: 0, totalBajan: 0 },
     };
   }
 
@@ -538,17 +534,12 @@ export async function getMovimientosConsumo(area: string): Promise<MovimientosCo
     .filter(m => m.direccion === 'baja' || m.direccion === 'parado')
     .sort((a, b) => a.deltaVialesPeriodo - b.deltaVialesPeriodo);
 
-  const topSuben = subenList.slice(0, MOVIMIENTOS_TOP_LIMIT);
-  const topBajan = bajanList.slice(0, MOVIMIENTOS_TOP_LIMIT);
-
   return {
-    suben: agruparMovimientos(topSuben, (a, b) => b.deltaVialesPeriodo - a.deltaVialesPeriodo),
-    bajan: agruparMovimientos(topBajan, (a, b) => a.deltaVialesPeriodo - b.deltaVialesPeriodo),
+    suben: agruparMovimientos(subenList, (a, b) => b.deltaVialesPeriodo - a.deltaVialesPeriodo),
+    bajan: agruparMovimientos(bajanList, (a, b) => a.deltaVialesPeriodo - b.deltaVialesPeriodo),
     resumen: {
       totalSuben: subenList.length,
       totalBajan: bajanList.length,
-      mostrandoSuben: topSuben.length,
-      mostrandoBajan: topBajan.length,
     },
   };
 }

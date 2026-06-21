@@ -56,8 +56,6 @@ type MovimientosConsumoResult = {
   resumen: {
     totalSuben: number;
     totalBajan: number;
-    mostrandoSuben: number;
-    mostrandoBajan: number;
   };
 };
 
@@ -958,16 +956,6 @@ export default function InicioPage() {
             >
               ↓ Bajan / Parados ({movimientos.resumen.totalBajan})
             </button>
-            {movTab === 'suben' && movimientos.resumen.totalSuben > movimientos.resumen.mostrandoSuben && (
-              <span className="text-[11px] text-slate-400">
-                Mostrando top {movimientos.resumen.mostrandoSuben} de {movimientos.resumen.totalSuben}
-              </span>
-            )}
-            {movTab === 'bajan' && movimientos.resumen.totalBajan > movimientos.resumen.mostrandoBajan && (
-              <span className="text-[11px] text-slate-400">
-                Mostrando top {movimientos.resumen.mostrandoBajan} de {movimientos.resumen.totalBajan}
-              </span>
-            )}
           </div>
         )}
 
