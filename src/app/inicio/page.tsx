@@ -67,6 +67,7 @@ type AlertaCompra = {
   cn: string;
   componente: string;
   medicamento: string;
+  ppioActivoCima: string | null;
   unidadesPorCaja: number;
   stockActualUnidades: number;
   stockActualCajas: number;
@@ -83,6 +84,37 @@ type AlertaCompra = {
   sugerenciaAjuste: SugerenciaAjuste | null;
   semanasSeries: { semana: number; anio: number; label: string; viales: number; recepciones: number }[];
 };
+
+type ResumenSemaforoGrupo = {
+  rojo: number;
+  naranja: number;
+  verde: number;
+  azul: number;
+  gris: number;
+  peor: AlertaCompra['semaforo'];
+};
+
+type AlertaGrupoPrincipioActivo = {
+  claveGrupo: string;
+  principioActivo: string;
+  agrupacionAproximada: boolean;
+  presentaciones: AlertaCompra[];
+  resumenSemaforo: ResumenSemaforoGrupo;
+};
+
+function flattenPresentaciones(grupos: AlertaGrupoPrincipioActivo[]): AlertaCompra[] {
+  return grupos.flatMap(g => g.presentaciones);
+}
+
+function resumenSemaforoTexto(resumen: ResumenSemaforoGrupo): string {
+  const partes: string[] = [];
+  if (resumen.rojo > 0) partes.push(`${resumen.rojo} crítica${resumen.rojo > 1 ? 's' : ''}`);
+  if (resumen.naranja > 0) partes.push(`${resumen.naranja} baja${resumen.naranja > 1 ? 's' : ''}`);
+  if (resumen.verde > 0) partes.push(`${resumen.verde} óptima${resumen.verde > 1 ? 's' : ''}`);
+  if (resumen.azul > 0) partes.push(`${resumen.azul} sobrestock`);
+  if (resumen.gris > 0) partes.push(`${resumen.gris} sin datos`);
+  return partes.join(' · ');
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -330,6 +362,93 @@ function AlertaCard({ alerta, expanded, onToggle }: {
 }
 
 // ---------------------------------------------------------------------------
+// Componente: bloque agrupado por principio activo (sin sumar métricas)
+// ---------------------------------------------------------------------------
+function GrupoAlertaSection({
+  grupo,
+  expandedCn,
+  onToggleCn,
+  soloCriticas = false,
+  defaultOpen,
+}: {
+  grupo: AlertaGrupoPrincipioActivo;
+  expandedCn: string | null;
+  onToggleCn: (cn: string) => void;
+  soloCriticas?: boolean;
+  defaultOpen?: boolean;
+}) {
+  const [grupoOpen, setGrupoOpen] = useState(defaultOpen ?? grupo.presentaciones.length > 1);
+
+  if (grupo.presentaciones.length === 1) {
+    const a = grupo.presentaciones[0];
+    if (soloCriticas && a.semaforo !== 'rojo' && a.semaforo !== 'naranja') return null;
+    return (
+      <AlertaCard
+        alerta={a}
+        expanded={expandedCn === a.cn}
+        onToggle={() => onToggleCn(a.cn)}
+      />
+    );
+  }
+
+  const visibles = soloCriticas
+    ? grupo.presentaciones.filter(p => p.semaforo === 'rojo' || p.semaforo === 'naranja')
+    : grupo.presentaciones;
+
+  if (visibles.length === 0) return null;
+
+  const cfg = SEMAFORO_CFG[grupo.resumenSemaforo.peor];
+  const resumen = resumenSemaforoTexto(grupo.resumenSemaforo);
+
+  return (
+    <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
+      <button
+        type="button"
+        onClick={() => setGrupoOpen(o => !o)}
+        className="w-full text-left px-4 py-3 flex items-center gap-3 bg-slate-50 hover:bg-slate-100/80 transition-colors"
+      >
+        <div className={`w-3 h-3 rounded-full flex-shrink-0 ${cfg.dot}`} title={cfg.label} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={`text-sm font-semibold ${cfg.text}`}>{grupo.principioActivo}</span>
+            {grupo.agrupacionAproximada && (
+              <span className="text-[10px] font-medium text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">
+                agrupación aprox.
+              </span>
+            )}
+            <span className="text-[11px] text-slate-400">
+              {grupo.presentaciones.length} presentaciones
+            </span>
+          </div>
+          {resumen && (
+            <p className="text-[11px] text-slate-500 mt-0.5">{resumen}</p>
+          )}
+        </div>
+        <svg
+          className={`w-4 h-4 text-slate-400 flex-shrink-0 transition-transform ${grupoOpen ? 'rotate-180' : ''}`}
+          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {grupoOpen && (
+        <div className="p-2 space-y-2 border-t border-slate-100">
+          {visibles.map(a => (
+            <AlertaCard
+              key={a.cn}
+              alerta={a}
+              expanded={expandedCn === a.cn}
+              onToggle={() => onToggleCn(a.cn)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Componente: tarjeta KPI
 // ---------------------------------------------------------------------------
 function KpiCard({
@@ -510,7 +629,7 @@ export default function InicioPage() {
   const [alertasOpen, setAlertasOpen] = useState(false);
   const [alertasLoading, setAlertasLoading] = useState(false);
   const [alertasError, setAlertasError] = useState<string | null>(null);
-  const [alertas, setAlertas] = useState<AlertaCompra[]>([]);
+  const [alertasGrupos, setAlertasGrupos] = useState<AlertaGrupoPrincipioActivo[]>([]);
   const [expandedAlertaCn, setExpandedAlertaCn] = useState<string | null>(null);
 
   const cargarOperativo = useCallback(() => {
@@ -546,9 +665,9 @@ export default function InicioPage() {
     setAlertasLoading(true);
     fetch('/api/inicio/alertas-compra')
       .then(r => r.json())
-      .then((d: { alertas?: AlertaCompra[]; error?: string }) => {
+      .then((d: { grupos?: AlertaGrupoPrincipioActivo[]; error?: string }) => {
         if (d.error) { setAlertasError(d.error); return; }
-        setAlertas(d.alertas ?? []);
+        setAlertasGrupos(d.grupos ?? []);
       })
       .catch(() => setAlertasError('Error al cargar alertas'))
       .finally(() => setAlertasLoading(false));
@@ -705,15 +824,15 @@ export default function InicioPage() {
           </button>
         </div>
         <p className="text-xs text-slate-400 mb-3">
-          Cobertura = stock actual / consumo promedio semanal (últimas 8 semanas).
+          Cobertura = stock actual / consumo promedio semanal (últimas 8 semanas), calculado por presentación (CN).
+          Agrupado por principio activo CIMA para comparar presentaciones sin sumar cantidades.
           Rango óptimo: 2.5-4 semanas (almacén limitado, pedidos semanales).
-          Umbral de tendencia relevante: variación &gt;25% con cambio ≥2 viales/sem o ≥1 caja/sem.
         </p>
 
         {/* Leyenda semáforo */}
         <div className="flex flex-wrap gap-3 mb-3">
           {(Object.entries(SEMAFORO_CFG) as [keyof typeof SEMAFORO_CFG, typeof SEMAFORO_CFG[keyof typeof SEMAFORO_CFG]][]).map(([key, cfg]) => {
-            const cnt = alertas.filter(a => a.semaforo === key).length;
+            const cnt = flattenPresentaciones(alertasGrupos).filter(a => a.semaforo === key).length;
             if (cnt === 0 && !alertasLoading) return null;
             return (
               <div key={key} className="flex items-center gap-1.5 text-xs text-slate-600">
@@ -728,7 +847,7 @@ export default function InicioPage() {
         {alertasLoading && <p className="text-sm text-slate-400">Calculando alertas…</p>}
         {alertasError && <p className="text-sm text-red-500">{alertasError}</p>}
 
-        {!alertasLoading && !alertasError && alertas.length === 0 && (
+        {!alertasLoading && !alertasError && alertasGrupos.length === 0 && (
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center">
             <p className="text-sm text-slate-500 font-medium">Sin alertas activas</p>
             <p className="text-xs text-slate-400 mt-1">
@@ -737,20 +856,25 @@ export default function InicioPage() {
           </div>
         )}
 
-        {!alertasLoading && !alertasError && alertas.length > 0 && (
+        {!alertasLoading && !alertasError && alertasGrupos.length > 0 && (
           <>
-            {/* Resumen siempre visible: solo rojos y naranjas */}
+            {/* Resumen siempre visible: grupos con presentaciones críticas */}
             {!alertasOpen && (
               <div className="space-y-2">
-                {alertas.filter(a => a.semaforo === 'rojo' || a.semaforo === 'naranja').slice(0, 5).map(a => (
-                  <AlertaCard
-                    key={a.cn}
-                    alerta={a}
-                    expanded={expandedAlertaCn === a.cn}
-                    onToggle={() => setExpandedAlertaCn(prev => prev === a.cn ? null : a.cn)}
-                  />
-                ))}
-                {alertas.filter(a => a.semaforo === 'rojo' || a.semaforo === 'naranja').length === 0 && (
+                {alertasGrupos
+                  .filter(g => g.resumenSemaforo.rojo > 0 || g.resumenSemaforo.naranja > 0)
+                  .slice(0, 5)
+                  .map(g => (
+                    <GrupoAlertaSection
+                      key={g.claveGrupo}
+                      grupo={g}
+                      expandedCn={expandedAlertaCn}
+                      onToggleCn={cn => setExpandedAlertaCn(prev => prev === cn ? null : cn)}
+                      soloCriticas
+                      defaultOpen
+                    />
+                  ))}
+                {alertasGrupos.every(g => g.resumenSemaforo.rojo === 0 && g.resumenSemaforo.naranja === 0) && (
                   <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-center">
                     <p className="text-sm text-emerald-700 font-medium">Sin alertas críticas</p>
                     <p className="text-xs text-emerald-600 mt-1">
@@ -763,13 +887,13 @@ export default function InicioPage() {
 
             {/* Listado completo cuando está abierto */}
             {alertasOpen && (
-              <div className="space-y-2">
-                {alertas.map(a => (
-                  <AlertaCard
-                    key={a.cn}
-                    alerta={a}
-                    expanded={expandedAlertaCn === a.cn}
-                    onToggle={() => setExpandedAlertaCn(prev => prev === a.cn ? null : a.cn)}
+              <div className="space-y-3">
+                {alertasGrupos.map(g => (
+                  <GrupoAlertaSection
+                    key={g.claveGrupo}
+                    grupo={g}
+                    expandedCn={expandedAlertaCn}
+                    onToggleCn={cn => setExpandedAlertaCn(prev => prev === cn ? null : cn)}
                   />
                 ))}
               </div>

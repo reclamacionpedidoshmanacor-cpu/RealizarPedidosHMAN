@@ -570,6 +570,7 @@ export type AlertaCompra = {
   cn: string;
   componente: string;
   medicamento: string;
+  ppioActivoCima: string | null;
   unidadesPorCaja: number;
   stockActualUnidades: number;
   stockActualCajas: number;
@@ -587,6 +588,91 @@ export type AlertaCompra = {
   semanasSeries: { semana: number; anio: number; label: string; viales: number; recepciones: number }[];
 };
 
+export type ResumenSemaforoGrupo = {
+  rojo: number;
+  naranja: number;
+  verde: number;
+  azul: number;
+  gris: number;
+  peor: AlertaCompra['semaforo'];
+};
+
+export type AlertaGrupoPrincipioActivo = {
+  claveGrupo: string;
+  principioActivo: string;
+  agrupacionAproximada: boolean;
+  presentaciones: AlertaCompra[];
+  resumenSemaforo: ResumenSemaforoGrupo;
+};
+
+const SEMAFORO_PRIORIDAD: Record<AlertaCompra['semaforo'], number> = {
+  rojo: 0, naranja: 1, verde: 2, azul: 3, gris: 4,
+};
+
+function claveGrupoFrom(alerta: Pick<AlertaCompra, 'ppioActivoCima' | 'componente' | 'cn' | 'medicamento'>): {
+  clave: string;
+  nombre: string;
+  aproximada: boolean;
+} {
+  const cima = alerta.ppioActivoCima?.trim();
+  if (cima) return { clave: cima.toLowerCase(), nombre: cima, aproximada: false };
+  const pa = alerta.componente?.trim();
+  if (pa) return { clave: `pa:${pa.toLowerCase()}`, nombre: pa, aproximada: true };
+  return { clave: `cn:${alerta.cn}`, nombre: alerta.medicamento || alerta.cn, aproximada: true };
+}
+
+export function agruparAlertasPorPrincipioActivo(alertas: AlertaCompra[]): AlertaGrupoPrincipioActivo[] {
+  const map = new Map<string, AlertaCompra[]>();
+  const meta = new Map<string, { nombre: string; aproximada: boolean }>();
+
+  for (const a of alertas) {
+    const { clave, nombre, aproximada } = claveGrupoFrom(a);
+    if (!map.has(clave)) {
+      map.set(clave, []);
+      meta.set(clave, { nombre, aproximada });
+    }
+    map.get(clave)!.push(a);
+  }
+
+  const grupos: AlertaGrupoPrincipioActivo[] = [];
+
+  for (const [claveGrupo, presentaciones] of map.entries()) {
+    const sorted = [...presentaciones].sort((a, b) => {
+      const sp = SEMAFORO_PRIORIDAD[a.semaforo] - SEMAFORO_PRIORIDAD[b.semaforo];
+      if (sp !== 0) return sp;
+      return b.consumoReciente - a.consumoReciente;
+    });
+
+    const resumen: ResumenSemaforoGrupo = {
+      rojo: 0, naranja: 0, verde: 0, azul: 0, gris: 0, peor: 'gris',
+    };
+    for (const p of sorted) {
+      resumen[p.semaforo]++;
+      if (SEMAFORO_PRIORIDAD[p.semaforo] < SEMAFORO_PRIORIDAD[resumen.peor]) {
+        resumen.peor = p.semaforo;
+      }
+    }
+
+    const m = meta.get(claveGrupo)!;
+    grupos.push({
+      claveGrupo,
+      principioActivo: m.nombre,
+      agrupacionAproximada: m.aproximada,
+      presentaciones: sorted,
+      resumenSemaforo: resumen,
+    });
+  }
+
+  return grupos.sort((a, b) => {
+    const gp = SEMAFORO_PRIORIDAD[a.resumenSemaforo.peor] - SEMAFORO_PRIORIDAD[b.resumenSemaforo.peor];
+    if (gp !== 0) return gp;
+    const critA = a.resumenSemaforo.rojo + a.resumenSemaforo.naranja;
+    const critB = b.resumenSemaforo.rojo + b.resumenSemaforo.naranja;
+    if (critB !== critA) return critB - critA;
+    return a.principioActivo.localeCompare(b.principioActivo, 'es');
+  });
+}
+
 export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
   const sql = getDb();
 
@@ -595,6 +681,7 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
     WITH
     meds AS (
       SELECT m.cn, m.principio_activo, m.nombre, m.unidades_por_caja,
+             NULLIF(TRIM(m.ppio_activo_cima), '') AS ppio_activo_cima,
              COALESCE(so.stock_minimo,  0) AS stock_minimo,
              COALESCE(so.stock_maximo,  0) AS stock_maximo
       FROM medicamentos m
@@ -628,6 +715,7 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
       m.cn,
       COALESCE(m.principio_activo, '') AS componente,
       COALESCE(m.nombre, '')           AS medicamento,
+      m.ppio_activo_cima,
       m.unidades_por_caja,
       m.stock_minimo,
       m.stock_maximo,
@@ -641,7 +729,7 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
        OR COALESCE(sa.stock_unidades, 0) > 0
     ORDER BY m.principio_activo, m.nombre;
   `) as Array<{
-    cn: string; componente: string; medicamento: string;
+    cn: string; componente: string; medicamento: string; ppio_activo_cima: string | null;
     unidades_por_caja: number; stock_minimo: number; stock_maximo: number;
     stock_unidades: number; consumo_reciente: number; consumo_anterior: number;
   }>;
@@ -760,6 +848,7 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
       cn: r.cn,
       componente: r.componente,
       medicamento: r.medicamento,
+      ppioActivoCima: r.ppio_activo_cima,
       unidadesPorCaja: upx,
       stockActualUnidades: stockU,
       stockActualCajas: stockC,
@@ -776,11 +865,6 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
       sugerenciaAjuste,
       semanasSeries: semanasFilled,
     } satisfies AlertaCompra;
-  }).sort((a, b) => {
-    const orden: Record<AlertaCompra['semaforo'], number> = {
-      rojo: 0, naranja: 1, verde: 2, azul: 3, gris: 4
-    };
-    return orden[a.semaforo] - orden[b.semaforo];
   });
 }
 

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
-import { getAlertasCompra } from '@/lib/consumo-neon';
+import { agruparAlertasPorPrincipioActivo, getAlertasCompra } from '@/lib/consumo-neon';
 import { loadRecepcionesSemanalPorCns } from '@/lib/pedidos-pendientes';
 
 export const runtime = 'nodejs';
@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ alertas });
+    return NextResponse.json({ grupos: agruparAlertasPorPrincipioActivo(alertas) });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Error inesperado';
     return NextResponse.json({ error: msg }, { status: 500 });
