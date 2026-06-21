@@ -54,16 +54,19 @@ export const GRUPO_LABELS: Record<DiagnosticoGrupo, string> = {
 
 export const GRUPO_COLORS: Record<DiagnosticoGrupo, { bg: string; text: string; ring: string; chart: string }> = {
   mama:          { bg: 'bg-rose-50',    text: 'text-rose-700',    ring: 'ring-rose-200',    chart: '#f43f5e' },
-  pulmon:        { bg: 'bg-sky-50',     text: 'text-sky-700',     ring: 'ring-sky-200',     chart: '#0ea5e9' },
+  // Pulmón más oscuro (sky-700) para separarlo del cian urológico en barras apiladas
+  pulmon:        { bg: 'bg-sky-50',     text: 'text-sky-800',     ring: 'ring-sky-300',     chart: '#0369a1' },
   digestivo:     { bg: 'bg-amber-50',   text: 'text-amber-700',   ring: 'ring-amber-200',   chart: '#f59e0b' },
   ginecologico:  { bg: 'bg-violet-50',  text: 'text-violet-700',  ring: 'ring-violet-200',  chart: '#7c3aed' },
+  // Urología en cian más claro/saturado (cyan-500) — contraste con pulmón azul oscuro
   urologico:     { bg: 'bg-cyan-50',    text: 'text-cyan-700',    ring: 'ring-cyan-200',    chart: '#06b6d4' },
   piel:          { bg: 'bg-orange-50',  text: 'text-orange-700',  ring: 'ring-orange-200',  chart: '#f97316' },
   'cabeza-cuello': { bg: 'bg-teal-50',  text: 'text-teal-700',    ring: 'ring-teal-200',    chart: '#14b8a6' },
   snc:           { bg: 'bg-indigo-50',  text: 'text-indigo-700',  ring: 'ring-indigo-200',  chart: '#6366f1' },
-  linfoma:       { bg: 'bg-fuchsia-50', text: 'text-fuchsia-700', ring: 'ring-fuchsia-200', chart: '#d946ef' },
-  leucemia:      { bg: 'bg-pink-50',    text: 'text-pink-700',    ring: 'ring-pink-200',    chart: '#ec4899' },
-  mieloma:       { bg: 'bg-purple-50',  text: 'text-purple-700',  ring: 'ring-purple-200',  chart: '#a855f7' },
+  // Hematología: separar matiz (índigo / rojo / violeta) en lugar de rosa-fucsia contiguo
+  linfoma:       { bg: 'bg-indigo-50',  text: 'text-indigo-800',  ring: 'ring-indigo-300',  chart: '#4338ca' },
+  leucemia:      { bg: 'bg-rose-50',    text: 'text-rose-800',    ring: 'ring-rose-300',    chart: '#be123c' },
+  mieloma:       { bg: 'bg-purple-50',  text: 'text-purple-800',  ring: 'ring-purple-300',  chart: '#9333ea' },
   mielofibrosis: { bg: 'bg-red-50',     text: 'text-red-700',     ring: 'ring-red-200',     chart: '#ef4444' },
   pti:           { bg: 'bg-emerald-50', text: 'text-emerald-700', ring: 'ring-emerald-200', chart: '#10b981' },
   'otros-hemato':{ bg: 'bg-slate-100',  text: 'text-slate-600',   ring: 'ring-slate-200',   chart: '#94a3b8' },
