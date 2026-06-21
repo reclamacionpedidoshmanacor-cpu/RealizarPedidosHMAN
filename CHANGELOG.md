@@ -4,6 +4,32 @@ Historial de cambios del proyecto ordenado del más reciente al más antiguo.
 
 ---
 
+## [Unreleased] — 21 jun 2026 (v2)
+
+### Pestaña Análisis — Coherencia de servicio y gráfico apilado
+
+#### Correcciones críticas
+- **Top 10 protocolos y medicamentos filtrados por servicio**: antes mostraban
+  datos globales (Onco+Hemato); ahora si el usuario está en Hematología, el top
+  es exclusivo de hematología y viceversa. Se aplica también a la evolución temporal.
+- **Tarjeta "Otros hematológicos" renombrada a "Otros"** para alinear alturas en la cuadrícula.
+
+#### Mejoras
+- **Gráfico anual apilado**: siempre muestra el total del área en barras;
+  la porción del servicio activo (teal = Oncología, violeta = Hematología) se
+  apila en color sobre el fondo gris claro (resto del área). Así el total y la
+  distribución son visibles simultáneamente sin confusión.
+- **KPI "Gasto período (total)"**: añade sub-etiqueta con el importe y porcentaje
+  del servicio seleccionado para contextualizar el dato global.
+- **Botones de servicio** coloreados con el color de cada uno.
+- **Títulos de gráficos temporales** incluyen el nombre del servicio activo.
+- **Fetch reactivo**: cualquier cambio de filtro (período, servicio, grupo tumoral)
+  relanza la petición automáticamente y cancela respuestas obsoletas.
+- **Backend**: `getAnalisisDatos` acepta `servicioFiltro` y filtra las filas para
+  tops y temporal; los KPIs globales siguen siendo del total del área.
+
+---
+
 ## [Unreleased] — 21 jun 2026
 
 ### Pestaña Análisis — Mejoras visuales y usabilidad (round 2)

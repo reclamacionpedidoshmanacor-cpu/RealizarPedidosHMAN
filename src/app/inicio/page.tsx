@@ -55,6 +55,14 @@ type BajoMinimoItem = {
   puntoPedido: number;
 };
 
+type SugerenciaAjuste = {
+  tipo: 'aumentar' | 'reducir' | 'ok';
+  stockMinimoSugerido: number;
+  stockMaximoSugerido: number;
+  stockMinimoActual: number;
+  stockMaximoActual: number;
+};
+
 type AlertaCompra = {
   cn: string;
   componente: string;
@@ -72,7 +80,7 @@ type AlertaCompra = {
   tendenciaRelevante: boolean;
   coberturaSemanas: number | null;
   semaforo: 'rojo' | 'naranja' | 'verde' | 'azul' | 'gris';
-  sugerenciaCajas: number;
+  sugerenciaAjuste: SugerenciaAjuste | null;
   semanasSeries: { semana: number; anio: number; label: string; viales: number; recepciones: number }[];
 };
 
@@ -104,11 +112,11 @@ function variacionBg(pct: number): string {
 // Helpers semáforo
 // ---------------------------------------------------------------------------
 const SEMAFORO_CFG = {
-  rojo:   { bg: 'bg-red-50 border-red-200',     dot: 'bg-red-500',    text: 'text-red-700',    label: 'Cobertura crítica (<4 sem)' },
-  naranja:{ bg: 'bg-orange-50 border-orange-200', dot: 'bg-orange-400', text: 'text-orange-700', label: 'Cobertura ajustada (4-6 sem)' },
-  verde:  { bg: 'bg-emerald-50 border-emerald-200', dot: 'bg-emerald-500', text: 'text-emerald-700', label: 'Cobertura adecuada (6-10 sem)' },
-  azul:   { bg: 'bg-sky-50 border-sky-200',     dot: 'bg-sky-500',    text: 'text-sky-700',    label: 'Cobertura amplia (>10 sem)' },
-  gris:   { bg: 'bg-slate-50 border-slate-200', dot: 'bg-slate-400',  text: 'text-slate-600',  label: 'Sin datos suficientes' },
+  rojo:   { bg: 'bg-red-50 border-red-200',       dot: 'bg-red-500',      text: 'text-red-700',      label: 'Stock crítico (<1.5 sem)' },
+  naranja:{ bg: 'bg-orange-50 border-orange-200', dot: 'bg-orange-400',   text: 'text-orange-700',   label: 'Stock bajo (1.5-2.5 sem)' },
+  verde:  { bg: 'bg-emerald-50 border-emerald-200', dot: 'bg-emerald-500', text: 'text-emerald-700', label: 'Rango óptimo (2.5-4 sem)' },
+  azul:   { bg: 'bg-sky-50 border-sky-200',       dot: 'bg-sky-500',      text: 'text-sky-700',      label: 'Sobrestock (>4 sem)' },
+  gris:   { bg: 'bg-slate-50 border-slate-200',   dot: 'bg-slate-400',    text: 'text-slate-600',    label: 'Sin datos suficientes' },
 } as const;
 
 function fmtCobertura(c: number | null): string {
@@ -253,7 +261,7 @@ function AlertaCard({ alerta, expanded, onToggle }: {
             <div>
               <p className="text-slate-400 uppercase tracking-wide text-[10px]">Cobertura</p>
               <p className={`font-bold text-base ${cfg.text}`}>{fmtCobertura(alerta.coberturaSemanas)}</p>
-              <p className="text-slate-400 text-[10px]">Objetivo: 8 sem</p>
+              <p className="text-slate-400 text-[10px]">Objetivo: 2-4 sem</p>
             </div>
             <div>
               <p className="text-slate-400 uppercase tracking-wide text-[10px]">Stock actual</p>
@@ -287,16 +295,29 @@ function AlertaCard({ alerta, expanded, onToggle }: {
             <div>Múltiplo: <span className="font-medium text-slate-700">{alerta.unidadesPorCaja} uds/caja</span></div>
           </div>
 
-          {alerta.sugerenciaCajas > 0 && (
-            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 flex items-center gap-2">
-              <span className="text-amber-500 text-base">📦</span>
-              <div>
-                <span className="text-xs font-semibold text-amber-800">
-                  Sugerencia: pedir {alerta.sugerenciaCajas} {alerta.sugerenciaCajas === 1 ? 'caja' : 'cajas'}
-                </span>
-                <span className="text-xs text-amber-600 ml-1">
-                  ({(alerta.sugerenciaCajas * alerta.unidadesPorCaja).toFixed(0)} uds · alcanzaría stock máximo de {fmtN(alerta.stockMaximo)} uds)
-                </span>
+          {alerta.sugerenciaAjuste && alerta.sugerenciaAjuste.tipo !== 'ok' && (
+            <div className={`mt-3 rounded-lg border px-3 py-2.5 flex items-start gap-2 ${
+              alerta.sugerenciaAjuste.tipo === 'aumentar'
+                ? 'border-red-200 bg-red-50'
+                : 'border-sky-200 bg-sky-50'
+            }`}>
+              <span className="text-lg mt-0.5 flex-shrink-0">
+                {alerta.sugerenciaAjuste.tipo === 'aumentar' ? '⬆️' : '⬇️'}
+              </span>
+              <div className="text-xs">
+                <p className={`font-semibold ${alerta.sugerenciaAjuste.tipo === 'aumentar' ? 'text-red-800' : 'text-sky-800'}`}>
+                  {alerta.sugerenciaAjuste.tipo === 'aumentar'
+                    ? 'Stock bajo — considera aumentar los parámetros de stock'
+                    : 'Sobrestock — considera reducir los parámetros de stock'}
+                </p>
+                <p className={`mt-1 ${alerta.sugerenciaAjuste.tipo === 'aumentar' ? 'text-red-700' : 'text-sky-700'}`}>
+                  Mín. sugerido: <span className="font-medium">{fmtN(alerta.sugerenciaAjuste.stockMinimoSugerido)} uds</span>
+                  {' '}(2 sem) · actual: {fmtN(alerta.sugerenciaAjuste.stockMinimoActual)} uds
+                </p>
+                <p className={`${alerta.sugerenciaAjuste.tipo === 'aumentar' ? 'text-red-700' : 'text-sky-700'}`}>
+                  Máx. sugerido: <span className="font-medium">{fmtN(alerta.sugerenciaAjuste.stockMaximoSugerido)} uds</span>
+                  {' '}(4 sem) · actual: {fmtN(alerta.sugerenciaAjuste.stockMaximoActual)} uds
+                </p>
               </div>
             </div>
           )}
@@ -684,8 +705,9 @@ export default function InicioPage() {
           </button>
         </div>
         <p className="text-xs text-slate-400 mb-3">
-          Cobertura estimada = stock actual / consumo promedio semanal (últimas 8 semanas).
-          Objetivo: 8 semanas. Umbral de tendencia relevante: variación &gt;25% con cambio ≥2 viales/sem o ≥1 caja/sem.
+          Cobertura = stock actual / consumo promedio semanal (últimas 8 semanas).
+          Rango óptimo: 2.5-4 semanas (almacén limitado, pedidos semanales).
+          Umbral de tendencia relevante: variación &gt;25% con cambio ≥2 viales/sem o ≥1 caja/sem.
         </p>
 
         {/* Leyenda semáforo */}

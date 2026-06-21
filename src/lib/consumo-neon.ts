@@ -545,18 +545,27 @@ export async function getResumenConsumoArea(
 // Panel "Alertas de compra" para Inicio
 // Calcula cobertura de stock, tendencia de consumo y semáforo por medicamento.
 //
-// Lógica:
-//   - consumo_reciente  = viales en las últimas 8 semanas ISO (semana_iso)
+// Rango operativo real: almacén para 2-4 semanas, pedidos semanales.
+//   - consumo_reciente  = viales en las últimas 8 semanas
 //   - consumo_anterior  = viales en las 8 semanas anteriores
 //   - promedio_semanal  = consumo_reciente / 8
 //   - cobertura         = stock_actual_unidades / promedio_semanal  (en semanas)
 //   - tendencia         = variacion_pct > 25 % Y cambio_abs >= 2 viales/sem O >= 1 caja/sem
-//   - semáforo:
-//       rojo    < 4 semanas
-//       naranja 4–6 sem  O  (tendencia creciente relevante)
-//       verde   6–10 sem
-//       azul    > 10 sem Y tendencia decreciente
+//   - semáforo (thresholds ajustados al rango operativo 2-4 sem):
+//       rojo    < 1.5 semanas  → urgente
+//       naranja 1.5–2.5 sem   O tendencia creciente relevante
+//       verde   2.5–4 sem     → rango óptimo
+//       azul    > 4 semanas   → sobrestock
+//   - sugerenciaAjuste: stock mínimo sugerido = prom × 2, máximo = prom × 4
 // ---------------------------------------------------------------------------
+export type SugerenciaAjuste = {
+  tipo: 'aumentar' | 'reducir' | 'ok';
+  stockMinimoSugerido: number;   // promedio × 2 sem (redondeado a múltiplo de caja)
+  stockMaximoSugerido: number;   // promedio × 4 sem (redondeado a múltiplo de caja)
+  stockMinimoActual: number;
+  stockMaximoActual: number;
+};
+
 export type AlertaCompra = {
   cn: string;
   componente: string;
@@ -566,15 +575,15 @@ export type AlertaCompra = {
   stockActualCajas: number;
   stockMinimo: number;
   stockMaximo: number;
-  consumoReciente: number;        // viales totales últimas 8 sem
-  consumoAnterior: number;        // viales totales 8 sem previas
-  promedioSemanal: number;        // viales/semana
-  variacionPct: number | null;    // null si sin datos anteriores
+  consumoReciente: number;
+  consumoAnterior: number;
+  promedioSemanal: number;
+  variacionPct: number | null;
   tendenciaCreciente: boolean;
   tendenciaRelevante: boolean;
-  coberturaSemanas: number | null; // null si sin consumo reciente
-  semaforo: 'rojo' | 'naranja' | 'verde' | 'azul' | 'gris'; // gris = sin datos
-  sugerenciaCajas: number;         // cajas a pedir para llegar a stockMaximo
+  coberturaSemanas: number | null;
+  semaforo: 'rojo' | 'naranja' | 'verde' | 'azul' | 'gris';
+  sugerenciaAjuste: SugerenciaAjuste | null;
   semanasSeries: { semana: number; anio: number; label: string; viales: number; recepciones: number }[];
 };
 
@@ -682,26 +691,38 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
         (cambioAbsViales >= 2 || cambioAbsCajas >= 1);
     }
 
-    // Semáforo
+    // Semáforo — thresholds ajustados al rango operativo real (2-4 semanas)
     let semaforo: AlertaCompra['semaforo'] = 'gris';
     if (rec === 0 && stockU === 0) {
       semaforo = 'gris';
-    } else if (cobertura !== null && cobertura < 4) {
+    } else if (cobertura !== null && cobertura < 1.5) {
       semaforo = 'rojo';
     } else if (
-      (cobertura !== null && cobertura >= 4 && cobertura < 6) ||
-      (tendenciaRelevante && tendenciaCreciente)
+      (cobertura !== null && cobertura >= 1.5 && cobertura < 2.5) ||
+      (tendenciaRelevante && tendenciaCreciente && (cobertura === null || cobertura < 4))
     ) {
       semaforo = 'naranja';
-    } else if (cobertura !== null && cobertura >= 6 && cobertura <= 10) {
+    } else if (cobertura !== null && cobertura >= 2.5 && cobertura <= 4) {
       semaforo = 'verde';
-    } else if (cobertura !== null && cobertura > 10) {
-      semaforo = tendenciaRelevante && !tendenciaCreciente ? 'azul' : 'verde';
+    } else if (cobertura !== null && cobertura > 4) {
+      semaforo = 'azul'; // sobrestock
     }
 
-    // Sugerencia: cajas a pedir para alcanzar el stock máximo
-    const unidadesNecesarias = Math.max(0, num(r.stock_maximo) - stockU);
-    const sugerenciaCajas = unidadesNecesarias > 0 ? Math.ceil(unidadesNecesarias / upx) : 0;
+    // Sugerencia de ajuste de stock objetivo (min = 2 sem, max = 4 sem)
+    let sugerenciaAjuste: SugerenciaAjuste | null = null;
+    if (promSem > 0) {
+      const stockMinimoSugerido = Math.ceil(promSem * 2 / upx) * upx;
+      const stockMaximoSugerido = Math.ceil(promSem * 4 / upx) * upx;
+      const stockMinimoActual = num(r.stock_minimo);
+      const stockMaximoActual = num(r.stock_maximo);
+      let tipo: SugerenciaAjuste['tipo'] = 'ok';
+      if (stockU < promSem * 1.5) {
+        tipo = 'aumentar';
+      } else if (stockU > promSem * 4) {
+        tipo = 'reducir';
+      }
+      sugerenciaAjuste = { tipo, stockMinimoSugerido, stockMaximoSugerido, stockMinimoActual, stockMaximoActual };
+    }
 
     // Series semanales para la mini-gráfica (últimas 8 semanas)
     const series = seriesRows
@@ -752,7 +773,7 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
       tendenciaRelevante,
       coberturaSemanas: cobertura,
       semaforo,
-      sugerenciaCajas,
+      sugerenciaAjuste,
       semanasSeries: semanasFilled,
     } satisfies AlertaCompra;
   }).sort((a, b) => {

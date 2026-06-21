@@ -6,6 +6,23 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 
 ---
 
+## [0.3.2] — 21 jun 2026 *(Análisis — coherencia de servicio y gráfico apilado)*
+
+### Corregido
+- Top 10 protocolos/medicamentos y evolución temporal ahora se filtran por servicio;
+  en Hematología el top es 100% hematológico (sin oncología mezclada).
+- "Otros hematológicos" → "Otros" para alinear la cuadrícula.
+
+### Añadido/Mejorado
+- **Gráfico anual apilado**: el total del área siempre visible; porción del servicio
+  activo resaltada en color propio (teal / violeta).
+- **KPI "Gasto período (total)"**: sub-etiqueta con importe y % del servicio activo.
+- Botones de servicio coloreados y títulos de gráficos contextualizados.
+- Fetch reactivo con cancelación de peticiones obsoletas.
+- `getAnalisisDatos` acepta `servicioFiltro`; importa `Servicio` y `gruposParaServicio`.
+
+---
+
 ## [0.3.1] — 21 jun 2026 *(Análisis farmaoeconómico — mejoras round 2)*
 
 ### Corregido

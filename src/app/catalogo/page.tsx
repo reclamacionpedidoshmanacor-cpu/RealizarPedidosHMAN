@@ -53,6 +53,8 @@ export default function CatalogoPage() {
   const [filterUbicacion, setFilterUbicacion] = useState('');
   const [filterActivo, setFilterActivo] = useState('');
   const [importing, setImporting] = useState(false);
+  const [cimaEnriqueciendo, setCimaEnriqueciendo] = useState(false);
+  const [cimaResultado, setCimaResultado] = useState<{ actualizados: number; fallidos: number; total: number } | null>(null);
   const [editingCn, setEditingCn] = useState<string | null>(null);
   const [editData, setEditData] = useState<Partial<Medicamento>>({});
   const [sortKey, setSortKey] = useState<SortKey>('principioActivo');
@@ -172,6 +174,31 @@ export default function CatalogoPage() {
       return sortDir === 'asc' ? cmp : -cmp;
     });
   }, [meds, search, filterUbicacion, filterActivo, sortKey, sortDir]);
+
+  const handleEnriquecerCima = async (soloVacios = true) => {
+    setCimaEnriqueciendo(true);
+    setCimaResultado(null);
+    try {
+      const res = await fetch('/api/catalogo/enriquecer-cima', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ soloVacios }),
+      });
+      const data = await res.json() as { actualizados: number; fallidos: number; total: number; error?: string };
+      if (!res.ok) { toast.error(data.error ?? 'Error al enriquecer'); return; }
+      setCimaResultado(data);
+      if (data.actualizados > 0) {
+        toast.success(`CIMA: ${data.actualizados} medicamentos enriquecidos`);
+        fetchMeds();
+      } else {
+        toast.info('CIMA: ningún medicamento nuevo encontrado');
+      }
+    } catch {
+      toast.error('Error de conexión con CIMA');
+    } finally {
+      setCimaEnriqueciendo(false);
+    }
+  };
 
   const handleCopiarCodigosSap = async () => {
     const source = filtered;
@@ -323,6 +350,17 @@ export default function CatalogoPage() {
             Copiar códigos SAP
           </button>
           <button
+            onClick={() => handleEnriquecerCima()}
+            disabled={cimaEnriqueciendo || loading || meds.length === 0}
+            className="flex items-center gap-2 rounded-lg border border-violet-300 px-4 py-2 text-sm font-medium text-violet-700 hover:bg-violet-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            title="Consulta la API de CIMA (AEMPS) para obtener el principio activo oficial de cada CN"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+            </svg>
+            {cimaEnriqueciendo ? 'Consultando CIMA…' : 'Enriquecer desde CIMA'}
+          </button>
+          <button
             onClick={() => setShowNuevo(true)}
             className="flex items-center gap-2 rounded-lg border border-teal-600 px-4 py-2 text-sm font-medium text-teal-700 hover:bg-teal-50 transition-colors"
           >
@@ -343,6 +381,18 @@ export default function CatalogoPage() {
           </button>
         </div>
       </div>
+
+      {/* Resultado CIMA */}
+      {cimaResultado && (
+        <div className="mb-4 rounded-lg border border-violet-200 bg-violet-50 px-4 py-2 text-sm text-violet-800 flex items-center justify-between gap-4">
+          <span>
+            CIMA: <span className="font-semibold">{cimaResultado.actualizados}</span> principios activos actualizados
+            {cimaResultado.fallidos > 0 && <span className="text-violet-600"> · {cimaResultado.fallidos} no encontrados</span>}
+            {' '}de {cimaResultado.total} CNs consultados.
+          </span>
+          <button onClick={() => setCimaResultado(null)} className="text-violet-400 hover:text-violet-700">✕</button>
+        </div>
+      )}
 
       {/* Filtros */}
       <div className="flex flex-wrap gap-3 mb-4">
