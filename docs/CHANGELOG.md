@@ -6,6 +6,19 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 
 ---
 
+## [0.3.5] — 21 jun 2026 *(Análisis — YoY coherente, semanas, Pareto)*
+
+### Corregido
+- Tarjeta YoY alineada con gráfico anual (mismo periodo año en curso vs anterior, vía `anio`/`mes`).
+- Gráfico semanal vacío: query dedicada últimas 6 semanas + corte por columnas `anio`/`mes`.
+- Presets de fecha calculados al pulsar (no fechas congeladas al cargar la página).
+
+### Añadido
+- Ordenación de tarjetas de grupo: por gasto o por variación YoY.
+- Pareto/ABC, coste paciente-ciclo, detección de outliers semanales.
+
+---
+
 ## [0.3.4] — 21 jun 2026 *(Análisis — YoY no solapado y series mensual/semanal)*
 
 ### Corregido

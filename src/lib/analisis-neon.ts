@@ -36,6 +36,13 @@ export function computeYoy(current: number, previous: number): number | null {
 //  · Reciente (a partir de esta fecha) → se muestra por SEMANAS reales.
 // Cuando se disponga de más histórico semanal real, basta con adelantar esta fecha.
 export const SEMANA_REAL_DESDE = '2026-06-01';
+const CUT_YM = 2026 * 100 + 6; // derivado de SEMANA_REAL_DESDE (jun 2026)
+
+function ymKey(y: number, m: number): number { return y * 100 + m; }
+function isoToYM(iso: string): { y: number; m: number } {
+  const [y, m] = iso.split('-').map(Number);
+  return { y: y!, m: m! };
+}
 
 // ---------------------------------------------------------------------------
 // Tipos públicos
@@ -57,7 +64,10 @@ export type GastoAnualServicio = {
   gastoOnco: number;
   gastoHemato: number;
   variacionYoy: number | null;
+  variacionYoyOnco: number | null;
+  variacionYoyHemato: number | null;
   parcial: boolean;            // true para el año en curso (incompleto)
+  mesHasta: number | null;     // último mes con datos (solo año en curso)
 };
 
 export type KpisAnalisis = {
@@ -180,8 +190,40 @@ export type GrupoDetalle = {
   diagnosticos: DiagnosticoDetalle[];
 };
 
+export type AbcItem = {
+  cn: string;
+  principioActivo: string;
+  nombre: string;
+  gasto: number;
+  pctTotal: number;
+  pctAcumulado: number;
+  clase: 'A' | 'B' | 'C';
+};
+
+export type CostePacienteCiclo = {
+  protocolo: string;
+  indicacion: string;
+  grupo: DiagnosticoGrupo;
+  gasto: number;
+  pacientes: number;
+  preparaciones: number;
+  costeMedio: number;
+};
+
+export type OutlierItem = {
+  cn: string;
+  principioActivo: string;
+  protocolo: string;
+  semanaLabel: string;
+  gastoSemana: number;
+  mediaSemanal: number;
+  desviacion: number;
+  ratio: number;
+};
+
 export type AnalisisDatos = {
   periodo: { desde: string; hasta: string };
+  yoyEtiqueta: string;
   kpis: KpisAnalisis;
   gastoPorAnio: GastoAnual[];
   gastoAnualServicio: GastoAnualServicio[];
@@ -190,6 +232,9 @@ export type AnalisisDatos = {
   topMedicamentos: TopMed[];
   temporalHistorico: TemporalPoint[];
   temporalReciente: TemporalPoint[];
+  pareto: AbcItem[];
+  costePacienteCiclo: CostePacienteCiclo[];
+  outliers: OutlierItem[];
   grupoDetalle: GrupoDetalle | null;
 };
 
@@ -223,6 +268,11 @@ async function getAnalisisRaw(
   hasta: string,
 ): Promise<ClassifiedRow[]> {
   const sql = getDb();
+  const { y: yD, m: mD } = isoToYM(desde);
+  const { y: yH, m: mH } = isoToYM(hasta);
+  const ymDesde = ymKey(yD, mD);
+  const ymHasta = ymKey(yH, mH);
+
   const rows = (await sql`
     SELECT
       cr.anio::int                                                            AS anio,
@@ -243,8 +293,8 @@ async function getAnalisisRaw(
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
     LEFT JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
     WHERE ic.area = ${area}
-      AND cr.fecha >= ${desde}::date
-      AND cr.fecha <= ${hasta}::date
+      AND (cr.anio * 100 + cr.mes) >= ${ymDesde}
+      AND (cr.anio * 100 + cr.mes) <= ${ymHasta}
       AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
     GROUP BY cr.anio, cr.mes, cr.semana_iso, cr.diagnostico, cr.indicacion, cr.protocolo, cr.cn
     ORDER BY cr.anio, cr.mes, cr.semana_iso, cr.cn
@@ -306,19 +356,24 @@ async function getGastoAnualPorServicio(area: string): Promise<GastoAnualServici
   const sql = getDb();
   const rows = (await sql`
     SELECT
-      EXTRACT(YEAR  FROM cr.fecha)::int                                     AS anio,
-      EXTRACT(MONTH FROM cr.fecha)::int                                     AS mes,
-      COALESCE(cr.diagnostico, '')                                          AS diagnostico,
-      SUM(cr.viales_dispensados * COALESCE(m.precio_unidad, 0))::float      AS gasto
+      cr.anio::int                                                            AS anio,
+      cr.mes::int                                                             AS mes,
+      COALESCE(cr.diagnostico, '')                                            AS diagnostico,
+      SUM(cr.viales_dispensados * COALESCE(m.precio_unidad, 0))::float        AS gasto
     FROM consumo_registros cr
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
     LEFT JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
     WHERE ic.area = ${area}
       AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
-    GROUP BY EXTRACT(YEAR FROM cr.fecha), EXTRACT(MONTH FROM cr.fecha), cr.diagnostico
+    GROUP BY cr.anio, cr.mes, cr.diagnostico
   `) as Array<{ anio: number; mes: number; diagnostico: string; gasto: number }>;
 
-  type YAcc = { total: number; onco: number; hemato: number; porMes: Map<number, number> };
+  type YAcc = {
+    total: number; onco: number; hemato: number;
+    porMes: Map<number, number>;
+    oncoPorMes: Map<number, number>;
+    hematoPorMes: Map<number, number>;
+  };
   const yearMap = new Map<number, YAcc>();
 
   for (const r of rows) {
@@ -328,34 +383,60 @@ async function getGastoAnualPorServicio(area: string): Promise<GastoAnualServici
     const servicio = getServicioFromGrupo(classifyDiagnostico(r.diagnostico));
 
     let y = yearMap.get(anio);
-    if (!y) { y = { total: 0, onco: 0, hemato: 0, porMes: new Map() }; yearMap.set(anio, y); }
+    if (!y) {
+      y = { total: 0, onco: 0, hemato: 0, porMes: new Map(), oncoPorMes: new Map(), hematoPorMes: new Map() };
+      yearMap.set(anio, y);
+    }
     y.total += g;
-    if (servicio === 'hematologia') y.hemato += g; else y.onco += g;
     y.porMes.set(mes, (y.porMes.get(mes) ?? 0) + g);
+    if (servicio === 'hematologia') {
+      y.hemato += g;
+      y.hematoPorMes.set(mes, (y.hematoPorMes.get(mes) ?? 0) + g);
+    } else {
+      y.onco += g;
+      y.oncoPorMes.set(mes, (y.oncoPorMes.get(mes) ?? 0) + g);
+    }
   }
 
   const years = [...yearMap.keys()].sort((a, b) => a - b);
   if (!years.length) return [];
 
-  // El año en curso es el año natural real (no simplemente el último con datos),
-  // para no marcar como "parcial" un año pasado que sí está completo.
   const realYear  = new Date().getFullYear();
   const curAcc    = yearMap.get(realYear);
   const lastMonth = curAcc ? Math.max(...curAcc.porMes.keys()) : 12;
 
+  function yoySamePeriod(cur: YAcc, prev: YAcc | undefined, mesMap: (a: YAcc) => Map<number, number>): number | null {
+    if (!prev) return null;
+    let curSum = 0, prevSum = 0;
+    for (let m = 1; m <= lastMonth; m++) {
+      curSum  += mesMap(cur).get(m) ?? 0;
+      prevSum += mesMap(prev).get(m) ?? 0;
+    }
+    return computeYoy(curSum, prevSum);
+  }
+
+  function yoyFullYear(cur: YAcc, prev: YAcc | undefined, field: 'total' | 'onco' | 'hemato'): number | null {
+    if (!prev) return null;
+    return computeYoy(cur[field], prev[field]);
+  }
+
   return years.map(anio => {
     const acc     = yearMap.get(anio)!;
     const esCurso = anio === realYear;
-
-    let prevComparable = 0;
     const prevAcc = yearMap.get(anio - 1);
-    if (prevAcc) {
-      if (esCurso) {
-        // Mismo período: sumar sólo meses <= último mes con datos del año en curso
-        for (const [mes, g] of prevAcc.porMes) if (mes <= lastMonth) prevComparable += g;
-      } else {
-        prevComparable = prevAcc.total;
-      }
+
+    let variacionYoy: number | null;
+    let variacionYoyOnco: number | null;
+    let variacionYoyHemato: number | null;
+
+    if (esCurso) {
+      variacionYoy      = yoySamePeriod(acc, prevAcc, a => a.porMes);
+      variacionYoyOnco  = yoySamePeriod(acc, prevAcc, a => a.oncoPorMes);
+      variacionYoyHemato = yoySamePeriod(acc, prevAcc, a => a.hematoPorMes);
+    } else {
+      variacionYoy       = yoyFullYear(acc, prevAcc, 'total');
+      variacionYoyOnco   = yoyFullYear(acc, prevAcc, 'onco');
+      variacionYoyHemato = yoyFullYear(acc, prevAcc, 'hemato');
     }
 
     return {
@@ -363,71 +444,184 @@ async function getGastoAnualPorServicio(area: string): Promise<GastoAnualServici
       gastoTotal:  acc.total,
       gastoOnco:   acc.onco,
       gastoHemato: acc.hemato,
-      variacionYoy: computeYoy(acc.total, prevComparable),
+      variacionYoy,
+      variacionYoyOnco,
+      variacionYoyHemato,
       parcial: esCurso,
+      mesHasta: esCurso ? lastMonth : null,
     };
   });
 }
 
 // ---------------------------------------------------------------------------
-// YoY robusto: últimos 12 meses vs los 12 meses anteriores (ventanas móviles
-// que NO se solapan), por grupo tumoral y por medicamento. Esto evita las
-// variaciones infladas que producía comparar períodos largos solapados.
+// YoY año en curso: mismos meses (cr.anio / cr.mes) vs mismo periodo año anterior.
+// Coherente con el gráfico anual histórico.
 // ---------------------------------------------------------------------------
-export type YoyRolling = {
+export type YoyYtd = {
   porGrupo: Map<DiagnosticoGrupo, { cur: number; prev: number }>;
   porCn: Map<string, { cur: number; prev: number }>;
+  mesHasta: number;
+  anio: number;
 };
 
-async function getYoyRolling(area: string): Promise<YoyRolling> {
+async function getYoyYtd(area: string, mesHasta: number, anio: number): Promise<YoyYtd> {
   const sql = getDb();
-  const iso = (d: Date) => d.toISOString().slice(0, 10);
-  const hoy = new Date();
-  const cur2 = iso(hoy);
-  const c1 = new Date(hoy); c1.setFullYear(c1.getFullYear() - 1); const cur1 = iso(c1);
-  const p1 = new Date(hoy); p1.setFullYear(p1.getFullYear() - 2); const prev1 = iso(p1);
-
   const rows = (await sql`
     SELECT
       cr.cn,
-      COALESCE(cr.diagnostico, '')                                                              AS diagnostico,
-      SUM(CASE WHEN cr.fecha >  ${cur1}::date AND cr.fecha <= ${cur2}::date
-               THEN cr.viales_dispensados * COALESCE(m.precio_unidad, 0) ELSE 0 END)::float     AS cur,
-      SUM(CASE WHEN cr.fecha >  ${prev1}::date AND cr.fecha <= ${cur1}::date
-               THEN cr.viales_dispensados * COALESCE(m.precio_unidad, 0) ELSE 0 END)::float     AS prev
+      cr.anio::int                                                            AS anio,
+      cr.mes::int                                                             AS mes,
+      COALESCE(cr.diagnostico, '')                                            AS diagnostico,
+      SUM(cr.viales_dispensados * COALESCE(m.precio_unidad, 0))::float        AS gasto
     FROM consumo_registros cr
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
     LEFT JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
     WHERE ic.area = ${area}
-      AND cr.fecha > ${prev1}::date AND cr.fecha <= ${cur2}::date
+      AND cr.anio IN (${anio}, ${anio - 1})
+      AND cr.mes <= ${mesHasta}
       AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
-    GROUP BY cr.cn, cr.diagnostico
-  `) as Array<{ cn: string; diagnostico: string; cur: number; prev: number }>;
+    GROUP BY cr.cn, cr.anio, cr.mes, cr.diagnostico
+  `) as Array<{ cn: string; anio: number; mes: number; diagnostico: string; gasto: number }>;
 
   const porGrupo = new Map<DiagnosticoGrupo, { cur: number; prev: number }>();
   const porCn    = new Map<string, { cur: number; prev: number }>();
 
   for (const r of rows) {
-    const cur = Number(r.cur); const prev = Number(r.prev);
+    const g = Number(r.gasto);
     const grupo = classifyDiagnostico(r.diagnostico);
-    const g = porGrupo.get(grupo) ?? { cur: 0, prev: 0 }; g.cur += cur; g.prev += prev; porGrupo.set(grupo, g);
-    const c = porCn.get(r.cn)     ?? { cur: 0, prev: 0 }; c.cur += cur; c.prev += prev; porCn.set(r.cn, c);
+    const isCur = r.anio === anio;
+
+    const ga = porGrupo.get(grupo) ?? { cur: 0, prev: 0 };
+    if (isCur) ga.cur += g; else ga.prev += g;
+    porGrupo.set(grupo, ga);
+
+    const ca = porCn.get(r.cn) ?? { cur: 0, prev: 0 };
+    if (isCur) ca.cur += g; else ca.prev += g;
+    porCn.set(r.cn, ca);
   }
-  return { porGrupo, porCn };
+  return { porGrupo, porCn, mesHasta, anio };
 }
 
-// YoY agregado para un conjunto de grupos (un servicio o el total del área)
-function yoyDeGrupos(yoy: YoyRolling, grupos: DiagnosticoGrupo[]): number | null {
+function yoyDeGrupos(yoy: YoyYtd, grupos: DiagnosticoGrupo[]): number | null {
   let cur = 0, prev = 0;
   for (const g of grupos) { const v = yoy.porGrupo.get(g); if (v) { cur += v.cur; prev += v.prev; } }
   return computeYoy(cur, prev);
 }
 
-// Mapa cn → variación YoY (para asignar a cada medicamento del top)
-function yoyMapByCn(yoy: YoyRolling): Map<string, number | null> {
+function yoyMapByCn(yoy: YoyYtd): Map<string, number | null> {
   const m = new Map<string, number | null>();
   for (const [cn, v] of yoy.porCn) m.set(cn, computeYoy(v.cur, v.prev));
   return m;
+}
+
+function yoyFromGastoAnual(
+  items: GastoAnualServicio[],
+  servicioFiltro?: string | null,
+): number | null {
+  const realYear = new Date().getFullYear();
+  const cur = items.find(i => i.anio === realYear);
+  if (!cur) return null;
+  if (servicioFiltro === 'hematologia') return cur.variacionYoyHemato;
+  if (servicioFiltro === 'oncologia-solida') return cur.variacionYoyOnco;
+  return cur.variacionYoy;
+}
+
+function yoyEtiquetaFromAnual(items: GastoAnualServicio[]): string {
+  const realYear = new Date().getFullYear();
+  const cur = items.find(i => i.anio === realYear);
+  if (!cur?.mesHasta) return `Año ${realYear} vs ${realYear - 1}`;
+  const m = MESES_SHORT[cur.mesHasta - 1] ?? '?';
+  return `Ene–${m} ${realYear} vs Ene–${m} ${realYear - 1}`;
+}
+
+// ---------------------------------------------------------------------------
+// Semanas reales recientes (independiente del filtro de período largo)
+// ---------------------------------------------------------------------------
+async function getTemporalSemanalReciente(
+  area: string,
+  servicioFiltro?: string | null,
+  maxWeeks = 6,
+): Promise<TemporalPoint[]> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT
+      cr.anio::int                                                            AS anio,
+      cr.mes::int                                                             AS mes,
+      cr.semana_iso::int                                                      AS semana_iso,
+      SUM(cr.viales_dispensados)::float                                       AS viales,
+      SUM(cr.num_pacientes)::int                                              AS pacientes,
+      COUNT(*)::int                                                           AS preparaciones,
+      SUM(cr.viales_dispensados * COALESCE(m.precio_unidad, 0))::float        AS gasto
+    FROM consumo_registros cr
+    JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+    LEFT JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
+    WHERE ic.area = ${area}
+      AND cr.semana_iso IS NOT NULL AND cr.semana_iso > 0
+      AND (cr.anio * 100 + cr.mes) >= ${CUT_YM}
+      AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
+    GROUP BY cr.anio, cr.mes, cr.semana_iso
+    ORDER BY cr.anio DESC, cr.semana_iso DESC
+    LIMIT ${maxWeeks}
+  `) as Array<{
+    anio: number; mes: number; semana_iso: number;
+    viales: number; pacientes: number; preparaciones: number; gasto: number;
+  }>;
+
+  const points = rows.map(r => ({
+    anio: num(r.anio), mes: num(r.mes), semana: num(r.semana_iso),
+    label: weekLabel(num(r.anio), num(r.semana_iso), num(r.mes)),
+    viales: Number(r.viales), gasto: Number(r.gasto),
+    preparaciones: num(r.preparaciones), pacientes: num(r.pacientes),
+  }));
+
+  // Filtrar por servicio si aplica — requiere datos por diagnóstico; re-query si servicio
+  if (servicioFiltro === 'oncologia-solida' || servicioFiltro === 'hematologia') {
+    const grupos = gruposParaServicio(servicioFiltro as Servicio);
+    const detailRows = (await sql`
+      SELECT
+        cr.anio::int AS anio, cr.mes::int AS mes, cr.semana_iso::int AS semana_iso,
+        COALESCE(cr.diagnostico, '') AS diagnostico,
+        SUM(cr.viales_dispensados * COALESCE(m.precio_unidad, 0))::float AS gasto,
+        SUM(cr.viales_dispensados)::float AS viales,
+        SUM(cr.num_pacientes)::int AS pacientes,
+        COUNT(*)::int AS preparaciones
+      FROM consumo_registros cr
+      JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+      LEFT JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
+      WHERE ic.area = ${area}
+        AND cr.semana_iso IS NOT NULL AND cr.semana_iso > 0
+        AND (cr.anio * 100 + cr.mes) >= ${CUT_YM}
+        AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
+      GROUP BY cr.anio, cr.mes, cr.semana_iso, cr.diagnostico
+    `) as Array<{
+      anio: number; mes: number; semana_iso: number; diagnostico: string;
+      gasto: number; viales: number; pacientes: number; preparaciones: number;
+    }>;
+
+    const weekMap = new Map<string, TemporalPoint>();
+    for (const r of detailRows) {
+      if (!grupos.includes(classifyDiagnostico(r.diagnostico))) continue;
+      const key = `${r.anio}-W${r.semana_iso}`;
+      const ex = weekMap.get(key);
+      if (ex) {
+        ex.gasto += Number(r.gasto); ex.viales += Number(r.viales);
+        ex.preparaciones += num(r.preparaciones); ex.pacientes += num(r.pacientes);
+      } else {
+        weekMap.set(key, {
+          anio: num(r.anio), mes: num(r.mes), semana: num(r.semana_iso),
+          label: weekLabel(num(r.anio), num(r.semana_iso), num(r.mes)),
+          viales: Number(r.viales), gasto: Number(r.gasto),
+          preparaciones: num(r.preparaciones), pacientes: num(r.pacientes),
+        });
+      }
+    }
+    return [...weekMap.values()]
+      .sort((a, b) => a.anio !== b.anio ? b.anio - a.anio : (b.semana ?? 0) - (a.semana ?? 0))
+      .slice(0, maxWeeks)
+      .reverse();
+  }
+
+  return points.reverse();
 }
 
 // ---------------------------------------------------------------------------
@@ -437,9 +631,9 @@ function splitRows(rows: ClassifiedRow[]): { historic: ClassifiedRow[]; recent: 
   const historic: ClassifiedRow[] = [];
   const recent: ClassifiedRow[] = [];
   for (const r of rows) {
-    // Antes del corte: histórico (mensual, fiable). A partir del corte: semanal real.
-    if (r.fecha_min < SEMANA_REAL_DESDE) historic.push(r);
-    else recent.push(r);
+    // Corte por columnas anio/mes (dato fiable), no por fecha
+    if (ymKey(r.anio, r.mes) < CUT_YM) historic.push(r);
+    else if (r.semana_iso != null && r.semana_iso > 0) recent.push(r);
   }
   return { historic, recent };
 }
@@ -463,11 +657,12 @@ function buildMonthlyTemporal(rows: ClassifiedRow[]): TemporalPoint[] {
   return [...map.values()].sort((a, b) => a.anio !== b.anio ? a.anio - b.anio : a.mes - b.mes);
 }
 
-function buildWeeklyTemporal(rows: ClassifiedRow[]): TemporalPoint[] {
+function buildWeeklyTemporal(rows: ClassifiedRow[], maxWeeks?: number): TemporalPoint[] {
   const map = new Map<string, TemporalPoint>();
   for (const r of rows) {
     const sem = r.semana_iso;
-    const key = sem != null && sem > 0 ? `${r.anio}-W${sem}` : `${r.anio}-M${r.mes}`;
+    if (sem == null || sem <= 0) continue;
+    const key = `${r.anio}-W${sem}`;
     const ex = map.get(key);
     if (ex) {
       ex.viales += r.viales; ex.gasto += r.gasto;
@@ -480,11 +675,11 @@ function buildWeeklyTemporal(rows: ClassifiedRow[]): TemporalPoint[] {
       });
     }
   }
-  return [...map.values()].sort((a, b) => {
+  const sorted = [...map.values()].sort((a, b) => {
     if (a.anio !== b.anio) return a.anio - b.anio;
-    if (a.semana != null && b.semana != null) return a.semana - b.semana;
-    return a.mes - b.mes;
+    return (a.semana ?? 0) - (b.semana ?? 0);
   });
+  return maxWeeks ? sorted.slice(-maxWeeks) : sorted;
 }
 
 function countSemanas(rows: ClassifiedRow[]): number {
@@ -579,6 +774,113 @@ function buildTopMeds(
       ),
       desgloseByDx: [...m.dxMap.values()].sort((a, b) => b.gasto - a.gasto),
     }));
+}
+
+// ---------------------------------------------------------------------------
+// Pareto / ABC, coste paciente-ciclo, detección de outliers
+// ---------------------------------------------------------------------------
+function buildPareto(rows: ClassifiedRow[], limit = 20): AbcItem[] {
+  const map = new Map<string, { pa: string; nom: string; gasto: number }>();
+  for (const r of rows) {
+    const ex = map.get(r.cn);
+    if (ex) ex.gasto += r.gasto;
+    else map.set(r.cn, { pa: r.principio_activo, nom: r.nombre, gasto: r.gasto });
+  }
+  const total = [...map.values()].reduce((s, m) => s + m.gasto, 0);
+  if (total <= 0) return [];
+
+  const sorted = [...map.entries()]
+    .sort(([, a], [, b]) => b.gasto - a.gasto)
+    .slice(0, limit);
+
+  let acum = 0;
+  return sorted.map(([cn, m]) => {
+    acum += m.gasto;
+    const pctAcumulado = (acum / total) * 100;
+    const clase: 'A' | 'B' | 'C' = pctAcumulado <= 80 ? 'A' : pctAcumulado <= 95 ? 'B' : 'C';
+    return {
+      cn, principioActivo: m.pa, nombre: m.nom,
+      gasto: m.gasto,
+      pctTotal: (m.gasto / total) * 100,
+      pctAcumulado,
+      clase,
+    };
+  });
+}
+
+function buildCostePacienteCiclo(rows: ClassifiedRow[], limit = 10): CostePacienteCiclo[] {
+  const map = new Map<string, CostePacienteCiclo>();
+  for (const r of rows) {
+    const key = `${r.protocolo}||${r.indicacion}`;
+    const ex = map.get(key);
+    if (ex) {
+      ex.gasto += r.gasto; ex.pacientes += r.pacientes; ex.preparaciones += r.preparaciones;
+    } else {
+      map.set(key, {
+        protocolo: r.protocolo || '—',
+        indicacion: r.indicacion || '—',
+        grupo: r.grupo,
+        gasto: r.gasto,
+        pacientes: r.pacientes,
+        preparaciones: r.preparaciones,
+        costeMedio: 0,
+      });
+    }
+  }
+  return [...map.values()]
+    .filter(p => p.pacientes > 0)
+    .map(p => ({ ...p, costeMedio: p.gasto / p.pacientes }))
+    .sort((a, b) => b.gasto - a.gasto)
+    .slice(0, limit);
+}
+
+function buildOutliers(rows: ClassifiedRow[], temporalSemanal: TemporalPoint[]): OutlierItem[] {
+  if (temporalSemanal.length < 4) return [];
+
+  // Gasto semanal por medicamento (solo semanas reales)
+  type WAcc = { gasto: number; pa: string; prot: string; label: string };
+  const weekMed = new Map<string, WAcc>();
+  for (const r of rows) {
+    if (r.semana_iso == null || r.semana_iso <= 0) continue;
+    if (ymKey(r.anio, r.mes) < CUT_YM) continue;
+    const wk = `${r.cn}||${r.anio}-W${r.semana_iso}`;
+    const ex = weekMed.get(wk);
+    if (ex) ex.gasto += r.gasto;
+    else weekMed.set(wk, {
+      gasto: r.gasto, pa: r.principio_activo,
+      prot: r.protocolo || '—',
+      label: weekLabel(r.anio, r.semana_iso, r.mes),
+    });
+  }
+
+  // Media y desviación por CN
+  const byCn = new Map<string, number[]>();
+  for (const [wk, d] of weekMed) {
+    const cn = wk.split('||')[0]!;
+    const arr = byCn.get(cn) ?? [];
+    arr.push(d.gasto);
+    byCn.set(cn, arr);
+  }
+
+  const outliers: OutlierItem[] = [];
+  for (const [wk, d] of weekMed) {
+    const cn = wk.split('||')[0]!;
+    const vals = byCn.get(cn)!;
+    if (vals.length < 4) continue;
+    const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
+    const variance = vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length;
+    const std = Math.sqrt(variance);
+    if (std <= 0) continue;
+    if (d.gasto > mean + 2 * std) {
+      outliers.push({
+        cn, principioActivo: d.pa, protocolo: d.prot,
+        semanaLabel: d.label, gastoSemana: d.gasto,
+        mediaSemanal: mean, desviacion: std,
+        ratio: d.gasto / mean,
+      });
+    }
+  }
+  return outliers.sort((a, b) => b.ratio - a.ratio).slice(0, 8);
 }
 
 // ---------------------------------------------------------------------------
@@ -697,17 +999,20 @@ export async function getAnalisisDatos(
   grupoFiltro?: string | null,
   servicioFiltro?: string | null,
 ): Promise<AnalisisDatos> {
-  // Queries en paralelo: período actual, gasto por año global,
-  // gasto anual por servicio (histórico) y YoY móvil (últimos 12m vs 12m previos)
-  const [classified, gastoPorAnio, gastoAnualServicio, yoy] = await Promise.all([
+  const realYear = new Date().getFullYear();
+
+  const [classified, gastoPorAnio, gastoAnualServicio, temporalReciente] = await Promise.all([
     getAnalisisRaw(area, desde, hasta),
     getGastoByYear(area),
     getGastoAnualPorServicio(area),
-    getYoyRolling(area),
+    getTemporalSemanalReciente(area, servicioFiltro, 6),
   ]);
 
-  // Mapa cn → YoY (últimos 12 meses vs 12 meses anteriores)
+  const curAnual = gastoAnualServicio.find(g => g.anio === realYear);
+  const mesHasta = curAnual?.mesHasta ?? new Date().getMonth() + 1;
+  const yoy = await getYoyYtd(area, mesHasta, realYear);
   const yoyByCn = yoyMapByCn(yoy);
+  const yoyEtiqueta = yoyEtiquetaFromAnual(gastoAnualServicio);
 
   // Group aggregation
   type GAcc = { gasto: number; prep: number; viales: number; cns: Set<string>; prots: Set<string>; yearMap: Map<number, number> };
@@ -737,9 +1042,6 @@ export async function getAnalisisDatos(
       };
     });
 
-  // KPIs: se ajustan al alcance seleccionado.
-  //  · Si hay servicio (Onco/Hemato) → KPIs del servicio (más intuitivo para la farmacéutica).
-  //  · Si es "total" (sin servicio) → KPIs de toda el área.
   const isService = servicioFiltro === 'oncologia-solida' || servicioFiltro === 'hematologia';
   const scopeRows = isService
     ? classified.filter(r => gruposParaServicio(servicioFiltro as Servicio).includes(r.grupo))
@@ -753,27 +1055,21 @@ export async function getAnalisisDatos(
   const allCns         = new Set(scopeRows.map(r => r.cn));
   const allProts       = new Set(scopeRows.map(r => r.protocolo).filter(Boolean));
 
-  // YoY del alcance: agregado de los grupos correspondientes (12m vs 12m previos)
-  const scopeGrupos = isService ? gruposParaServicio(servicioFiltro as Servicio) : GRUPO_ORDER;
-
   const kpis: KpisAnalisis = {
     totalGasto: scopeGasto, totalPreparaciones: totalPrep, totalViales,
     mediaPackientesSemana: semanas > 0 ? Math.round((totalPacientes / semanas) * 10) / 10 : 0,
     protocolosActivos: allProts.size, medicamentosDistintos: allCns.size,
     costePorPreparacion: totalPrep > 0 ? scopeGasto / totalPrep : 0,
-    variacionYoy: yoyDeGrupos(yoy, scopeGrupos),
+    // Coherente con el gráfico anual: mismo periodo del año en curso vs año anterior
+    variacionYoy: yoyFromGastoAnual(gastoAnualServicio, servicioFiltro),
   };
 
-  // Filas filtradas por servicio para tops y temporal global (si no hay grupo específico)
-  // → cuando el usuario está en Hematología, los Top 10 son de hematología, no de toda el área
   const rowsForTops: ClassifiedRow[] = (servicioFiltro && !grupoFiltro)
     ? classified.filter(r => gruposParaServicio(servicioFiltro as Servicio).includes(r.grupo))
     : classified;
 
-  // Temporal dual: histórico mensual + reciente semanal real
-  const { historic, recent } = splitRows(rowsForTops);
+  const { historic } = splitRows(rowsForTops);
 
-  // Detalle de grupo
   let grupoDetalle: GrupoDetalle | null = null;
   if (grupoFiltro) {
     const grupoRows = classified.filter(r => r.grupo === grupoFiltro);
@@ -785,6 +1081,7 @@ export async function getAnalisisDatos(
 
   return {
     periodo: { desde, hasta },
+    yoyEtiqueta,
     kpis,
     gastoPorAnio,
     gastoAnualServicio,
@@ -792,7 +1089,10 @@ export async function getAnalisisDatos(
     topProtocolos:     buildTopProtocols(rowsForTops),
     topMedicamentos:   buildTopMeds(rowsForTops, 10, yoyByCn),
     temporalHistorico: buildMonthlyTemporal(historic),
-    temporalReciente:  buildWeeklyTemporal(recent),
+    temporalReciente,
+    pareto:            buildPareto(scopeRows),
+    costePacienteCiclo: buildCostePacienteCiclo(scopeRows),
+    outliers:          buildOutliers(rowsForTops, temporalReciente),
     grupoDetalle,
   };
 }

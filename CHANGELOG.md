@@ -4,6 +4,36 @@ Historial de cambios del proyecto ordenado del más reciente al más antiguo.
 
 ---
 
+## [Unreleased] — 21 jun 2026 (v5)
+
+### Pestaña Análisis — YoY coherente, semanas reales, Pareto y más
+
+#### YoY unificado (tarjeta = gráfico anual)
+- La tarjeta **"vs año anterior"** ahora usa el **mismo criterio** que la barra del año en
+  curso en el gráfico anual: **Ene–[último mes] 2026 vs Ene–[último mes] 2025** (columnas
+  `cr.anio` / `cr.mes`). Se elimina la ventana móvil de 12 meses que daba +9,1% mientras
+  el gráfico mostraba −10,1%.
+- Etiqueta explícita bajo la tarjeta (`yoyEtiqueta`) y nota "Mismo criterio que el gráfico anual".
+- YoY por servicio (Onco/Hemato) calculado por separado en `getGastoAnualPorServicio`.
+- Grupos tumorales y medicamentos: YoY año en curso vía `getYoyYtd` (anio/mes).
+
+#### Datos mensuales vs semanales (columnas anio/mes)
+- Filtro de período y agregación mensual usan **`cr.anio` y `cr.mes`** (no `fecha`).
+- Corte histórico/reciente por **anio/mes ≥ jun 2026** + `semana_iso` válida.
+- Gráfico **"Últimas 6 semanas"**: query dedicada `getTemporalSemanalReciente` (independiente
+  del preset largo); mensaje si aún no hay importaciones semanales desde jun 2026.
+
+#### UX
+- Presets de período calculados **al vuelo** (fechas siempre actuales al pulsar el badge).
+- **Ordenar tarjetas** de grupo: por gasto o por variación YoY.
+
+#### Nuevas secciones farmaoeconómicas
+- **Pareto / ABC**: concentración del gasto (clases A/B/C).
+- **Coste medio paciente-ciclo**: gasto / pacientes por protocolo-indicación.
+- **Outliers**: picos semanales &gt; media + 2σ (solo dato semanal real).
+
+---
+
 ## [Unreleased] — 21 jun 2026 (v4)
 
 ### Pestaña Análisis — YoY corregido y series mensual/semanal fiables

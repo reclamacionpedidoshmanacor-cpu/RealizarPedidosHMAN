@@ -15,6 +15,7 @@ import {
 import type {
   AnalisisDatos, GrupoCard, TopMed, TopProtocolo,
   GrupoDetalle, DiagnosticoDetalle, IndicacionDetalle, GastoAnualServicio,
+  AbcItem, CostePacienteCiclo, OutlierItem,
 } from '@/lib/analisis-neon';
 
 // Alcance de visualización: total del área o un servicio concreto
@@ -62,30 +63,37 @@ function scopeColor(s: ServicioSel): string {
 }
 
 // ---------------------------------------------------------------------------
-// Presets de período
+// Presets de período (calculados al vuelo para fechas siempre actuales)
 // ---------------------------------------------------------------------------
-const NOW      = new Date();
-const THIS_YEAR = NOW.getFullYear();
-
-function presetDesde(months: number): string {
-  const d = new Date(); d.setMonth(d.getMonth() - months);
-  return d.toISOString().slice(0, 10);
+function buildPresets() {
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  const year = now.getFullYear();
+  const presetDesde = (months: number) => {
+    const d = new Date(); d.setMonth(d.getMonth() - months);
+    return d.toISOString().slice(0, 10);
+  };
+  return [
+    { label: '3 meses',      desde: presetDesde(3),  hasta: today },
+    { label: '6 meses',      desde: presetDesde(6),  hasta: today },
+    { label: 'Año actual',   desde: `${year}-01-01`, hasta: today },
+    { label: 'Año anterior', desde: `${year - 1}-01-01`, hasta: `${year - 1}-12-31` },
+    { label: '2 años',       desde: `${year - 2}-01-01`, hasta: today },
+  ];
 }
-const PRESETS: { label: string; desde: string; hasta: string }[] = [
-  { label: '3 meses',  desde: presetDesde(3),  hasta: NOW.toISOString().slice(0, 10) },
-  { label: '6 meses',  desde: presetDesde(6),  hasta: NOW.toISOString().slice(0, 10) },
-  { label: 'Año actual',  desde: `${THIS_YEAR}-01-01`,     hasta: NOW.toISOString().slice(0, 10) },
-  { label: 'Año anterior', desde: `${THIS_YEAR - 1}-01-01`, hasta: `${THIS_YEAR - 1}-12-31` },
-  { label: '2 años',  desde: `${THIS_YEAR - 2}-01-01`, hasta: NOW.toISOString().slice(0, 10) },
-];
 
-function defaultDesde() { return `${THIS_YEAR - 2}-01-01`; }
-function defaultHasta() { return NOW.toISOString().slice(0, 10); }
+function defaultDesde() {
+  const year = new Date().getFullYear();
+  return `${year - 2}-01-01`;
+}
+function defaultHasta() {
+  return new Date().toISOString().slice(0, 10);
+}
 
 // ---------------------------------------------------------------------------
 // Badge YoY (semáforo: bajar es bueno para gasto)
 // ---------------------------------------------------------------------------
-function YoyBadge({ pct }: { pct: number | null }) {
+function YoyBadge({ pct, compact }: { pct: number | null; compact?: boolean }) {
   if (pct === null) return <span className="text-[10px] text-slate-400">sin dato</span>;
   const down = pct < 0;
   const high = Math.abs(pct) > 10;
@@ -96,7 +104,7 @@ function YoyBadge({ pct }: { pct: number | null }) {
     : 'bg-orange-50 text-orange-700 ring-orange-200';
   return (
     <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ${cls}`}>
-      {down ? '▼' : '▲'} {Math.abs(pct).toFixed(1)}% vs año ant.
+      {down ? '▼' : '▲'} {Math.abs(pct).toFixed(1)}%{compact ? '' : ' YoY'}
     </span>
   );
 }
@@ -498,13 +506,17 @@ function DiagnosticoAccordion({ dx }: { dx: DiagnosticoDetalle }) {
 // ---------------------------------------------------------------------------
 // Gráfico temporal (histórico o semanal)
 // ---------------------------------------------------------------------------
-function TemporalChart({ data, title, color = '#475569' }: {
+function TemporalChart({ data, title, color = '#475569', emptyHint }: {
   data: import('@/lib/analisis-neon').TemporalPoint[];
   title: string;
   color?: string;
+  emptyHint?: string;
 }) {
   if (!data.length) return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 px-6 py-8 text-center text-sm text-slate-400">{title} — sin datos.</div>
+    <div className="rounded-xl border border-slate-200 bg-slate-50 px-6 py-8 text-center text-sm text-slate-400">
+      <p className="font-medium">{title}</p>
+      <p className="mt-1 text-xs">{emptyHint ?? 'Sin datos en el período seleccionado.'}</p>
+    </div>
   );
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -530,6 +542,147 @@ function TemporalChart({ data, title, color = '#475569' }: {
 }
 
 // ---------------------------------------------------------------------------
+// Pareto / ABC
+// ---------------------------------------------------------------------------
+function ParetoSection({ items }: { items: AbcItem[] }) {
+  if (!items.length) return null;
+  const clsColor = { A: 'bg-red-100 text-red-700 ring-red-200', B: 'bg-amber-100 text-amber-700 ring-amber-200', C: 'bg-slate-100 text-slate-600 ring-slate-200' };
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+      <div className="px-5 py-4 border-b border-slate-100">
+        <h3 className="text-sm font-semibold text-slate-700">Concentración del gasto (Pareto / ABC)</h3>
+        <p className="text-xs text-slate-400 mt-0.5">Clase A ≈ 80% del gasto · B ≈ 15% · C ≈ 5%</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-[10px] uppercase tracking-wide text-slate-400 bg-slate-50">
+              <th className="text-left px-4 py-2">Medicamento</th>
+              <th className="text-center px-2 py-2 w-12">ABC</th>
+              <th className="text-right px-3 py-2">Gasto</th>
+              <th className="text-right px-3 py-2">% total</th>
+              <th className="text-right px-4 py-2 w-32">% acum.</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {items.map(it => (
+              <tr key={it.cn} className="hover:bg-slate-50">
+                <td className="px-4 py-2">
+                  <p className="font-semibold text-slate-800">{it.principioActivo || '—'}</p>
+                  <p className="text-[10px] text-slate-400 italic">{it.nombre}</p>
+                </td>
+                <td className="px-2 py-2 text-center">
+                  <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ${clsColor[it.clase]}`}>{it.clase}</span>
+                </td>
+                <td className="px-3 py-2 text-right font-semibold tabular-nums">{fmtEur(it.gasto)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-slate-600">{it.pctTotal.toFixed(1)}%</td>
+                <td className="px-4 py-2">
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                      <div className="h-full rounded-full bg-teal-500" style={{ width: `${Math.min(it.pctAcumulado, 100)}%` }} />
+                    </div>
+                    <span className="text-[10px] tabular-nums text-slate-500 w-10 text-right">{it.pctAcumulado.toFixed(0)}%</span>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Coste paciente-ciclo
+// ---------------------------------------------------------------------------
+function CosteCicloSection({ items }: { items: CostePacienteCiclo[] }) {
+  if (!items.length) return null;
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+      <div className="px-5 py-4 border-b border-slate-100">
+        <h3 className="text-sm font-semibold text-slate-700">Coste medio por paciente-ciclo</h3>
+        <p className="text-xs text-slate-400 mt-0.5">Gasto / nº pacientes por protocolo · aproximación (no distingue repeticiones)</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-[10px] uppercase tracking-wide text-slate-400 bg-slate-50">
+              <th className="text-left px-4 py-2">Protocolo</th>
+              <th className="text-left px-3 py-2">Indicación</th>
+              <th className="text-right px-3 py-2">Pacientes</th>
+              <th className="text-right px-3 py-2">Gasto</th>
+              <th className="text-right px-4 py-2">€ / paciente</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {items.map((it, i) => {
+              const gc = GRUPO_COLORS[it.grupo];
+              return (
+                <tr key={i} className="hover:bg-slate-50">
+                  <td className="px-4 py-2 font-medium text-slate-800">{it.protocolo}</td>
+                  <td className="px-3 py-2">
+                    <span className={`inline-block rounded-full px-1.5 py-0.5 text-[9px] font-bold ring-1 mr-1 ${gc.bg} ${gc.text} ${gc.ring}`}>
+                      {GRUPO_LABELS[it.grupo]}
+                    </span>
+                    <span className="text-slate-600">{it.indicacion}</span>
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fmtNum(it.pacientes, 0)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fmtEur(it.gasto)}</td>
+                  <td className="px-4 py-2 text-right font-bold tabular-nums text-teal-700">{fmtEur(it.costeMedio)}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Outliers semanales
+// ---------------------------------------------------------------------------
+function OutliersSection({ items }: { items: OutlierItem[] }) {
+  if (!items.length) return null;
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50/30 shadow-sm overflow-hidden">
+      <div className="px-5 py-4 border-b border-amber-100">
+        <h3 className="text-sm font-semibold text-amber-900">Picos de gasto detectados (outliers)</h3>
+        <p className="text-xs text-amber-700/70 mt-0.5">Semanas con gasto &gt; media + 2 desviaciones · solo dato semanal real</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-[10px] uppercase tracking-wide text-amber-700/60 bg-amber-50">
+              <th className="text-left px-4 py-2">Medicamento</th>
+              <th className="text-left px-3 py-2">Semana</th>
+              <th className="text-right px-3 py-2">Gasto sem.</th>
+              <th className="text-right px-3 py-2">Media</th>
+              <th className="text-right px-4 py-2">× media</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-amber-100/50">
+            {items.map((it, i) => (
+              <tr key={i} className="hover:bg-amber-50">
+                <td className="px-4 py-2">
+                  <p className="font-semibold text-slate-800">{it.principioActivo}</p>
+                  <p className="text-[10px] text-slate-500">{it.protocolo}</p>
+                </td>
+                <td className="px-3 py-2 text-slate-600">{it.semanaLabel}</td>
+                <td className="px-3 py-2 text-right font-bold tabular-nums text-amber-800">{fmtEur(it.gastoSemana)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-slate-500">{fmtEur(it.mediaSemanal)}</td>
+                <td className="px-4 py-2 text-right font-bold tabular-nums text-red-600">{it.ratio.toFixed(1)}×</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Panel de detalle de grupo tumoral
 // ---------------------------------------------------------------------------
 function GrupoDetallePanel({ gd }: { gd: GrupoDetalle }) {
@@ -548,7 +701,8 @@ function GrupoDetallePanel({ gd }: { gd: GrupoDetalle }) {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <TemporalChart data={gd.temporalHistorico} title="Evolución mensual (histórico fiable)" color={c.chart} />
-        <TemporalChart data={gd.temporalReciente}  title="Detalle semanal (semanas reales)" color={c.chart + 'cc'} />
+        <TemporalChart data={gd.temporalReciente}  title="Últimas semanas (dato semanal real)" color={c.chart + 'cc'}
+          emptyHint="Sin importaciones semanales recientes para este grupo." />
       </div>
 
       <TopProtocolosTable data={gd.topProtocolos} />
@@ -612,9 +766,12 @@ export default function AnalisisPage() {
   const [desde, setDesde]               = useState(defaultDesde());
   const [hasta, setHasta]               = useState(defaultHasta());
   const [activePreset, setActivePreset] = useState<string | null>('2 años');
+  const [sortGrupos, setSortGrupos]     = useState<'gasto' | 'yoy'>('gasto');
   const [datos, setDatos]               = useState<AnalisisDatos | null>(null);
   const [loading, setLoading]           = useState(false);
   const [error, setError]               = useState<string | null>(null);
+
+  const presets = buildPresets();
 
   // Auto-fetch reactivo: cualquier cambio de filtro dispara la petición
   useEffect(() => {
@@ -666,9 +823,18 @@ export default function AnalisisPage() {
   // Gasto total del área en el período (suma de todos los grupos, siempre disponible)
   const areaTotal = (datos?.grupos ?? []).reduce((s, g) => s + g.totalGasto, 0);
 
-  const tarjetas = servicio === 'total'
+  const tarjetasBase = servicio === 'total'
     ? (datos?.grupos ?? [])
     : (datos?.grupos ?? []).filter(g => gruposParaServicio(servicio).includes(g.grupo));
+
+  const tarjetas = [...tarjetasBase].sort((a, b) => {
+    if (sortGrupos === 'yoy') {
+      const ya = a.variacionYoy ?? -Infinity;
+      const yb = b.variacionYoy ?? -Infinity;
+      return yb - ya;
+    }
+    return b.totalGasto - a.totalGasto;
+  });
 
   return (
     <div className="w-full px-4 sm:px-6 lg:px-8 py-6 space-y-6">
@@ -691,7 +857,7 @@ export default function AnalisisPage() {
 
         {/* Badges de período + selector manual */}
         <div className="flex flex-wrap items-center gap-2">
-          {PRESETS.map(p => (
+          {presets.map(p => (
             <button key={p.label} onClick={() => applyPreset(p)}
               className={['rounded-full px-3 py-1 text-xs font-semibold transition-colors border',
                 activePreset === p.label
@@ -764,6 +930,8 @@ export default function AnalisisPage() {
             <div className="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
               <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">vs año anterior</p>
               <div className="mt-2"><YoyBadge pct={datos.kpis.variacionYoy} /></div>
+              <p className="mt-1.5 text-[10px] text-slate-400 leading-tight">{datos.yoyEtiqueta}</p>
+              <p className="text-[10px] text-slate-400">Mismo criterio que el gráfico anual</p>
             </div>
             <KpiCard label="Preparaciones" value={fmtNum(datos.kpis.totalPreparaciones, 0)} />
             <KpiCard label="Protocolos activos" value={String(datos.kpis.protocolosActivos)} />
@@ -773,13 +941,26 @@ export default function AnalisisPage() {
           {/* ── Tarjetas de grupo ─────────────────────────────────────────── */}
           {tarjetas.length > 0 ? (
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-3">
-                Grupos tumorales — {fmtDate(desde)} al {fmtDate(hasta)}
-                {grupoSel && (
-                  <button onClick={() => setGrupoSel(null)}
-                    className="ml-3 text-teal-600 hover:underline normal-case font-normal">✕ Ver todos</button>
-                )}
-              </p>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Grupos tumorales — {fmtDate(desde)} al {fmtDate(hasta)}
+                  {grupoSel && (
+                    <button onClick={() => setGrupoSel(null)}
+                      className="ml-3 text-teal-600 hover:underline normal-case font-normal">✕ Ver todos</button>
+                  )}
+                </p>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-slate-400 uppercase tracking-wide">Ordenar:</span>
+                  {(['gasto', 'yoy'] as const).map(s => (
+                    <button key={s} onClick={() => setSortGrupos(s)}
+                      className={['rounded-full px-2.5 py-0.5 text-[10px] font-semibold border transition-colors',
+                        sortGrupos === s ? 'bg-slate-800 text-white border-slate-800' : 'border-slate-200 text-slate-500 hover:bg-slate-50',
+                      ].join(' ')}>
+                      {s === 'gasto' ? 'Por gasto' : 'Por variación YoY'}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
                 {tarjetas.map(g => (
                   <GrupoCardUI key={g.grupo} g={g} selected={grupoSel === g.grupo} onClick={() => handleSelectGrupo(g.grupo)} />
@@ -855,10 +1036,15 @@ export default function AnalisisPage() {
                 />
                 <TemporalChart
                   data={datos.temporalReciente}
-                  title={`Detalle semanal (semanas reales) — ${scopeLabel(servicio)}`}
+                  title={`Últimas 6 semanas (dato semanal real) — ${scopeLabel(servicio)}`}
                   color={scopeColor(servicio)}
+                  emptyHint="Importa consumo semanal desde junio 2026 para ver este detalle."
                 />
               </div>
+
+              <ParetoSection items={datos.pareto} />
+              <CosteCicloSection items={datos.costePacienteCiclo} />
+              <OutliersSection items={datos.outliers} />
             </div>
           )}
 
