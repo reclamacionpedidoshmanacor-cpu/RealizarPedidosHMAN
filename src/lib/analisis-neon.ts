@@ -157,8 +157,7 @@ export type TopMed = {
   costePorPreparacion: number;
   variacionYoy: number | null;
   grupo: DiagnosticoGrupo;
-  temporalMensual: TemporalPoint[];
-  temporalSemanal: TemporalPoint[];
+  temporalMensual: TemporalPoint[];   // serie mensual (dato fiable en todo el histórico)
   desgloseByDx: DxBreakdown[];
 };
 
@@ -578,7 +577,6 @@ function buildTopMeds(
       temporalMensual: [...m.months.values()].sort((a, b) =>
         a.anio !== b.anio ? a.anio - b.anio : a.mes - b.mes
       ),
-      temporalSemanal: [],
       desgloseByDx: [...m.dxMap.values()].sort((a, b) => b.gasto - a.gasto),
     }));
 }
