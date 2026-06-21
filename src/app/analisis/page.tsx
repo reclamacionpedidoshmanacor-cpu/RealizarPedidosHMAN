@@ -15,7 +15,7 @@ import {
 import type {
   AnalisisDatos, GrupoCard, TopMed, TopProtocolo,
   GrupoDetalle, DiagnosticoDetalle, IndicacionDetalle, GastoAnualServicio,
-  AbcItem, CostePacienteCiclo, OutlierItem,
+  AbcItem, CostePacienteCiclo, OutlierItem, TemporalMesStacked,
 } from '@/lib/analisis-neon';
 
 // Alcance de visualización: total del área o un servicio concreto
@@ -308,13 +308,119 @@ function TopProtocolosTable({ data }: { data: TopProtocolo[] }) {
   );
 }
 
+// Paleta para segmentos dx/indicación (vista grupo)
+const DX_CHART_COLORS = [
+  '#0d9488', '#6366f1', '#f59e0b', '#ec4899', '#14b8a6', '#8b5cf6', '#94a3b8',
+];
+
+function stackedToChartRows(data: TemporalMesStacked[]) {
+  const segIds = new Set<string>();
+  for (const m of data) for (const s of m.segmentos) segIds.add(s.id);
+  return data.map(m => {
+    const row: Record<string, string | number> = { label: m.label, gastoTotal: m.gastoTotal };
+    for (const id of segIds) {
+      row[id] = m.segmentos.find(s => s.id === id)?.gasto ?? 0;
+    }
+    return row;
+  });
+}
+
+function buildSegmentMeta(
+  data: TemporalMesStacked[],
+  mode: 'total' | 'grupo',
+): Record<string, { label: string; color: string }> {
+  const meta: Record<string, { label: string; color: string }> = {};
+  const seen = new Set<string>();
+  let colorIdx = 0;
+  for (const m of data) {
+    for (const s of m.segmentos) {
+      if (seen.has(s.id)) continue;
+      seen.add(s.id);
+      if (s.id === '__otros__') {
+        meta[s.id] = { label: 'Otros', color: '#cbd5e1' };
+      } else if (mode === 'total' && s.id in GRUPO_COLORS) {
+        meta[s.id] = { label: GRUPO_LABELS[s.id as DiagnosticoGrupo], color: GRUPO_COLORS[s.id as DiagnosticoGrupo].chart };
+      } else {
+        meta[s.id] = { label: s.label.length > 42 ? s.label.slice(0, 40) + '…' : s.label, color: DX_CHART_COLORS[colorIdx++ % DX_CHART_COLORS.length]! };
+      }
+    }
+  }
+  return meta;
+}
+
+function MedStackedChart({
+  data,
+  mode,
+}: {
+  data: TemporalMesStacked[];
+  mode: 'total' | 'grupo';
+}) {
+  if (!data.length || data.every(m => m.gastoTotal === 0)) {
+    return <p className="text-xs text-slate-400">Sin datos en el período.</p>;
+  }
+  const segmentMeta = buildSegmentMeta(data, mode);
+  const chartRows = stackedToChartRows(data);
+  const segmentIds = Object.keys(segmentMeta);
+
+  return (
+    <div>
+      <ResponsiveContainer width="100%" height={200}>
+        <ComposedChart data={chartRows} margin={{ top: 8, right: 16, left: 0, bottom: 18 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+          <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#94a3b8' }}
+            angle={-25} textAnchor="end" height={42} interval="preserveStartEnd" />
+          <YAxis tickFormatter={v => fmtEurShort(Number(v))} tick={{ fontSize: 10, fill: '#94a3b8' }} width={64} />
+          <Tooltip
+            content={({ active, payload, label }) => {
+              if (!active || !payload?.length) return null;
+              const items = payload.filter(p => Number(p.value ?? 0) > 0 && p.dataKey !== 'gastoTotal');
+              const total = items.reduce((s, p) => s + Number(p.value ?? 0), 0);
+              return (
+                <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg max-w-xs">
+                  <p className="font-bold text-slate-800 mb-1">{label}</p>
+                  {items.map(p => {
+                    const id = String(p.dataKey);
+                    const meta = segmentMeta[id];
+                    const val = Number(p.value ?? 0);
+                    const pct = total > 0 ? Math.round(val / total * 1000) / 10 : 0;
+                    return (
+                      <p key={id} className="text-slate-600 truncate" style={{ color: meta?.color }}>
+                        {meta?.label ?? id}: {fmtEur(val)} ({pct}%)
+                      </p>
+                    );
+                  })}
+                  <p className="font-semibold text-slate-800 mt-1 pt-1 border-t border-slate-100">
+                    Total: {fmtEur(total)}
+                  </p>
+                </div>
+              );
+            }}
+          />
+          <Legend wrapperStyle={{ fontSize: 10 }} formatter={(v: string) => segmentMeta[v]?.label ?? v} />
+          {segmentIds.map(id => (
+            <Bar key={id} dataKey={id} name={id} stackId="gasto" fill={segmentMeta[id]!.color}
+              fillOpacity={0.82} radius={id === segmentIds[segmentIds.length - 1] ? [3, 3, 0, 0] : [0, 0, 0, 0]} />
+          ))}
+          <Line dataKey="gastoTotal" name="Total" stroke="#334155" strokeWidth={1.5}
+            dot={{ r: 2, fill: '#334155' }} strokeDasharray="4 2" />
+        </ComposedChart>
+      </ResponsiveContainer>
+      <p className="text-[10px] text-slate-400 mt-1">
+        {mode === 'total'
+          ? 'Barras apiladas por tipo tumoral · línea = gasto total del medicamento'
+          : 'Barras apiladas por diagnóstico/indicación · % del gasto del medicamento en este grupo'}
+      </p>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
-// Top 10 medicamentos — expandible: pestaña diagnóstico | evolución semanal
+// Top 10 medicamentos — expandible: dx/indicación | evolución mensual apilada
 // ---------------------------------------------------------------------------
-function TopMedRow({ m, rank }: { m: TopMed; rank: number }) {
+function TopMedRow({ m, rank, mode = 'total' }: { m: TopMed; rank: number; mode?: 'total' | 'grupo' }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab]   = useState<'dx' | 'chart'>('dx');
-  const accent = '#0d9488'; // teal; el medicamento es suma de varios grupos, no se colorea por grupo
+  const stackedData = mode === 'total' ? m.temporalPorGrupo : m.temporalPorDx;
   return (
     <>
       <tr className="cursor-pointer hover:bg-slate-50 transition-colors" onClick={() => setOpen(v => !v)}>
@@ -348,28 +454,33 @@ function TopMedRow({ m, rank }: { m: TopMed; rank: number }) {
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="text-[10px] uppercase tracking-wide text-slate-400">
-                      <th className="text-left py-1 w-[38%]">Diagnóstico</th>
-                      <th className="text-left py-1 w-[30%]">Indicación</th>
-                      <th className="text-right py-1 w-[14%]">Prep.</th>
-                      <th className="text-right py-1 w-[18%]">Gasto</th>
+                      <th className="text-left py-1 w-[34%]">Diagnóstico</th>
+                      <th className="text-left py-1 w-[26%]">Indicación</th>
+                      <th className="text-right py-1 w-[10%]">Prep.</th>
+                      <th className="text-right py-1 w-[14%]">Gasto</th>
+                      <th className="text-right py-1 w-[10%]">% med.</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {m.desgloseByDx.map((dx, i) => {
                       const gc = GRUPO_COLORS[dx.grupo];
+                      const pctMed = m.totalGasto > 0 ? (dx.gasto / m.totalGasto) * 100 : 0;
                       return (
                         <tr key={i} className="hover:bg-slate-100/50">
                           <td className="py-1.5 pr-2">
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className={`inline-block rounded-full px-1.5 py-0.5 text-[9px] font-bold ring-1 ${gc.bg} ${gc.text} ${gc.ring}`}>
-                                {GRUPO_LABELS[dx.grupo]}
-                              </span>
+                              {mode === 'total' && (
+                                <span className={`inline-block rounded-full px-1.5 py-0.5 text-[9px] font-bold ring-1 ${gc.bg} ${gc.text} ${gc.ring}`}>
+                                  {GRUPO_LABELS[dx.grupo]}
+                                </span>
+                              )}
                               <span className="text-slate-700">{dx.diagnostico}</span>
                             </div>
                           </td>
                           <td className="py-1.5 pr-2 text-slate-600">{dx.indicacion}</td>
                           <td className="py-1.5 text-right text-slate-600 tabular-nums">{fmtNum(dx.preparaciones, 0)}</td>
                           <td className="py-1.5 text-right font-semibold text-slate-800 tabular-nums">{fmtEur(dx.gasto)}</td>
+                          <td className="py-1.5 text-right tabular-nums text-teal-700 font-medium">{pctMed.toFixed(1)}%</td>
                         </tr>
                       );
                     })}
@@ -379,21 +490,7 @@ function TopMedRow({ m, rank }: { m: TopMed; rank: number }) {
             )}
 
             {tab === 'chart' && (
-              m.temporalMensual.length > 0 ? (
-                <ResponsiveContainer width="100%" height={160}>
-                  <ComposedChart data={m.temporalMensual} margin={{ top: 8, right: 16, left: 0, bottom: 18 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                    <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#94a3b8' }}
-                      angle={-25} textAnchor="end" height={42} interval="preserveStartEnd" />
-                    <YAxis tickFormatter={v => fmtEurShort(Number(v))} tick={{ fontSize: 10, fill: '#94a3b8' }} width={64} />
-                    <Tooltip formatter={(v: unknown) => fmtEur(Number(v ?? 0))} />
-                    {/* Barras atenuadas + línea evolutiva que las une (gasto mensual) */}
-                    <Bar dataKey="gasto" name="Gasto (€)" fill={accent} fillOpacity={0.28} radius={[3, 3, 0, 0]} />
-                    <Line dataKey="gasto" name="Evolución" stroke={accent} strokeWidth={2}
-                      dot={{ r: 2, fill: accent }} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              ) : <p className="text-xs text-slate-400">Sin datos en el período.</p>
+              <MedStackedChart data={stackedData} mode={mode} />
             )}
           </td>
         </tr>
@@ -709,8 +806,9 @@ function GrupoDetallePanel({ gd }: { gd: GrupoDetalle }) {
 
       {gd.topMedicamentos.length > 0 && (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-          <div className="px-5 py-3 border-b border-slate-100 bg-slate-50">
+          <div className="px-5 py-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-slate-700">Top 10 medicamentos del grupo</h3>
+            <span className="text-xs text-slate-400">Clic para desglose dx/indicación y evolución apilada</span>
           </div>
           <table className="w-full">
             <thead className="bg-slate-50/50">
@@ -722,22 +820,12 @@ function GrupoDetallePanel({ gd }: { gd: GrupoDetalle }) {
                 <th className="px-3 py-2 text-right">Viales</th>
                 <th className="px-3 py-2 text-right">€/prep.</th>
                 <th className="px-3 py-2">YoY</th>
+                <th className="px-3 py-2 w-5" />
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {gd.topMedicamentos.map((m, i) => (
-                <tr key={m.cn} className={i % 2 === 1 ? 'bg-slate-50/30' : ''}>
-                  <td className="px-3 py-2.5 text-xs font-bold text-slate-400">{i + 1}</td>
-                  <td className="px-3 py-2.5">
-                    <p className="text-sm font-semibold text-slate-800">{m.principioActivo || '—'}</p>
-                    <p className="text-[11px] text-slate-400 italic">{m.nombre || ''}</p>
-                  </td>
-                  <td className="px-3 py-2.5 text-right text-sm font-bold text-slate-800 tabular-nums">{fmtEur(m.totalGasto)}</td>
-                  <td className="px-3 py-2.5 text-right text-xs text-slate-500 tabular-nums">{fmtNum(m.totalPreparaciones, 0)}</td>
-                  <td className="px-3 py-2.5 text-right text-xs text-slate-500 tabular-nums">{fmtNum(m.totalViales)}</td>
-                  <td className="px-3 py-2.5 text-right text-xs text-slate-500 tabular-nums">{fmtEur(m.costePorPreparacion)}</td>
-                  <td className="px-3 py-2.5"><YoyBadge pct={m.variacionYoy} /></td>
-                </tr>
+                <TopMedRow key={m.cn} m={m} rank={i + 1} mode="grupo" />
               ))}
             </tbody>
           </table>
@@ -1022,7 +1110,7 @@ export default function AnalisisPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {datos.topMedicamentos.map((m, i) => <TopMedRow key={m.cn} m={m} rank={i + 1} />)}
+                      {datos.topMedicamentos.map((m, i) => <TopMedRow key={m.cn} m={m} rank={i + 1} mode="total" />)}
                     </tbody>
                   </table>
                 </div>

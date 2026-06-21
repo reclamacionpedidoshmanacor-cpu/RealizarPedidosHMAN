@@ -159,6 +159,21 @@ export type DxBreakdown = {
   preparaciones: number;
 };
 
+export type TemporalStackSegment = {
+  id: string;
+  label: string;
+  gasto: number;
+  pctOfMes: number;
+};
+
+export type TemporalMesStacked = {
+  anio: number;
+  mes: number;
+  label: string;
+  gastoTotal: number;
+  segmentos: TemporalStackSegment[];
+};
+
 export type TopMed = {
   cn: string;
   principioActivo: string;
@@ -169,7 +184,9 @@ export type TopMed = {
   costePorPreparacion: number;
   variacionYoy: number | null;
   grupo: DiagnosticoGrupo;
-  temporalMensual: TemporalPoint[];   // serie mensual (dato fiable en todo el histórico)
+  temporalMensual: TemporalPoint[];
+  temporalPorGrupo: TemporalMesStacked[];  // evolución mensual apilada por tipo tumoral
+  temporalPorDx: TemporalMesStacked[];     // evolución mensual apilada por dx/indicación
   desgloseByDx: DxBreakdown[];
 };
 
@@ -780,6 +797,61 @@ function buildTopProtocols(rows: ClassifiedRow[], limit = 10): TopProtocolo[] {
 // ---------------------------------------------------------------------------
 // Top 10 medicamentos
 // ---------------------------------------------------------------------------
+
+function buildTemporalStacked(
+  monthSegMap: Map<string, Map<string, { label: string; gasto: number }>>,
+  monthsSorted: TemporalPoint[],
+  limitSegments = 6,
+): TemporalMesStacked[] {
+  const segTotals = new Map<string, { label: string; total: number }>();
+  for (const segs of monthSegMap.values()) {
+    for (const [id, { label, gasto }] of segs) {
+      const t = segTotals.get(id) ?? { label, total: 0 };
+      t.total += gasto;
+      segTotals.set(id, t);
+    }
+  }
+  const topIds = new Set(
+    [...segTotals.entries()]
+      .sort(([, a], [, b]) => b.total - a.total)
+      .slice(0, limitSegments)
+      .map(([id]) => id),
+  );
+
+  return monthsSorted.map(month => {
+    const mk = `${month.anio}-${String(month.mes).padStart(2, '0')}`;
+    const segs = monthSegMap.get(mk);
+    let gastoTotal = 0;
+    let otrosGasto = 0;
+    const byTop = new Map<string, { label: string; gasto: number }>();
+
+    if (segs) {
+      for (const [id, { label, gasto }] of segs) {
+        gastoTotal += gasto;
+        if (topIds.has(id)) {
+          const ex = byTop.get(id) ?? { label, gasto: 0 };
+          ex.gasto += gasto;
+          byTop.set(id, ex);
+        } else {
+          otrosGasto += gasto;
+        }
+      }
+    }
+
+    const segmentos: TemporalStackSegment[] = [...byTop.entries()]
+      .map(([id, { label, gasto }]) => ({ id, label, gasto, pctOfMes: 0 }));
+    if (otrosGasto > 0) {
+      segmentos.push({ id: '__otros__', label: 'Otros', gasto: otrosGasto, pctOfMes: 0 });
+    }
+    for (const s of segmentos) {
+      s.pctOfMes = gastoTotal > 0 ? Math.round((s.gasto / gastoTotal) * 1000) / 10 : 0;
+    }
+    segmentos.sort((a, b) => b.gasto - a.gasto);
+
+    return { anio: month.anio, mes: month.mes, label: month.label, gastoTotal, segmentos };
+  });
+}
+
 function buildTopMeds(
   rows: ClassifiedRow[],
   limit = 10,
@@ -789,6 +861,8 @@ function buildTopMeds(
     pa: string; nom: string; gasto: number; viales: number; prep: number;
     grupo: DiagnosticoGrupo;
     months: Map<string, TemporalPoint>;
+    monthGrupo: Map<string, Map<string, { label: string; gasto: number }>>;
+    monthDx: Map<string, Map<string, { label: string; gasto: number }>>;
     dxMap: Map<string, DxBreakdown>;
   };
   const medMap = new Map<string, MedAcc>();
@@ -796,45 +870,77 @@ function buildTopMeds(
   for (const r of rows) {
     let m = medMap.get(r.cn);
     if (!m) {
-      m = { pa: r.principio_activo, nom: r.nombre, gasto: 0, viales: 0, prep: 0, grupo: r.grupo, months: new Map(), dxMap: new Map() };
+      m = {
+        pa: r.principio_activo, nom: r.nombre, gasto: 0, viales: 0, prep: 0, grupo: r.grupo,
+        months: new Map(),
+        monthGrupo: new Map(),
+        monthDx: new Map(),
+        dxMap: new Map(),
+      };
       medMap.set(r.cn, m);
     }
     m.gasto += r.gasto; m.viales += r.viales; m.prep += r.preparaciones;
 
-    // Temporal MENSUAL (dato fiable en todo el histórico)
     const mk = `${r.anio}-${String(r.mes).padStart(2, '0')}`;
     const mp = m.months.get(mk);
     if (mp) {
       mp.viales += r.viales; mp.gasto += r.gasto;
       mp.preparaciones += r.preparaciones; mp.pacientes += r.pacientes;
     } else {
-      m.months.set(mk, { anio: r.anio, mes: r.mes, semana: null, label: `${MESES_SHORT[r.mes - 1]} ${r.anio}`, viales: r.viales, gasto: r.gasto, preparaciones: r.preparaciones, pacientes: r.pacientes });
+      m.months.set(mk, {
+        anio: r.anio, mes: r.mes, semana: null,
+        label: `${MESES_SHORT[r.mes - 1]} ${r.anio}`,
+        viales: r.viales, gasto: r.gasto, preparaciones: r.preparaciones, pacientes: r.pacientes,
+      });
     }
 
-    // Desglose por diagnóstico + indicación
+    // Apilado por tipo tumoral (vista total)
+    let mg = m.monthGrupo.get(mk);
+    if (!mg) { mg = new Map(); m.monthGrupo.set(mk, mg); }
+    const gId = r.grupo;
+    const gEx = mg.get(gId) ?? { label: GRUPO_LABELS[r.grupo], gasto: 0 };
+    gEx.gasto += r.gasto;
+    mg.set(gId, gEx);
+
+    // Apilado por diagnóstico / indicación (vista grupo)
     const dxKey = `${r.diagnostico}||${r.indicacion}`;
+    const dxLabel = `${r.diagnostico || '—'} / ${r.indicacion || '—'}`;
+    let md = m.monthDx.get(mk);
+    if (!md) { md = new Map(); m.monthDx.set(mk, md); }
+    const dEx = md.get(dxKey) ?? { label: dxLabel, gasto: 0 };
+    dEx.gasto += r.gasto;
+    md.set(dxKey, dEx);
+
     const dx = m.dxMap.get(dxKey);
     if (dx) {
       dx.viales += r.viales; dx.gasto += r.gasto; dx.preparaciones += r.preparaciones;
     } else {
-      m.dxMap.set(dxKey, { diagnostico: r.diagnostico || '—', indicacion: r.indicacion || '—', grupo: r.grupo, viales: r.viales, gasto: r.gasto, preparaciones: r.preparaciones });
+      m.dxMap.set(dxKey, {
+        diagnostico: r.diagnostico || '—', indicacion: r.indicacion || '—', grupo: r.grupo,
+        viales: r.viales, gasto: r.gasto, preparaciones: r.preparaciones,
+      });
     }
   }
 
   return [...medMap.entries()]
     .sort(([, a], [, b]) => b.gasto - a.gasto)
     .slice(0, limit)
-    .map(([cn, m]) => ({
-      cn, principioActivo: m.pa, nombre: m.nom,
-      totalViales: m.viales, totalGasto: m.gasto, totalPreparaciones: m.prep,
-      costePorPreparacion: m.prep > 0 ? m.gasto / m.prep : 0,
-      variacionYoy: yoyByCn ? (yoyByCn.get(cn) ?? null) : null,
-      grupo: m.grupo,
-      temporalMensual: [...m.months.values()].sort((a, b) =>
-        a.anio !== b.anio ? a.anio - b.anio : a.mes - b.mes
-      ),
-      desgloseByDx: [...m.dxMap.values()].sort((a, b) => b.gasto - a.gasto),
-    }));
+    .map(([cn, m]) => {
+      const temporalMensual = [...m.months.values()].sort((a, b) =>
+        a.anio !== b.anio ? a.anio - b.anio : a.mes - b.mes,
+      );
+      return {
+        cn, principioActivo: m.pa, nombre: m.nom,
+        totalViales: m.viales, totalGasto: m.gasto, totalPreparaciones: m.prep,
+        costePorPreparacion: m.prep > 0 ? m.gasto / m.prep : 0,
+        variacionYoy: yoyByCn ? (yoyByCn.get(cn) ?? null) : null,
+        grupo: m.grupo,
+        temporalMensual,
+        temporalPorGrupo: buildTemporalStacked(m.monthGrupo, temporalMensual, 8),
+        temporalPorDx: buildTemporalStacked(m.monthDx, temporalMensual, 6),
+        desgloseByDx: [...m.dxMap.values()].sort((a, b) => b.gasto - a.gasto),
+      };
+    });
 }
 
 // ---------------------------------------------------------------------------

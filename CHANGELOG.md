@@ -4,6 +4,19 @@ Historial de cambios del proyecto ordenado del más reciente al más antiguo.
 
 ---
 
+## [Unreleased] — 21 jun 2026 (v7)
+
+### Top 10 medicamentos — desglose expandible y evolución apilada
+
+- **Vista grupo tumoral**: el Top 10 usa el mismo componente expandible que el total
+  (desglose dx/indicación + evolución mensual).
+- **Vista total — evolución mensual**: barras apiladas por **tipo tumoral** (colores de
+  la leyenda de grupos) + línea de gasto total del medicamento.
+- **Vista grupo — evolución mensual**: barras apiladas por **diagnóstico/indicación**
+  con % del gasto del medicamento en el tooltip y leyenda; tabla dx con columna **% med.**
+
+---
+
 ## [Unreleased] — 21 jun 2026 (v6)
 
 ### Pestaña Análisis — YoY corregido (sin inflar/deflatar) + preset renombrado
