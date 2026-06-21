@@ -247,6 +247,66 @@ export async function loadPedidosRecibidosPorMesByCn(
   );
 }
 
+// ---------------------------------------------------------------------------
+// Recepciones semanales (últimas N semanas) para una lista de CNs.
+// Agrupa por semana ISO a partir de recibido_at.
+// ---------------------------------------------------------------------------
+export type RecepcionSemanalItem = {
+  semana: number;
+  anio: number;
+  cantidad: number;
+};
+
+export async function loadRecepcionesSemanalPorCns(
+  cns6: string[],
+  diasAtras = 112,
+): Promise<Record<string, RecepcionSemanalItem[]>> {
+  if (cns6.length === 0) return {};
+  const sql = getPedidosReadonlyClient();
+
+  const rows = (await sql`
+    SELECT
+      lpad(right(regexp_replace(n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') AS cn6,
+      EXTRACT(ISOYEAR FROM recibido_at)::int AS iso_year,
+      EXTRACT(WEEK     FROM recibido_at)::int AS iso_week,
+      por_entregar_cantidad::text  AS por_entregar_cantidad,
+      cantidad_recibida::text      AS cantidad_recibida
+    FROM public.orders
+    WHERE recibido_at IS NOT NULL
+      AND anulado = FALSE
+      AND recibido_at > NOW() - (${diasAtras}::text || ' days')::interval
+      AND n_mate_prov IS NOT NULL
+      AND regexp_replace(n_mate_prov::text, '[^0-9]', '', 'g') <> ''
+      AND lpad(right(regexp_replace(n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') = ANY(${cns6})
+    ORDER BY cn6, iso_year, iso_week;
+  `) as Array<{
+    cn6: string;
+    iso_year: number;
+    iso_week: number;
+    por_entregar_cantidad: string | null;
+    cantidad_recibida: string | null;
+  }>;
+
+  const result: Record<string, RecepcionSemanalItem[]> = {};
+  for (const r of rows) {
+    const qty =
+      parseNumberMaybe(r.por_entregar_cantidad) ??
+      parseNumberMaybe(r.cantidad_recibida) ??
+      0;
+    const key = `${r.cn6}`;
+    if (!result[key]) result[key] = [];
+    const week = result[key].find(
+      w => w.semana === Number(r.iso_week) && w.anio === Number(r.iso_year)
+    );
+    if (week) {
+      week.cantidad += qty;
+    } else {
+      result[key].push({ semana: Number(r.iso_week), anio: Number(r.iso_year), cantidad: qty });
+    }
+  }
+  return result;
+}
+
 export async function loadCantidadTransitoByCn(cns: string[]): Promise<Record<string, number>> {
   const normalizedCns = [...new Set(cns.map((cn) => toCn6(cn)).filter((cn): cn is string => !!cn))];
   if (normalizedCns.length === 0) return {};

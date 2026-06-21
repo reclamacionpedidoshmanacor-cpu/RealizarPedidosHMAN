@@ -69,7 +69,7 @@ type AlertaCompra = {
   tendenciaRelevante: boolean;
   coberturaSemanas: number | null;
   semaforo: 'rojo' | 'naranja' | 'verde' | 'azul' | 'gris';
-  semanasSeries: { semana: number; anio: number; label: string; viales: number }[];
+  semanasSeries: { semana: number; anio: number; label: string; viales: number; recepciones: number }[];
 };
 
 // ---------------------------------------------------------------------------
@@ -123,32 +123,57 @@ function MiniCurvaSemanal({
   promedioSemanal: number;
 }) {
   if (series.length === 0) return null;
-  const maxVal = Math.max(...series.map(s => s.viales), promedioSemanal * 1.2, 1);
-  const w = 100 / series.length;
+  const maxVal = Math.max(
+    ...series.map(s => Math.max(s.viales, s.recepciones)),
+    promedioSemanal * 1.2,
+    1
+  );
+  const hasRecepciones = series.some(s => s.recepciones > 0);
 
   return (
     <div className="mt-3">
-      <p className="text-[10px] text-slate-400 mb-1 uppercase tracking-wide">Consumo semanal (últimas 16 semanas)</p>
+      <div className="flex items-center gap-3 mb-1">
+        <p className="text-[10px] text-slate-400 uppercase tracking-wide">Últimas 16 semanas</p>
+        <div className="flex items-center gap-2 ml-auto">
+          <span className="flex items-center gap-1 text-[9px] text-slate-400">
+            <span className="inline-block w-2 h-2 rounded-sm bg-teal-400" />Consumo
+          </span>
+          {hasRecepciones && (
+            <span className="flex items-center gap-1 text-[9px] text-slate-400">
+              <span className="inline-block w-2 h-2 rounded-sm bg-indigo-400" />Recepcionado
+            </span>
+          )}
+          <span className="flex items-center gap-1 text-[9px] text-indigo-400">
+            <span className="inline-block w-3 border-t border-dashed border-indigo-300" />Prom.
+          </span>
+        </div>
+      </div>
       <div className="flex items-end gap-px h-16 relative">
         <div
           className="absolute inset-x-0 border-t border-dashed border-indigo-300 opacity-60"
           style={{ bottom: `${(promedioSemanal / maxVal) * 100}%` }}
         />
         {series.map((s) => {
-          const h = maxVal > 0 ? Math.max((s.viales / maxVal) * 100, s.viales > 0 ? 4 : 0) : 0;
+          const hV = maxVal > 0 ? Math.max((s.viales / maxVal) * 100, s.viales > 0 ? 4 : 0) : 0;
+          const hR = maxVal > 0 ? Math.max((s.recepciones / maxVal) * 100, s.recepciones > 0 ? 4 : 0) : 0;
           return (
             <div
               key={`${s.anio}-${s.semana}`}
-              className="relative group flex-1 flex flex-col justify-end"
-              style={{ width: `${w}%` }}
+              className="relative group flex-1 flex flex-row items-end justify-center gap-px"
             >
               <div
-                className="w-full bg-teal-400 rounded-sm transition-all"
-                style={{ height: `${h}%`, minHeight: s.viales > 0 ? '3px' : '0' }}
+                className="flex-1 bg-teal-400 rounded-sm"
+                style={{ height: `${hV}%`, minHeight: s.viales > 0 ? '3px' : '0' }}
               />
+              {hasRecepciones && (
+                <div
+                  className="flex-1 bg-indigo-400 rounded-sm opacity-80"
+                  style={{ height: `${hR}%`, minHeight: s.recepciones > 0 ? '3px' : '0' }}
+                />
+              )}
               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:flex flex-col items-center z-10">
                 <div className="bg-slate-800 text-white text-[10px] rounded px-1.5 py-0.5 whitespace-nowrap shadow">
-                  {s.label}: {s.viales.toFixed(0)} viales
+                  {s.label}: {s.viales.toFixed(0)} disp.{s.recepciones > 0 ? ` / ${s.recepciones.toFixed(0)} rec.` : ''}
                 </div>
               </div>
             </div>

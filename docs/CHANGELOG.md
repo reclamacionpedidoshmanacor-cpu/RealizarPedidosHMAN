@@ -6,6 +6,32 @@ Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.0.0/).
 
 ---
 
+## [0.3.1] — 21 jun 2026 *(Análisis farmaoeconómico — mejoras round 2)*
+
+### Corregido
+- **Bug split histórico/semanal**: la semana ISO 1/2026 (lunes = 29 dic 2025) aparecía
+  en el gráfico semanal reciente en lugar de en el histórico mensual porque la lógica
+  de corte usaba `anio*100+mes`. Ahora `getAnalisisRaw` recupera `MIN(cr.fecha)` por
+  grupo (`fecha_min`) y `splitRows` lo usa para el corte, eliminando la ambigüedad
+  de semanas ISO que cruzan año.
+- Acordeones `DiagnosticoAccordion`: indicaciones empiezan cerradas; cada nivel
+  (indicación → protocolo → medicamentos) requiere clic explícito.
+
+### Añadido
+- **Gráfico anual dinámico** (`GastoAnualChart`): se filtra por servicio activo
+  (Oncología sólida / Hematología). Sin servicio, muestra el total global.
+- **Indicador año en curso**: barra gris con nota en título y tooltip para que el YoY
+  parcial no induzca a error.
+- **Top 10 medicamentos con tabs**: pestaña "Por diagnóstico/indicación" con
+  desglose de gasto+preparaciones y colores por grupo tumoral; pestaña "Evolución
+  semanal" con gráfico de barras.
+- **Tipo `DxBreakdown`** en `analisis-neon.ts`; campo `desgloseByDx: DxBreakdown[]`
+  en `TopMed`, calculado en `buildTopMeds`.
+- **Badges de período rápido**: 3 meses, 6 meses, Año actual, Año anterior, 2 años.
+  El badge activo se resalta; el selector de fechas manual convive con ellos.
+
+---
+
 ## [0.2.0] — Junio 2026 *(flujo Stock → Propuesta → Tramitada)*
 
 ### Añadido

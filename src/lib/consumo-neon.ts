@@ -574,7 +574,7 @@ export type AlertaCompra = {
   tendenciaRelevante: boolean;
   coberturaSemanas: number | null; // null si sin consumo reciente
   semaforo: 'rojo' | 'naranja' | 'verde' | 'azul' | 'gris'; // gris = sin datos
-  semanasSeries: { semana: number; anio: number; label: string; viales: number }[];
+  semanasSeries: { semana: number; anio: number; label: string; viales: number; recepciones: number }[];
 };
 
 export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
@@ -726,6 +726,7 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
         anio: sy,
         label: `S${String(sw).padStart(2, '0')}/${String(sy).slice(-2)}`,
         viales: found ? found.viales : 0,
+        recepciones: 0,
       });
     }
 

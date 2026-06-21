@@ -4,6 +4,38 @@ Historial de cambios del proyecto ordenado del más reciente al más antiguo.
 
 ---
 
+## [Unreleased] — 21 jun 2026
+
+### Pestaña Análisis — Mejoras visuales y usabilidad (round 2)
+
+#### Correcciones
+- **Fix split histórico/semanal**: el gráfico semanal reciente mostraba erróneamente
+  datos de diciembre 2025 (semana ISO 1/2026 empieza el 29 dic) porque la lógica
+  usaba `anio*100+mes` en vez de la fecha real. Ahora se usa `MIN(cr.fecha)` de
+  cada fila agregada como `fecha_min`, eliminando la ambigüedad.
+- **Títulos de gráficos**: actualizados para reflejar exactamente qué período muestran
+  ("antes del período reciente" / "últimas semanas").
+- **Acordeones por niveles**: al abrir un diagnóstico se ven las **indicaciones cerradas**;
+  hay que hacer clic en cada indicación para ver sus protocolos, y en cada protocolo
+  para ver los medicamentos. Ya no se despliega todo a la vez.
+
+#### Nuevas funcionalidades
+- **Gráfico anual dinámico por servicio**: al seleccionar "Oncología sólida" o
+  "Hematología" el gráfico de barras anuales muestra solo el gasto de ese servicio
+  (calculado desde las tarjetas de grupo). Sin selección de servicio muestra el total.
+- **Indicador año en curso**: la barra del año actual aparece en gris con nota
+  "(año en curso)" y aviso en tooltip de que el YoY no es comparable con año completo.
+- **Top 10 medicamentos expandibles con dos pestañas**:
+  - *Por diagnóstico / indicación*: tabla con diagnóstico, indicación, preparaciones
+    y gasto, con color de grupo tumoral.
+  - *Evolución semanal*: gráfico de barras del gasto semanal.
+- **Badges de período rápido**: 3 meses, 6 meses, Año actual, Año anterior, 2 años
+  con indicador visual del preset activo (el selector de fechas manual sigue disponible).
+- **`DxBreakdown`**: nuevo tipo en `analisis-neon.ts`; el campo `desgloseByDx`
+  de `TopMed` devuelve el desglose por diagnóstico+indicación ordenado por gasto.
+
+---
+
 ## [Unreleased] — 19 jun 2026
 
 ### Pestaña Inicio — Panel de control
