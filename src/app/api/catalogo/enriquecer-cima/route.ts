@@ -37,8 +37,9 @@ export async function POST(req: NextRequest) {
 
   const sql = getDb();
 
-  // Asegurar que la columna existe
+  // Asegurar que las dos columnas existen
   await sql`ALTER TABLE medicamentos ADD COLUMN IF NOT EXISTS ppio_activo_cima TEXT;`;
+  await sql`ALTER TABLE medicamentos ADD COLUMN IF NOT EXISTS cima_consultado BOOLEAN NOT NULL DEFAULT FALSE;`;
 
   // CNs activos del área que aún no tienen ppio_activo_cima
   const { soloVacios = true } = await req.json().catch(() => ({ soloVacios: true })) as { soloVacios?: boolean };
@@ -67,11 +68,17 @@ export async function POST(req: NextRequest) {
       if (pactivos) {
         await sql`
           UPDATE medicamentos
-          SET ppio_activo_cima = ${pactivos}
+          SET ppio_activo_cima = ${pactivos},
+              cima_consultado  = TRUE
           WHERE cn = ${cn} AND area = ${session.area};
         `;
         actualizados++;
       } else {
+        await sql`
+          UPDATE medicamentos
+          SET cima_consultado = TRUE
+          WHERE cn = ${cn} AND area = ${session.area};
+        `;
         fallidos++;
       }
     }));

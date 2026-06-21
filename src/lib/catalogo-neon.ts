@@ -17,6 +17,8 @@ export type CatalogoMedicamento = {
   stockMinimo: number | null;
   puntoPedido: number | null;
   stockMaximo: number | null;
+  ppioActivoCima: string | null;
+  cimaConsultado: boolean;
 };
 
 export type MedicamentoBase = {
@@ -75,7 +77,9 @@ export async function listMedicamentosByArea(area: string): Promise<CatalogoMedi
       m.precio_caja,
       so.stock_minimo,
       so.punto_pedido,
-      so.stock_maximo
+      so.stock_maximo,
+      COALESCE(m.ppio_activo_cima, NULL)  AS ppio_activo_cima,
+      COALESCE(m.cima_consultado, FALSE)  AS cima_consultado
     FROM public.medicamentos m
     LEFT JOIN public.stock_objetivo so ON so.cn = m.cn
     WHERE m.area = ${area}
@@ -97,6 +101,8 @@ export async function listMedicamentosByArea(area: string): Promise<CatalogoMedi
     stock_minimo: number | null;
     punto_pedido: number | null;
     stock_maximo: number | null;
+    ppio_activo_cima: string | null;
+    cima_consultado: boolean;
   }>;
 
   return rows.map((row) => ({
@@ -116,6 +122,8 @@ export async function listMedicamentosByArea(area: string): Promise<CatalogoMedi
     stockMinimo: row.stock_minimo == null ? null : Number(row.stock_minimo),
     puntoPedido: row.punto_pedido == null ? null : Number(row.punto_pedido),
     stockMaximo: row.stock_maximo == null ? null : Number(row.stock_maximo),
+    ppioActivoCima: row.ppio_activo_cima,
+    cimaConsultado: row.cima_consultado ?? false,
   }));
 }
 

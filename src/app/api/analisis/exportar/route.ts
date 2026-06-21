@@ -44,11 +44,12 @@ export async function GET(req: NextRequest) {
   }
 
   const { searchParams } = new URL(req.url);
-  const desde = searchParams.get('desde') || defaultDesde();
-  const hasta  = searchParams.get('hasta')  || new Date().toISOString().slice(0, 10);
-  const grupo  = searchParams.get('grupo')  || null;
+  const desde    = searchParams.get('desde')    || defaultDesde();
+  const hasta    = searchParams.get('hasta')    || new Date().toISOString().slice(0, 10);
+  const grupo    = searchParams.get('grupo')    || null;
+  const servicio = searchParams.get('servicio') || null;
 
-  const datos = await getAnalisisDatos(session.area, desde, hasta, grupo);
+  const datos = await getAnalisisDatos(session.area, desde, hasta, grupo, servicio);
   const titulo = grupo ? (GRUPO_LABELS[grupo as DiagnosticoGrupo] ?? grupo) : 'Global';
 
   const wb = new ExcelJS.Workbook();

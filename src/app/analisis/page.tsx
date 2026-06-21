@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import {
   ResponsiveContainer, ComposedChart, BarChart, Bar, Line,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, LabelList,
 } from 'recharts';
 import {
   type DiagnosticoGrupo,
@@ -11,13 +11,15 @@ import {
   GRUPO_LABELS,
   GRUPO_COLORS,
   gruposParaServicio,
-  GRUPO_ORDER,
 } from '@/lib/diagnostico-grupos';
 import type {
   AnalisisDatos, GrupoCard, TopMed, TopProtocolo,
-  GrupoDetalle, DiagnosticoDetalle, GastoAnual, IndicacionDetalle,
+  GrupoDetalle, DiagnosticoDetalle, IndicacionDetalle, GastoAnualServicio,
 } from '@/lib/analisis-neon';
-import { computeYoy } from '@/lib/analisis-neon';
+
+// Alcance de visualización: total del área o un servicio concreto
+type ServicioSel = Servicio | 'total';
+const TOTAL_COLOR = '#0d9488'; // teal-600, color del total del área
 
 // ---------------------------------------------------------------------------
 // Formato
@@ -27,6 +29,12 @@ function fmtEur(n: number): string {
 }
 function fmtNum(n: number, dec = 1): string {
   return n.toLocaleString('es-ES', { maximumFractionDigits: dec });
+}
+// Euro compacto para etiquetas sobre barras (evita solaparse)
+function fmtEurShort(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace('.', ',')} M€`;
+  if (n >= 1_000)     return `${Math.round(n / 1_000)} k€`;
+  return `${Math.round(n)} €`;
 }
 function fmtDate(iso: string): string {
   if (!iso) return '—';
@@ -45,6 +53,13 @@ const SERVICIO_LABELS: Record<Servicio, string> = {
   'oncologia-solida': 'Oncología sólida',
   'hematologia':      'Hematología',
 };
+
+function scopeLabel(s: ServicioSel): string {
+  return s === 'total' ? 'Total (Onco + Hemato)' : SERVICIO_LABELS[s];
+}
+function scopeColor(s: ServicioSel): string {
+  return s === 'total' ? TOTAL_COLOR : SERVICIO_COLORS[s];
+}
 
 // ---------------------------------------------------------------------------
 // Presets de período
@@ -148,10 +163,11 @@ function GrupoCardUI({ g, selected, onClick }: { g: GrupoCard; selected: boolean
 // ---------------------------------------------------------------------------
 type AnualChartItem = {
   anio: number;
-  gastoResto: number;     // porción del servicio NO seleccionado (gris)
-  gastoServicio: number;  // porción del servicio seleccionado (color)
-  gastoTotal: number;     // total (para tooltip)
-  variacionYoy?: number | null;
+  gastoTotal: number;     // total del área (siempre)
+  gastoServicio: number;  // porción del servicio seleccionado (0 en modo total)
+  gastoResto: number;     // resto del área (0 en modo total)
+  variacionYoy: number | null;
+  parcial: boolean;
 };
 
 function GastoAnualStackedChart({
@@ -160,27 +176,40 @@ function GastoAnualStackedChart({
   title,
 }: {
   items: AnualChartItem[];
-  servicio: Servicio;
+  servicio: ServicioSel;
   title: string;
 }) {
   if (!items.length) return null;
-  const currentYear   = NOW.getFullYear();
-  const svcColor      = SERVICIO_COLORS[servicio];
-  const svcLabel      = SERVICIO_LABELS[servicio];
+  const isTotal  = servicio === 'total';
+  const svcColor = scopeColor(servicio);
+  const svcLabel = scopeLabel(servicio);
+
+  // Etiqueta con el GASTO TOTAL encima de cada barra (lee el total por índice)
+  const totalLabel = (props: { x?: number | string; y?: number | string; width?: number | string; index?: number }) => {
+    const { x = 0, y = 0, width = 0, index = 0 } = props;
+    const nx = Number(x); const ny = Number(y); const nw = Number(width);
+    const it = items[index];
+    if (!it || it.gastoTotal <= 0) return null;
+    return (
+      <text x={nx + nw / 2} y={ny - 5} textAnchor="middle" fontSize={10} fontWeight={700} fill="#334155">
+        {fmtEurShort(it.gastoTotal)}
+      </text>
+    );
+  };
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex items-center justify-between mb-1">
         <h3 className="text-sm font-semibold text-slate-700">{title}</h3>
-        {items.some(d => d.anio === currentYear) && (
-          <span className="text-[10px] text-slate-400 italic">{currentYear}: datos parciales (año en curso)</span>
+        {items.some(d => d.parcial) && (
+          <span className="text-[10px] text-slate-400 italic">año en curso: datos parciales</span>
         )}
       </div>
-      <ResponsiveContainer width="100%" height={180}>
-        <BarChart data={items} margin={{ top: 4, right: 16, left: 8, bottom: 0 }}>
+      <ResponsiveContainer width="100%" height={200}>
+        <BarChart data={items} margin={{ top: 20, right: 16, left: 8, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
           <XAxis dataKey="anio" tick={{ fontSize: 11, fill: '#64748b' }} />
-          <YAxis tickFormatter={v => fmtEur(Number(v))} tick={{ fontSize: 10, fill: '#94a3b8' }} width={78} />
+          <YAxis tickFormatter={v => fmtEurShort(Number(v))} tick={{ fontSize: 10, fill: '#94a3b8' }} width={64} />
           <Tooltip
             content={({ active, payload }) => {
               if (!active || !payload?.length) return null;
@@ -188,19 +217,17 @@ function GastoAnualStackedChart({
               const pct = d.gastoTotal > 0 ? Math.round((d.gastoServicio / d.gastoTotal) * 100) : 0;
               return (
                 <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-lg text-xs space-y-0.5">
-                  <p className="font-bold text-slate-800">
-                    {d.anio}{d.anio === currentYear ? ' (año en curso)' : ''}
-                  </p>
-                  <p className="text-slate-600">Total: <span className="font-semibold">{fmtEur(d.gastoTotal)}</span></p>
-                  {d.gastoServicio > 0 && (
+                  <p className="font-bold text-slate-800">{d.anio}{d.parcial ? ' (año en curso)' : ''}</p>
+                  <p className="text-slate-600">Total área: <span className="font-semibold">{fmtEur(d.gastoTotal)}</span></p>
+                  {!isTotal && (
                     <p style={{ color: svcColor }}>
                       {svcLabel}: <span className="font-semibold">{fmtEur(d.gastoServicio)}</span> ({pct}%)
                     </p>
                   )}
-                  {d.variacionYoy !== null && d.variacionYoy !== undefined && (
+                  {d.variacionYoy !== null && (
                     <p className={`font-semibold mt-1 ${d.variacionYoy > 10 ? 'text-red-600' : d.variacionYoy < 0 ? 'text-emerald-600' : 'text-orange-600'}`}>
                       YoY total: {d.variacionYoy > 0 ? '+' : ''}{d.variacionYoy.toFixed(1)}%
-                      {d.anio === currentYear ? ' (parcial)' : ''}
+                      {d.parcial ? ' · vs mismo período año ant.' : ''}
                     </p>
                   )}
                 </div>
@@ -208,25 +235,31 @@ function GastoAnualStackedChart({
             }}
           />
           <Legend wrapperStyle={{ fontSize: 11 }} />
-          {/* Barra inferior: resto del área (gris claro) */}
-          <Bar dataKey="gastoResto" name="Resto del área" stackId="g" fill="#e2e8f0" />
-          {/* Barra superior: porción del servicio seleccionado (color del servicio) */}
-          <Bar dataKey="gastoServicio" name={svcLabel} stackId="g" fill={svcColor} radius={[4, 4, 0, 0]} />
+          {isTotal ? (
+            <Bar dataKey="gastoTotal" name="Total área" fill={svcColor} radius={[4, 4, 0, 0]}>
+              <LabelList content={totalLabel} />
+            </Bar>
+          ) : (
+            <>
+              <Bar dataKey="gastoResto" name="Resto del área" stackId="g" fill="#e2e8f0" />
+              <Bar dataKey="gastoServicio" name={svcLabel} stackId="g" fill={svcColor} radius={[4, 4, 0, 0]}>
+                <LabelList content={totalLabel} />
+              </Bar>
+            </>
+          )}
         </BarChart>
       </ResponsiveContainer>
       {/* Leyenda resumen por año */}
       <div className="mt-2 flex flex-wrap gap-3 text-[10px] text-slate-500">
         {items.map(d => (
           <span key={d.anio}>
-            <span className="font-bold text-slate-600">{d.anio}{d.anio === currentYear ? '*' : ''}:</span>{' '}
+            <span className="font-bold text-slate-600">{d.anio}{d.parcial ? '*' : ''}:</span>{' '}
             <span className="font-semibold text-slate-800">{fmtEur(d.gastoTotal)}</span>
-            {d.variacionYoy !== undefined && d.variacionYoy !== null && (
-              <> · <YoyBadge pct={d.variacionYoy} /></>
-            )}
+            {d.variacionYoy !== null && <> · <YoyBadge pct={d.variacionYoy} /></>}
           </span>
         ))}
-        {items.some(d => d.anio === currentYear) && (
-          <span className="italic text-slate-400">* año en curso — YoY comparado sobre mismo período año anterior</span>
+        {items.some(d => d.parcial) && (
+          <span className="italic text-slate-400">* año en curso — YoY sobre el mismo período del año anterior</span>
         )}
       </div>
     </div>
@@ -277,7 +310,7 @@ function TopProtocolosTable({ data }: { data: TopProtocolo[] }) {
 function TopMedRow({ m, rank }: { m: TopMed; rank: number }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab]   = useState<'dx' | 'chart'>('dx');
-  const c = GRUPO_COLORS[m.grupo];
+  const accent = '#0d9488'; // teal; el medicamento es suma de varios grupos, no se colorea por grupo
   return (
     <>
       <tr className="cursor-pointer hover:bg-slate-50 transition-colors" onClick={() => setOpen(v => !v)}>
@@ -285,11 +318,6 @@ function TopMedRow({ m, rank }: { m: TopMed; rank: number }) {
         <td className="px-3 py-2.5">
           <p className="text-sm font-semibold text-slate-800">{m.principioActivo || '—'}</p>
           <p className="text-[11px] text-slate-400 italic">{m.nombre || ''}</p>
-        </td>
-        <td className="px-3 py-2.5">
-          <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${c.bg} ${c.text} ${c.ring}`}>
-            {GRUPO_LABELS[m.grupo]}
-          </span>
         </td>
         <td className="px-3 py-2.5 text-right text-sm font-bold text-slate-800 tabular-nums">{fmtEur(m.totalGasto)}</td>
         <td className="px-3 py-2.5 text-right text-xs text-slate-500 tabular-nums">{fmtNum(m.totalPreparaciones, 0)}</td>
@@ -300,7 +328,7 @@ function TopMedRow({ m, rank }: { m: TopMed; rank: number }) {
       </tr>
       {open && (
         <tr>
-          <td colSpan={9} className="bg-slate-50/80 px-6 pb-4 pt-2">
+          <td colSpan={8} className="bg-slate-50/80 px-6 pb-4 pt-2">
             <div className="flex gap-2 mb-3">
               {(['dx', 'chart'] as const).map(t => (
                 <button key={t}
@@ -348,13 +376,17 @@ function TopMedRow({ m, rank }: { m: TopMed; rank: number }) {
 
             {tab === 'chart' && (
               m.temporalSemanal.length > 0 ? (
-                <ResponsiveContainer width="100%" height={120}>
-                  <ComposedChart data={m.temporalSemanal} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+                <ResponsiveContainer width="100%" height={160}>
+                  <ComposedChart data={m.temporalSemanal} margin={{ top: 8, right: 16, left: 0, bottom: 18 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#94a3b8' }} />
-                    <YAxis tickFormatter={v => fmtEur(Number(v))} tick={{ fontSize: 10, fill: '#94a3b8' }} width={72} />
+                    <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#94a3b8' }}
+                      angle={-25} textAnchor="end" height={42} interval="preserveStartEnd" />
+                    <YAxis tickFormatter={v => fmtEurShort(Number(v))} tick={{ fontSize: 10, fill: '#94a3b8' }} width={64} />
                     <Tooltip formatter={(v: unknown) => fmtEur(Number(v ?? 0))} />
-                    <Bar dataKey="gasto" name="Gasto (€)" fill={c.chart} radius={[3, 3, 0, 0]} />
+                    {/* Barras atenuadas + línea evolutiva que las une */}
+                    <Bar dataKey="gasto" name="Gasto (€)" fill={accent} fillOpacity={0.28} radius={[3, 3, 0, 0]} />
+                    <Line dataKey="gasto" name="Evolución" stroke={accent} strokeWidth={2}
+                      dot={{ r: 2, fill: accent }} />
                   </ComposedChart>
                 </ResponsiveContainer>
               ) : <p className="text-xs text-slate-400">Sin datos en el período reciente.</p>
@@ -579,7 +611,7 @@ function GrupoDetallePanel({ gd }: { gd: GrupoDetalle }) {
 // Página principal
 // ---------------------------------------------------------------------------
 export default function AnalisisPage() {
-  const [servicio, setServicio]         = useState<Servicio>('oncologia-solida');
+  const [servicio, setServicio]         = useState<ServicioSel>('total');
   const [grupoSel, setGrupoSel]         = useState<DiagnosticoGrupo | null>(null);
   const [desde, setDesde]               = useState(defaultDesde());
   const [hasta, setHasta]               = useState(defaultHasta());
@@ -592,7 +624,8 @@ export default function AnalisisPage() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true); setError(null);
-    const p = new URLSearchParams({ desde, hasta, servicio });
+    const p = new URLSearchParams({ desde, hasta });
+    if (servicio !== 'total') p.set('servicio', servicio);
     if (grupoSel) p.set('grupo', grupoSel);
     fetch(`/api/analisis/datos?${p}`)
       .then(r => r.ok ? r.json() : r.json().then((j: { error?: string }) => Promise.reject(j.error ?? 'Error')))
@@ -606,51 +639,40 @@ export default function AnalisisPage() {
   function handleSelectGrupo(g: DiagnosticoGrupo) {
     setGrupoSel(prev => prev === g ? null : g);
   }
-  function handleSetServicio(s: Servicio) {
+  function handleSetServicio(s: ServicioSel) {
     setServicio(s);
-    setGrupoSel(null); // al cambiar de servicio, reseteamos grupo
+    setGrupoSel(null); // al cambiar de alcance, reseteamos grupo
   }
   function applyPreset(p: { label: string; desde: string; hasta: string }) {
     setDesde(p.desde); setHasta(p.hasta); setActivePreset(p.label);
   }
   function handleExportar() {
-    const p = new URLSearchParams({ desde, hasta, servicio });
+    const p = new URLSearchParams({ desde, hasta });
+    if (servicio !== 'total') p.set('servicio', servicio);
     if (grupoSel) p.set('grupo', grupoSel);
     window.open(`/api/analisis/exportar?${p}`, '_blank');
   }
 
-  // ── Datos derivados para el gráfico anual apilado ──
-  const anualChartItems: AnualChartItem[] = (() => {
-    if (!datos) return [];
-    // Total por año filtrado al período seleccionado (sumando todos los grupos)
-    const totalByYear = new Map<number, number>();
-    const svcByYear   = new Map<number, number>();
-    const yoyByYear   = new Map<number, number | null>();
+  // ── Gráfico anual: histórico (todos los años) por servicio, viene del servidor ──
+  const anualChartItems: AnualChartItem[] = (datos?.gastoAnualServicio ?? []).map((d: GastoAnualServicio) => {
+    const svc = servicio === 'total' ? 0
+      : servicio === 'hematologia' ? d.gastoHemato : d.gastoOnco;
+    return {
+      anio: d.anio,
+      gastoTotal: d.gastoTotal,
+      gastoServicio: svc,
+      gastoResto: servicio === 'total' ? 0 : Math.max(0, d.gastoTotal - svc),
+      variacionYoy: d.variacionYoy,
+      parcial: d.parcial,
+    };
+  });
 
-    for (const g of datos.grupos) {
-      const esSvc = gruposParaServicio(servicio).includes(g.grupo);
-      for (const ya of g.gastoPorAnio) {
-        totalByYear.set(ya.anio, (totalByYear.get(ya.anio) ?? 0) + ya.gasto);
-        if (esSvc) svcByYear.set(ya.anio, (svcByYear.get(ya.anio) ?? 0) + ya.gasto);
-      }
-    }
-    // YoY del total por año (de la query global de la BD)
-    for (const d of datos.gastoPorAnio) yoyByYear.set(d.anio, d.variacionYoy ?? null);
+  // Gasto total del área en el período (suma de todos los grupos, siempre disponible)
+  const areaTotal = (datos?.grupos ?? []).reduce((s, g) => s + g.totalGasto, 0);
 
-    return [...totalByYear.keys()].sort().map(anio => {
-      const tot = totalByYear.get(anio) ?? 0;
-      const svc = svcByYear.get(anio)   ?? 0;
-      return { anio, gastoTotal: tot, gastoServicio: svc, gastoResto: tot - svc, variacionYoy: yoyByYear.get(anio) ?? null };
-    });
-  })();
-
-  // Gasto del servicio seleccionado en el período (para sub-label del KPI)
-  const servicioGasto = datos
-    ? datos.grupos.filter(g => gruposParaServicio(servicio).includes(g.grupo)).reduce((s, g) => s + g.totalGasto, 0)
-    : 0;
-
-  const gruposDelServicio = gruposParaServicio(servicio);
-  const tarjetas          = (datos?.grupos ?? []).filter(g => gruposDelServicio.includes(g.grupo));
+  const tarjetas = servicio === 'total'
+    ? (datos?.grupos ?? [])
+    : (datos?.grupos ?? []).filter(g => gruposParaServicio(servicio).includes(g.grupo));
 
   return (
     <div className="w-full px-4 sm:px-6 lg:px-8 py-6 space-y-6">
@@ -707,35 +729,39 @@ export default function AnalisisPage() {
 
       {!loading && datos && (
         <>
-          {/* ── Selector de servicio ──────────────────────────────────────── */}
+          {/* ── Selector de alcance: Total / Oncología / Hematología ──────── */}
           <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Servicio:</span>
-            {(['oncologia-solida', 'hematologia'] as Servicio[]).map(s => (
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Alcance:</span>
+            {(['total', 'oncologia-solida', 'hematologia'] as ServicioSel[]).map(s => (
               <button key={s} onClick={() => handleSetServicio(s)}
                 className={['rounded-lg px-4 py-1.5 text-sm font-semibold transition-colors',
                   servicio === s
                     ? 'text-white shadow'
                     : 'border border-slate-200 text-slate-600 hover:bg-slate-50',
                 ].join(' ')}
-                style={servicio === s ? { backgroundColor: SERVICIO_COLORS[s] } : {}}>
-                {SERVICIO_LABELS[s]}
+                style={servicio === s ? { backgroundColor: scopeColor(s) } : {}}>
+                {s === 'total' ? 'Total' : SERVICIO_LABELS[s]}
               </button>
             ))}
           </div>
 
-          {/* ── Gráfico anual apilado (total siempre visible, servicio resaltado) ── */}
+          {/* ── Gráfico anual histórico (total + servicio resaltado) ──────── */}
           <GastoAnualStackedChart
             items={anualChartItems}
             servicio={servicio}
-            title={`Gasto histórico anual — total área · porción ${SERVICIO_LABELS[servicio]} resaltada`}
+            title={servicio === 'total'
+              ? 'Gasto histórico anual — total del área (Onco + Hemato)'
+              : `Gasto histórico anual — total área · porción ${SERVICIO_LABELS[servicio as Servicio]} resaltada`}
           />
 
-          {/* ── KPIs globales ─────────────────────────────────────────────── */}
+          {/* ── KPIs (referidos al alcance seleccionado) ──────────────────── */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <KpiCard
-              label="Gasto período (total)"
+              label={`Gasto período · ${scopeLabel(servicio)}`}
               value={fmtEur(datos.kpis.totalGasto)}
-              sub={`${fmtEur(servicioGasto)} en ${SERVICIO_LABELS[servicio]} (${datos.kpis.totalGasto > 0 ? Math.round(servicioGasto / datos.kpis.totalGasto * 100) : 0}%)`}
+              sub={servicio === 'total'
+                ? 'Suma Oncología + Hematología'
+                : `${areaTotal > 0 ? Math.round(datos.kpis.totalGasto / areaTotal * 100) : 0}% del total área (${fmtEur(areaTotal)})`}
               highlight
             />
             <KpiCard label="€ / preparación" value={fmtEur(datos.kpis.costePorPreparacion)} />
@@ -801,7 +827,7 @@ export default function AnalisisPage() {
                 <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
                   <div className="px-5 py-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
                     <h3 className="text-sm font-semibold text-slate-700">
-                      Top 10 medicamentos — {SERVICIO_LABELS[servicio]}
+                      Top 10 medicamentos — {scopeLabel(servicio)}
                     </h3>
                     <span className="text-xs text-slate-400">Clic para ver detalle por diagnóstico o evolución</span>
                   </div>
@@ -810,7 +836,6 @@ export default function AnalisisPage() {
                       <tr className="text-[10px] uppercase tracking-wide text-slate-400">
                         <th className="px-3 py-2 w-7 text-left">#</th>
                         <th className="px-3 py-2 text-left">Medicamento</th>
-                        <th className="px-3 py-2 text-left">Grupo</th>
                         <th className="px-3 py-2 text-right">Gasto</th>
                         <th className="px-3 py-2 text-right">Prep.</th>
                         <th className="px-3 py-2 text-right">Viales</th>
@@ -829,13 +854,13 @@ export default function AnalisisPage() {
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <TemporalChart
                   data={datos.temporalHistorico}
-                  title={`Evolución mensual histórica — ${SERVICIO_LABELS[servicio]}`}
-                  color={SERVICIO_COLORS[servicio]}
+                  title={`Evolución mensual histórica — ${scopeLabel(servicio)}`}
+                  color={scopeColor(servicio)}
                 />
                 <TemporalChart
                   data={datos.temporalReciente}
-                  title={`Detalle semanal reciente — ${SERVICIO_LABELS[servicio]}`}
-                  color={SERVICIO_COLORS[servicio]}
+                  title={`Detalle semanal reciente — ${scopeLabel(servicio)}`}
+                  color={scopeColor(servicio)}
                 />
               </div>
             </div>

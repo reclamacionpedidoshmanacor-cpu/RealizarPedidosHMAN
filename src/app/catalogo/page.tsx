@@ -12,6 +12,7 @@ interface Medicamento {
   mse: boolean; tipoMse: string | null;
   precioUnidad: number | null; precioCaja: number | null;
   stockMinimo: number | null; puntoPedido: number | null; stockMaximo: number | null;
+  ppioActivoCima: string | null; cimaConsultado: boolean;
 }
 
 type SortKey = 'principioActivo' | 'nombre' | 'cn' | 'ubicacion' | 'puntoPedido';
@@ -491,7 +492,14 @@ export default function CatalogoPage() {
                 ) : (
                   <tr key={med.cn} className={cn('hover:bg-slate-50 transition-colors', !med.activo && 'opacity-50')}>
                     <td className="px-4 py-3 font-mono text-xs text-slate-500">
-                      {med.cn}
+                      <span className="inline-flex items-center gap-1.5">
+                        {med.cn}
+                        {med.cimaConsultado && (
+                          med.ppioActivoCima
+                            ? <span title={`CIMA: ${med.ppioActivoCima}`} className="inline-block w-2 h-2 rounded-full bg-green-500 shrink-0" />
+                            : <span title="CIMA consultado: principio activo no encontrado" className="inline-block w-2 h-2 rounded-full bg-red-400 shrink-0" />
+                        )}
+                      </span>
                       {med.mse && (
                         <span className="ml-1.5 rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-semibold text-orange-700">
                           {med.tipoMse ?? 'MSE'}

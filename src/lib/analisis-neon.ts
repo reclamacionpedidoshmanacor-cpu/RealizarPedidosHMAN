@@ -6,6 +6,7 @@ import {
   GRUPO_LABELS,
   GRUPO_ORDER,
   gruposParaServicio,
+  getServicioFromGrupo,
 } from './diagnostico-grupos';
 
 function getDb() {
@@ -19,8 +20,9 @@ function num(v: unknown): number { return Number(v ?? 0); }
 const MESES_SHORT = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
 
 function weekLabel(anio: number, semana: number | null, mes: number): string {
-  const m = MESES_SHORT[(mes - 1) % 12] ?? '?';
-  return semana != null ? `S${semana}·${m}` : `${m} ${anio}`;
+  const m  = MESES_SHORT[(mes - 1) % 12] ?? '?';
+  const yy = String(anio).slice(2);
+  return semana != null ? `S${semana} ${m}'${yy}` : `${m} ${anio}`;
 }
 
 function shiftYear(isoDate: string, delta: number): string {
@@ -51,6 +53,17 @@ export type GastoAnual = {
   preparaciones: number;
   costePorPreparacion: number;
   variacionYoy: number | null;
+};
+
+// Gasto anual histórico desglosado por servicio. La variación YoY del año en curso
+// se calcula contra el MISMO PERÍODO del año anterior (no contra el año completo).
+export type GastoAnualServicio = {
+  anio: number;
+  gastoTotal: number;
+  gastoOnco: number;
+  gastoHemato: number;
+  variacionYoy: number | null;
+  parcial: boolean;            // true para el año en curso (incompleto)
 };
 
 export type KpisAnalisis = {
@@ -177,6 +190,7 @@ export type AnalisisDatos = {
   periodo: { desde: string; hasta: string };
   kpis: KpisAnalisis;
   gastoPorAnio: GastoAnual[];
+  gastoAnualServicio: GastoAnualServicio[];
   grupos: GrupoCard[];
   topProtocolos: TopProtocolo[];
   topMedicamentos: TopMed[];
@@ -285,6 +299,76 @@ async function getGastoByYear(area: string): Promise<GastoAnual[]> {
       anio: num(r.anio), gasto: g, preparaciones: p,
       costePorPreparacion: p > 0 ? g / p : 0,
       variacionYoy: i > 0 ? computeYoy(g, Number(rows[i - 1]!.gasto)) : null,
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Gasto anual histórico desglosado por servicio (Onco sólida / Hematología).
+// Para el año en curso, el YoY se compara contra el MISMO período (mismos meses)
+// del año anterior, evitando la distorsión de comparar año parcial vs completo.
+// ---------------------------------------------------------------------------
+async function getGastoAnualPorServicio(area: string): Promise<GastoAnualServicio[]> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT
+      EXTRACT(YEAR  FROM cr.fecha)::int                                     AS anio,
+      EXTRACT(MONTH FROM cr.fecha)::int                                     AS mes,
+      COALESCE(cr.diagnostico, '')                                          AS diagnostico,
+      SUM(cr.viales_dispensados * COALESCE(m.precio_unidad, 0))::float      AS gasto
+    FROM consumo_registros cr
+    JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+    LEFT JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
+    WHERE ic.area = ${area}
+      AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
+    GROUP BY EXTRACT(YEAR FROM cr.fecha), EXTRACT(MONTH FROM cr.fecha), cr.diagnostico
+  `) as Array<{ anio: number; mes: number; diagnostico: string; gasto: number }>;
+
+  type YAcc = { total: number; onco: number; hemato: number; porMes: Map<number, number> };
+  const yearMap = new Map<number, YAcc>();
+
+  for (const r of rows) {
+    const anio = num(r.anio);
+    const mes  = num(r.mes);
+    const g    = Number(r.gasto);
+    const servicio = getServicioFromGrupo(classifyDiagnostico(r.diagnostico));
+
+    let y = yearMap.get(anio);
+    if (!y) { y = { total: 0, onco: 0, hemato: 0, porMes: new Map() }; yearMap.set(anio, y); }
+    y.total += g;
+    if (servicio === 'hematologia') y.hemato += g; else y.onco += g;
+    y.porMes.set(mes, (y.porMes.get(mes) ?? 0) + g);
+  }
+
+  const years = [...yearMap.keys()].sort((a, b) => a - b);
+  if (!years.length) return [];
+
+  const currentYear = years[years.length - 1]!;
+  const curAcc      = yearMap.get(currentYear)!;
+  const lastMonth   = Math.max(...curAcc.porMes.keys());
+
+  return years.map(anio => {
+    const acc     = yearMap.get(anio)!;
+    const esCurso = anio === currentYear;
+
+    let prevComparable = 0;
+    const prevAcc = yearMap.get(anio - 1);
+    if (prevAcc) {
+      if (esCurso) {
+        // Mismo período: sumar sólo meses <= último mes con datos del año en curso
+        for (const [mes, g] of prevAcc.porMes) if (mes <= lastMonth) prevComparable += g;
+      } else {
+        prevComparable = prevAcc.total;
+      }
+    }
+
+    return {
+      anio,
+      gastoTotal:  acc.total,
+      gastoOnco:   acc.onco,
+      gastoHemato: acc.hemato,
+      variacionYoy: computeYoy(acc.total, prevComparable),
+      parcial: esCurso,
     };
   });
 }
@@ -562,11 +646,13 @@ export async function getAnalisisDatos(
   grupoFiltro?: string | null,
   servicioFiltro?: string | null,
 ): Promise<AnalisisDatos> {
-  // Tres queries en paralelo: período actual, mismo período año anterior, gasto por año global
-  const [classified, prevRows, gastoPorAnio] = await Promise.all([
+  // Queries en paralelo: período actual, mismo período año anterior,
+  // gasto por año global y gasto anual por servicio (histórico, todos los años)
+  const [classified, prevRows, gastoPorAnio, gastoAnualServicio] = await Promise.all([
     getAnalisisRaw(area, desde, hasta),
     getAnalisisRaw(area, shiftYear(desde, -1), shiftYear(hasta, -1)),
     getGastoByYear(area),
+    getGastoAnualPorServicio(area),
   ]);
 
   // YoY por medicamento y por grupo
@@ -589,7 +675,6 @@ export async function getAnalisisDatos(
   }
 
   const totalGastoGlobal = [...grupoAgg.values()].reduce((s, g) => s + g.gasto, 0);
-  const prevTotalGasto   = prevRows.reduce((s, r) => s + r.gasto, 0);
 
   const grupos: GrupoCard[] = GRUPO_ORDER
     .filter(g => grupoAgg.has(g))
@@ -605,20 +690,32 @@ export async function getAnalisisDatos(
       };
     });
 
-  // KPIs globales (siempre sobre TODO el período, sin filtrar por servicio)
-  const totalPrep      = classified.reduce((s, r) => s + r.preparaciones, 0);
-  const totalViales    = classified.reduce((s, r) => s + r.viales, 0);
-  const totalPacientes = classified.reduce((s, r) => s + r.pacientes, 0);
-  const semanas        = countSemanas(classified);
-  const allCns         = new Set(classified.map(r => r.cn));
-  const allProts       = new Set(classified.map(r => r.protocolo).filter(Boolean));
+  // KPIs: se ajustan al alcance seleccionado.
+  //  · Si hay servicio (Onco/Hemato) → KPIs del servicio (más intuitivo para la farmacéutica).
+  //  · Si es "total" (sin servicio) → KPIs de toda el área.
+  const isService = servicioFiltro === 'oncologia-solida' || servicioFiltro === 'hematologia';
+  const scopeRows = isService
+    ? classified.filter(r => gruposParaServicio(servicioFiltro as Servicio).includes(r.grupo))
+    : classified;
+  const scopePrev = isService
+    ? prevRows.filter(r => gruposParaServicio(servicioFiltro as Servicio).includes(r.grupo))
+    : prevRows;
+
+  const scopeGasto     = scopeRows.reduce((s, r) => s + r.gasto, 0);
+  const scopePrevGasto = scopePrev.reduce((s, r) => s + r.gasto, 0);
+  const totalPrep      = scopeRows.reduce((s, r) => s + r.preparaciones, 0);
+  const totalViales    = scopeRows.reduce((s, r) => s + r.viales, 0);
+  const totalPacientes = scopeRows.reduce((s, r) => s + r.pacientes, 0);
+  const semanas        = countSemanas(scopeRows);
+  const allCns         = new Set(scopeRows.map(r => r.cn));
+  const allProts       = new Set(scopeRows.map(r => r.protocolo).filter(Boolean));
 
   const kpis: KpisAnalisis = {
-    totalGasto: totalGastoGlobal, totalPreparaciones: totalPrep, totalViales,
+    totalGasto: scopeGasto, totalPreparaciones: totalPrep, totalViales,
     mediaPackientesSemana: semanas > 0 ? Math.round((totalPacientes / semanas) * 10) / 10 : 0,
     protocolosActivos: allProts.size, medicamentosDistintos: allCns.size,
-    costePorPreparacion: totalPrep > 0 ? totalGastoGlobal / totalPrep : 0,
-    variacionYoy: computeYoy(totalGastoGlobal, prevTotalGasto),
+    costePorPreparacion: totalPrep > 0 ? scopeGasto / totalPrep : 0,
+    variacionYoy: computeYoy(scopeGasto, scopePrevGasto),
   };
 
   // Filas filtradas por servicio para tops y temporal global (si no hay grupo específico)
@@ -649,6 +746,7 @@ export async function getAnalisisDatos(
     periodo: { desde, hasta },
     kpis,
     gastoPorAnio,
+    gastoAnualServicio,
     grupos,
     topProtocolos:     buildTopProtocols(rowsForTops),
     topMedicamentos:   buildTopMeds(rowsForTops, 10, prevMedGastoFiltrado),
