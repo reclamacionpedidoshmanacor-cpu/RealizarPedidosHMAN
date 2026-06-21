@@ -78,7 +78,7 @@ function buildPresets() {
     { label: '6 meses',      desde: presetDesde(6),  hasta: today },
     { label: 'Año actual',   desde: `${year}-01-01`, hasta: today },
     { label: 'Año anterior', desde: `${year - 1}-01-01`, hasta: `${year - 1}-12-31` },
-    { label: '2 años',       desde: `${year - 2}-01-01`, hasta: today },
+    { label: 'Todo el periodo', desde: `${year - 2}-01-01`, hasta: today },
   ];
 }
 
@@ -765,7 +765,7 @@ export default function AnalisisPage() {
   const [grupoSel, setGrupoSel]         = useState<DiagnosticoGrupo | null>(null);
   const [desde, setDesde]               = useState(defaultDesde());
   const [hasta, setHasta]               = useState(defaultHasta());
-  const [activePreset, setActivePreset] = useState<string | null>('2 años');
+  const [activePreset, setActivePreset] = useState<string | null>('Todo el periodo');
   const [sortGrupos, setSortGrupos]     = useState<'gasto' | 'yoy'>('gasto');
   const [datos, setDatos]               = useState<AnalisisDatos | null>(null);
   const [loading, setLoading]           = useState(false);
@@ -931,7 +931,7 @@ export default function AnalisisPage() {
               <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">vs año anterior</p>
               <div className="mt-2"><YoyBadge pct={datos.kpis.variacionYoy} /></div>
               <p className="mt-1.5 text-[10px] text-slate-400 leading-tight">{datos.yoyEtiqueta}</p>
-              <p className="text-[10px] text-slate-400">Mismo criterio que el gráfico anual</p>
+              <p className="text-[10px] text-slate-400">Sin doble conteo semanal estimado</p>
             </div>
             <KpiCard label="Preparaciones" value={fmtNum(datos.kpis.totalPreparaciones, 0)} />
             <KpiCard label="Protocolos activos" value={String(datos.kpis.protocolosActivos)} />

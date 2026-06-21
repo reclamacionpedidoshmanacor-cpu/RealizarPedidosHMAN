@@ -36,7 +36,9 @@ export function computeYoy(current: number, previous: number): number | null {
 //  · Reciente (a partir de esta fecha) → se muestra por SEMANAS reales.
 // Cuando se disponga de más histórico semanal real, basta con adelantar esta fecha.
 export const SEMANA_REAL_DESDE = '2026-06-01';
-const CUT_YM = 2026 * 100 + 6; // derivado de SEMANA_REAL_DESDE (jun 2026)
+const CUT_YM = 2026 * 100 + 6; // jun 2026 — antes: mensual fiable; después: semanal real
+/** Último mes con dato mensual fiable completo (mayo 2026). YoY del año en curso no pasa de aquí. */
+const YOY_MES_MAX_FIABLE = 5;
 
 function ymKey(y: number, m: number): number { return y * 100 + m; }
 function isoToYM(iso: string): { y: number; m: number } {
@@ -349,15 +351,48 @@ async function getGastoByYear(area: string): Promise<GastoAnual[]> {
 
 // ---------------------------------------------------------------------------
 // Gasto anual histórico desglosado por servicio (Onco sólida / Hematología).
-// Para el año en curso, el YoY se compara contra el MISMO período (mismos meses)
-// del año anterior, evitando la distorsión de comparar año parcial vs completo.
+// YoY año en curso: mismos meses fiables vs año anterior (sin doble conteo semanal).
 // ---------------------------------------------------------------------------
+
+function gastoCeldaFiable(mensual: number, semanal: number, anio: number, mes: number): number {
+  const ym = ymKey(anio, mes);
+  if (ym >= CUT_YM) return semanal > 0 ? semanal : mensual;
+  return mensual > 0 ? mensual : semanal;
+}
+
+type YAcc = {
+  total: number; onco: number; hemato: number;
+  porMes: Map<number, number>;
+  oncoPorMes: Map<number, number>;
+  hematoPorMes: Map<number, number>;
+};
+
+function computeMesHastaYoy(yearMap: Map<number, YAcc>, realYear: number): number {
+  const cur = yearMap.get(realYear);
+  const prev = yearMap.get(realYear - 1);
+  if (!cur || !prev) return 12;
+
+  let mesHasta = 0;
+  for (let m = 1; m <= 12; m++) {
+    if ((cur.porMes.get(m) ?? 0) > 0 && (prev.porMes.get(m) ?? 0) > 0) mesHasta = m;
+  }
+  if (mesHasta === 0) mesHasta = 12;
+
+  if (realYear === new Date().getFullYear() && mesHasta > YOY_MES_MAX_FIABLE) {
+    if ((cur.porMes.get(YOY_MES_MAX_FIABLE) ?? 0) > 0 && (prev.porMes.get(YOY_MES_MAX_FIABLE) ?? 0) > 0) {
+      mesHasta = YOY_MES_MAX_FIABLE;
+    }
+  }
+  return mesHasta;
+}
+
 async function getGastoAnualPorServicio(area: string): Promise<GastoAnualServicio[]> {
   const sql = getDb();
   const rows = (await sql`
     SELECT
       cr.anio::int                                                            AS anio,
       cr.mes::int                                                             AS mes,
+      cr.semana_iso::int                                                      AS semana_iso,
       COALESCE(cr.diagnostico, '')                                            AS diagnostico,
       SUM(cr.viales_dispensados * COALESCE(m.precio_unidad, 0))::float        AS gasto
     FROM consumo_registros cr
@@ -365,22 +400,33 @@ async function getGastoAnualPorServicio(area: string): Promise<GastoAnualServici
     LEFT JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
     WHERE ic.area = ${area}
       AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
-    GROUP BY cr.anio, cr.mes, cr.diagnostico
-  `) as Array<{ anio: number; mes: number; diagnostico: string; gasto: number }>;
+    GROUP BY cr.anio, cr.mes, cr.semana_iso, cr.diagnostico
+  `) as Array<{ anio: number; mes: number; semana_iso: number | null; diagnostico: string; gasto: number }>;
 
-  type YAcc = {
-    total: number; onco: number; hemato: number;
-    porMes: Map<number, number>;
-    oncoPorMes: Map<number, number>;
-    hematoPorMes: Map<number, number>;
-  };
-  const yearMap = new Map<number, YAcc>();
+  type Celda = { mensual: number; semanal: number; servicio: ReturnType<typeof getServicioFromGrupo> };
+  const celdas = new Map<string, Celda>();
 
   for (const r of rows) {
     const anio = num(r.anio);
     const mes  = num(r.mes);
     const g    = Number(r.gasto);
-    const servicio = getServicioFromGrupo(classifyDiagnostico(r.diagnostico));
+    const key  = `${anio}|${mes}|${r.diagnostico}`;
+    const isMensual = r.semana_iso == null || r.semana_iso === 0;
+    let c = celdas.get(key);
+    if (!c) {
+      c = { mensual: 0, semanal: 0, servicio: getServicioFromGrupo(classifyDiagnostico(r.diagnostico)) };
+      celdas.set(key, c);
+    }
+    if (isMensual) c.mensual += g; else c.semanal += g;
+  }
+
+  const yearMap = new Map<number, YAcc>();
+
+  for (const [key, c] of celdas) {
+    const [anioStr, mesStr] = key.split('|', 3);
+    const anio = num(anioStr);
+    const mes  = num(mesStr);
+    const g    = gastoCeldaFiable(c.mensual, c.semanal, anio, mes);
 
     let y = yearMap.get(anio);
     if (!y) {
@@ -389,7 +435,7 @@ async function getGastoAnualPorServicio(area: string): Promise<GastoAnualServici
     }
     y.total += g;
     y.porMes.set(mes, (y.porMes.get(mes) ?? 0) + g);
-    if (servicio === 'hematologia') {
+    if (c.servicio === 'hematologia') {
       y.hemato += g;
       y.hematoPorMes.set(mes, (y.hematoPorMes.get(mes) ?? 0) + g);
     } else {
@@ -401,14 +447,13 @@ async function getGastoAnualPorServicio(area: string): Promise<GastoAnualServici
   const years = [...yearMap.keys()].sort((a, b) => a - b);
   if (!years.length) return [];
 
-  const realYear  = new Date().getFullYear();
-  const curAcc    = yearMap.get(realYear);
-  const lastMonth = curAcc ? Math.max(...curAcc.porMes.keys()) : 12;
+  const realYear    = new Date().getFullYear();
+  const mesHastaYoy = computeMesHastaYoy(yearMap, realYear);
 
   function yoySamePeriod(cur: YAcc, prev: YAcc | undefined, mesMap: (a: YAcc) => Map<number, number>): number | null {
     if (!prev) return null;
     let curSum = 0, prevSum = 0;
-    for (let m = 1; m <= lastMonth; m++) {
+    for (let m = 1; m <= mesHastaYoy; m++) {
       curSum  += mesMap(cur).get(m) ?? 0;
       prevSum += mesMap(prev).get(m) ?? 0;
     }
@@ -448,7 +493,7 @@ async function getGastoAnualPorServicio(area: string): Promise<GastoAnualServici
       variacionYoyOnco,
       variacionYoyHemato,
       parcial: esCurso,
-      mesHasta: esCurso ? lastMonth : null,
+      mesHasta: esCurso ? mesHastaYoy : null,
     };
   });
 }
@@ -471,6 +516,7 @@ async function getYoyYtd(area: string, mesHasta: number, anio: number): Promise<
       cr.cn,
       cr.anio::int                                                            AS anio,
       cr.mes::int                                                             AS mes,
+      cr.semana_iso::int                                                      AS semana_iso,
       COALESCE(cr.diagnostico, '')                                            AS diagnostico,
       SUM(cr.viales_dispensados * COALESCE(m.precio_unidad, 0))::float        AS gasto
     FROM consumo_registros cr
@@ -480,24 +526,39 @@ async function getYoyYtd(area: string, mesHasta: number, anio: number): Promise<
       AND cr.anio IN (${anio}, ${anio - 1})
       AND cr.mes <= ${mesHasta}
       AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
-    GROUP BY cr.cn, cr.anio, cr.mes, cr.diagnostico
-  `) as Array<{ cn: string; anio: number; mes: number; diagnostico: string; gasto: number }>;
+    GROUP BY cr.cn, cr.anio, cr.mes, cr.semana_iso, cr.diagnostico
+  `) as Array<{ cn: string; anio: number; mes: number; semana_iso: number | null; diagnostico: string; gasto: number }>;
+
+  type Celda = { mensual: number; semanal: number; cn: string; anio: number; mes: number; diagnostico: string };
+  const celdas = new Map<string, Celda>();
+
+  for (const r of rows) {
+    const key = `${r.cn}|${r.anio}|${r.mes}|${r.diagnostico}`;
+    const isMensual = r.semana_iso == null || r.semana_iso === 0;
+    let c = celdas.get(key);
+    if (!c) {
+      c = { mensual: 0, semanal: 0, cn: r.cn, anio: num(r.anio), mes: num(r.mes), diagnostico: r.diagnostico };
+      celdas.set(key, c);
+    }
+    const g = Number(r.gasto);
+    if (isMensual) c.mensual += g; else c.semanal += g;
+  }
 
   const porGrupo = new Map<DiagnosticoGrupo, { cur: number; prev: number }>();
   const porCn    = new Map<string, { cur: number; prev: number }>();
 
-  for (const r of rows) {
-    const g = Number(r.gasto);
-    const grupo = classifyDiagnostico(r.diagnostico);
-    const isCur = r.anio === anio;
+  for (const c of celdas.values()) {
+    const g = gastoCeldaFiable(c.mensual, c.semanal, c.anio, c.mes);
+    const grupo = classifyDiagnostico(c.diagnostico);
+    const isCur = c.anio === anio;
 
     const ga = porGrupo.get(grupo) ?? { cur: 0, prev: 0 };
     if (isCur) ga.cur += g; else ga.prev += g;
     porGrupo.set(grupo, ga);
 
-    const ca = porCn.get(r.cn) ?? { cur: 0, prev: 0 };
+    const ca = porCn.get(c.cn) ?? { cur: 0, prev: 0 };
     if (isCur) ca.cur += g; else ca.prev += g;
-    porCn.set(r.cn, ca);
+    porCn.set(c.cn, ca);
   }
   return { porGrupo, porCn, mesHasta, anio };
 }
@@ -529,9 +590,9 @@ function yoyFromGastoAnual(
 function yoyEtiquetaFromAnual(items: GastoAnualServicio[]): string {
   const realYear = new Date().getFullYear();
   const cur = items.find(i => i.anio === realYear);
-  if (!cur?.mesHasta) return `Año ${realYear} vs ${realYear - 1}`;
+  if (!cur?.mesHasta) return `${realYear} vs ${realYear - 1} (dato mensual)`;
   const m = MESES_SHORT[cur.mesHasta - 1] ?? '?';
-  return `Ene–${m} ${realYear} vs Ene–${m} ${realYear - 1}`;
+  return `Ene–${m} ${realYear} vs Ene–${m} ${realYear - 1} · mensual fiable`;
 }
 
 // ---------------------------------------------------------------------------

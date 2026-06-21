@@ -4,6 +4,25 @@ Historial de cambios del proyecto ordenado del más reciente al más antiguo.
 
 ---
 
+## [Unreleased] — 21 jun 2026 (v6)
+
+### Pestaña Análisis — YoY corregido (sin inflar/deflatar) + preset renombrado
+
+#### YoY más fiable
+- **Eliminado doble conteo**: si coexistían filas mensuales y semanales estimadas para el
+  mismo mes, se sumaban ambas y el año anterior quedaba inflado → variaciones de −30/−40%
+  poco creíbles. Ahora se **prefiere el dato mensual** (`semana_iso` nula); solo si no hay
+  mensual se usa la suma semanal estimada.
+- **Comparación hasta mayo**: el YoY del año en curso no incluye junio parcial (semanal
+  incompleto) frente a junio completo de 2025. Compara **Ene–May 2026 vs Ene–May 2025**
+  (último mes mensual fiable).
+- Etiqueta bajo la tarjeta: *"Ene–May 2026 vs Ene–May 2025 · mensual fiable"*.
+
+#### UX
+- Badge **"2 años"** renombrado a **"Todo el periodo"** (selecciona todo el histórico disponible).
+
+---
+
 ## [Unreleased] — 21 jun 2026 (v5)
 
 ### Pestaña Análisis — YoY coherente, semanas reales, Pareto y más
