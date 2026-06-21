@@ -64,6 +64,13 @@ export async function POST(req: NextRequest) {
     let periodoFin = parsed.periodoFin;
 
     const monday = isoWeekStartDate(anioManual, semanaManual);
+    const ymSemana = monday.getUTCFullYear() * 100 + (monday.getUTCMonth() + 1);
+    if (ymSemana < 202605) {
+      return NextResponse.json({
+        error: 'La importación semanal aplica desde mayo 2026. Para meses anteriores usa «Importar histórico (mensual)».',
+      }, { status: 400 });
+    }
+
     const sunday = new Date(monday);
     sunday.setUTCDate(monday.getUTCDate() + 6);
     const fechaMonday = toIsoDateUTC(monday);

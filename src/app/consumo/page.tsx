@@ -194,17 +194,24 @@ function buildDiagnosticoRows(items: DesgloseItem[]): DiagnosticoRow[] {
   return rows;
 }
 
+const MESES_LABEL = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+
 export default function ConsumoPage() {
   const initialWeek = getIsoWeekAndYearToday();
   const initialMonday = toIsoDateUTC(isoWeekStartDate(initialWeek.isoYear, initialWeek.week));
   const fileRef = useRef<HTMLInputElement>(null);
+  const historicoFileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadingHistorico, setUploadingHistorico] = useState(false);
   const [loadingRes, setLoadingRes] = useState(true);
   const [resumen, setResumen] = useState<ResumenData | null>(null);
   const [search, setSearch] = useState('');
   const [tipoFiltro, setTipoFiltro] = useState('todos');
   const [fechaDesde, setFechaDesde] = useState('');
   const [fechaHasta, setFechaHasta] = useState('');
+  const [anioHistorico, setAnioHistorico] = useState(2025);
+  const [mesHistorico, setMesHistorico] = useState(1);
+  const [usarPeriodoManual, setUsarPeriodoManual] = useState(false);
   const [anioManual, setAnioManual] = useState(initialWeek.isoYear);
   const [semanaManual, setSemanaManual] = useState(initialWeek.week);
   const [lunesReferencia, setLunesReferencia] = useState(initialMonday);
@@ -246,6 +253,37 @@ export default function ConsumoPage() {
     void loadResumen(fechaDesde, fechaHasta);
   }, [fechaDesde, fechaHasta]);
 
+  const handleUploadHistorico = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingHistorico(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      if (usarPeriodoManual) {
+        form.append('anioManual', String(anioHistorico));
+        form.append('mesManual', String(mesHistorico));
+      }
+      const res = await fetch('/api/consumo/importar-historico', { method: 'POST', body: form });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'Error al importar histórico.');
+      const resumenMeses = payload.mesesLabel
+        ?? (payload.meses?.length
+          ? payload.meses.map((m: { mes: number; anio: number }) => `${MESES_LABEL[m.mes - 1]} ${m.anio}`).join(', ')
+          : `${MESES_LABEL[mesHistorico - 1]} ${anioHistorico}`);
+      toast.success(`Histórico importado: ${payload.totalLineas} filas · ${resumenMeses}`);
+      if (payload.advertencias?.length) toast.warning(`${payload.advertencias.length} advertencia(s) en la importación.`);
+      setFechaDesde(payload.periodoInicio);
+      setFechaHasta(payload.periodoFin);
+      await loadResumen(payload.periodoInicio, payload.periodoFin);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado.');
+    } finally {
+      setUploadingHistorico(false);
+      if (historicoFileRef.current) historicoFileRef.current.value = '';
+    }
+  };
+
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -258,7 +296,7 @@ export default function ConsumoPage() {
       const res = await fetch('/api/consumo/importar', { method: 'POST', body: form });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'Error al importar.');
-      toast.success(`Importado: ${payload.totalLineas} filas · Semana ${semanaManual}/${anioManual}`);
+      toast.success(`Semana importada: ${payload.totalLineas} filas · Semana ${semanaManual}/${anioManual}`);
       if (payload.advertencias?.length) toast.warning(`${payload.advertencias.length} advertencia(s) en la importación.`);
       setFechaDesde(payload.periodoInicio);
       setFechaHasta(payload.periodoFin);
@@ -310,75 +348,133 @@ export default function ConsumoPage() {
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-slate-800 mb-1">Consumo</h1>
-          <p className="text-sm text-slate-500">
-            Esta vista aplica a Oncología y recoge medicamentos preparados en farmacia y administrados, con histórico acumulado del área.
-            La carga se ancla por Año + Semana indicados al importar.
+          <p className="text-sm text-slate-500 max-w-2xl">
+            Histórico mensual (sin semana ISO) hasta abril 2026. Desde mayo 2026, importación por semana.
           </p>
         </div>
-        <div className="flex items-end gap-2 flex-wrap justify-end">
-          <div>
-            <label className="block text-[11px] uppercase tracking-wide text-slate-400 font-medium mb-1">Lunes de referencia</label>
-            <input
-              type="date"
-              value={lunesReferencia}
-              onChange={(e) => {
-                const normalized = normalizeToIsoMonday(e.target.value);
-                if (normalized !== e.target.value) {
-                  toast.info('La fecha se ajustó al lunes de esa semana.');
-                }
-                const iso = getIsoWeekAndYearToday();
-                // Reutilizamos el cálculo ISO existente de forma segura
-                const d = new Date(`${normalized}T00:00:00Z`);
-                const dow = d.getUTCDay() || 7;
-                d.setUTCDate(d.getUTCDate() + 4 - dow);
-                const isoYear = d.getUTCFullYear();
-                const yearStart = new Date(Date.UTC(isoYear, 0, 1));
-                const week = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
-                setLunesReferencia(normalized);
-                setAnioManual(Number.isFinite(isoYear) ? isoYear : iso.isoYear);
-                setSemanaManual(Number.isFinite(week) ? week : iso.week);
-              }}
-              className="w-44 rounded-lg border border-slate-200 px-2 py-2 text-sm text-slate-700"
-            />
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <div className="rounded-xl border border-amber-200 bg-amber-50/60 px-4 py-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-amber-800 mb-2">Importar histórico (mensual)</p>
+          <p className="text-xs text-amber-900/80 mb-3">
+            El Excel debe incluir columnas AÑO y MES (puede traer varios meses en un mismo archivo). No se registra semana ISO.
+          </p>
+          <div className="flex items-end gap-2 flex-wrap">
+            <label className="flex items-center gap-2 text-xs text-amber-900/90 pb-2 mr-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={usarPeriodoManual}
+                onChange={(e) => setUsarPeriodoManual(e.target.checked)}
+                className="rounded border-amber-300"
+              />
+              Un solo mes sin columnas AÑO/MES
+            </label>
+            {usarPeriodoManual && (
+              <>
+                <div>
+                  <label className="block text-[11px] uppercase tracking-wide text-amber-700/80 font-medium mb-1">Año</label>
+                  <input
+                    type="number"
+                    min={2000}
+                    max={2100}
+                    value={anioHistorico}
+                    onChange={(e) => setAnioHistorico(Math.max(2000, Math.min(2100, Number(e.target.value) || 2025)))}
+                    className="w-24 rounded-lg border border-amber-200 bg-white px-2 py-2 text-sm text-slate-700"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] uppercase tracking-wide text-amber-700/80 font-medium mb-1">Mes</label>
+                  <select
+                    value={mesHistorico}
+                    onChange={(e) => setMesHistorico(Number(e.target.value))}
+                    className="w-28 rounded-lg border border-amber-200 bg-white px-2 py-2 text-sm text-slate-700"
+                  >
+                    {MESES_LABEL.map((label, idx) => (
+                      <option key={label} value={idx + 1}>{label}</option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            )}
+            <input ref={historicoFileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleUploadHistorico} />
+            <button
+              onClick={() => historicoFileRef.current?.click()}
+              disabled={uploadingHistorico || uploading}
+              className="rounded-lg bg-amber-700 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-800 disabled:opacity-50 transition-colors"
+            >
+              {uploadingHistorico ? 'Importando…' : 'Importar histórico'}
+            </button>
           </div>
-          <div>
-            <label className="block text-[11px] uppercase tracking-wide text-slate-400 font-medium mb-1">Año</label>
-            <input
-              type="number"
-              min={2000}
-              max={2100}
-              value={anioManual}
-              onChange={(e) => {
-                const nextYear = Math.max(2000, Math.min(2100, Number(e.target.value) || initialWeek.isoYear));
-                setAnioManual(nextYear);
-                setLunesReferencia(toIsoDateUTC(isoWeekStartDate(nextYear, semanaManual)));
-              }}
-              className="w-24 rounded-lg border border-slate-200 px-2 py-2 text-sm text-slate-700"
-            />
+        </div>
+
+        <div className="rounded-xl border border-teal-200 bg-teal-50/40 px-4 py-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-teal-800 mb-2">Importar semana (desde mayo 2026)</p>
+          <p className="text-xs text-teal-900/80 mb-3">Ancla la carga por año ISO + semana + lunes de referencia.</p>
+          <div className="flex items-end gap-2 flex-wrap">
+            <div>
+              <label className="block text-[11px] uppercase tracking-wide text-teal-700/80 font-medium mb-1">Lunes ref.</label>
+              <input
+                type="date"
+                value={lunesReferencia}
+                onChange={(e) => {
+                  const normalized = normalizeToIsoMonday(e.target.value);
+                  if (normalized !== e.target.value) {
+                    toast.info('La fecha se ajustó al lunes de esa semana.');
+                  }
+                  const iso = getIsoWeekAndYearToday();
+                  const d = new Date(`${normalized}T00:00:00Z`);
+                  const dow = d.getUTCDay() || 7;
+                  d.setUTCDate(d.getUTCDate() + 4 - dow);
+                  const isoYear = d.getUTCFullYear();
+                  const yearStart = new Date(Date.UTC(isoYear, 0, 1));
+                  const week = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+                  setLunesReferencia(normalized);
+                  setAnioManual(Number.isFinite(isoYear) ? isoYear : iso.isoYear);
+                  setSemanaManual(Number.isFinite(week) ? week : iso.week);
+                }}
+                className="w-40 rounded-lg border border-teal-200 bg-white px-2 py-2 text-sm text-slate-700"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] uppercase tracking-wide text-teal-700/80 font-medium mb-1">Año</label>
+              <input
+                type="number"
+                min={2000}
+                max={2100}
+                value={anioManual}
+                onChange={(e) => {
+                  const nextYear = Math.max(2000, Math.min(2100, Number(e.target.value) || initialWeek.isoYear));
+                  setAnioManual(nextYear);
+                  setLunesReferencia(toIsoDateUTC(isoWeekStartDate(nextYear, semanaManual)));
+                }}
+                className="w-24 rounded-lg border border-teal-200 bg-white px-2 py-2 text-sm text-slate-700"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] uppercase tracking-wide text-teal-700/80 font-medium mb-1">Semana</label>
+              <input
+                type="number"
+                min={1}
+                max={53}
+                value={semanaManual}
+                onChange={(e) => {
+                  const nextWeek = Math.max(1, Math.min(53, Number(e.target.value) || initialWeek.week));
+                  setSemanaManual(nextWeek);
+                  setLunesReferencia(toIsoDateUTC(isoWeekStartDate(anioManual, nextWeek)));
+                }}
+                className="w-20 rounded-lg border border-teal-200 bg-white px-2 py-2 text-sm text-slate-700"
+              />
+            </div>
+            <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleUpload} />
+            <button
+              onClick={() => fileRef.current?.click()}
+              disabled={uploading || uploadingHistorico}
+              className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-50 transition-colors"
+            >
+              {uploading ? 'Importando…' : 'Importar semana'}
+            </button>
           </div>
-          <div>
-            <label className="block text-[11px] uppercase tracking-wide text-slate-400 font-medium mb-1">Semana</label>
-            <input
-              type="number"
-              min={1}
-              max={53}
-              value={semanaManual}
-              onChange={(e) => {
-                const nextWeek = Math.max(1, Math.min(53, Number(e.target.value) || initialWeek.week));
-                setSemanaManual(nextWeek);
-                setLunesReferencia(toIsoDateUTC(isoWeekStartDate(anioManual, nextWeek)));
-              }}
-              className="w-20 rounded-lg border border-slate-200 px-2 py-2 text-sm text-slate-700"
-            />
-          </div>
-          <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleUpload} />
-          <button
-            onClick={() => fileRef.current?.click()}
-            disabled={uploading}
-            className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-50 transition-colors"
-          >
-            {uploading ? 'Importando…' : 'Importar Excel'}
-          </button>
         </div>
       </div>
 
