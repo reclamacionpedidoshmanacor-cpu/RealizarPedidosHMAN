@@ -200,6 +200,8 @@ export type GrupoDetalle = {
     mediaPackientesSemana: number;
     costePorPreparacion: number;
     variacionYoy: number | null;
+    medicamentosDistintos: number;
+    protocolosActivos: number;
   };
   gastoPorAnio: { anio: number; gasto: number; costePorPrep: number }[];
   temporalHistorico: TemporalPoint[];
@@ -735,6 +737,75 @@ function buildMonthlyTemporal(rows: ClassifiedRow[]): TemporalPoint[] {
   return [...map.values()].sort((a, b) => a.anio !== b.anio ? a.anio - b.anio : a.mes - b.mes);
 }
 
+function monthsInRange(desde: string, hasta: string): { anio: number; mes: number; label: string }[] {
+  const start = isoToYM(desde);
+  const end = isoToYM(hasta);
+  const out: { anio: number; mes: number; label: string }[] = [];
+  let y = start.y;
+  let m = start.m;
+  while (ymKey(y, m) <= ymKey(end.y, end.m)) {
+    out.push({ anio: y, mes: m, label: `${MESES_SHORT[m - 1]} ${y}` });
+    m++;
+    if (m > 12) { m = 1; y++; }
+  }
+  return out;
+}
+
+function fillTemporalGaps(points: TemporalPoint[], desde: string, hasta: string): TemporalPoint[] {
+  const map = new Map(points.map(p => [`${p.anio}-${String(p.mes).padStart(2, '0')}`, p]));
+  return monthsInRange(desde, hasta).map(({ anio, mes, label }) => {
+    const key = `${anio}-${String(mes).padStart(2, '0')}`;
+    return map.get(key) ?? {
+      anio, mes, semana: null, label,
+      viales: 0, gasto: 0, preparaciones: 0, pacientes: 0,
+    };
+  });
+}
+
+function rollupWeeklyToMonthly(weeks: TemporalPoint[]): TemporalPoint[] {
+  const map = new Map<string, TemporalPoint>();
+  for (const w of weeks) {
+    const key = `${w.anio}-${String(w.mes).padStart(2, '0')}`;
+    const ex = map.get(key);
+    if (ex) {
+      ex.viales += w.viales; ex.gasto += w.gasto;
+      ex.preparaciones += w.preparaciones; ex.pacientes += w.pacientes;
+    } else {
+      map.set(key, {
+        anio: w.anio, mes: w.mes, semana: null,
+        label: `${MESES_SHORT[w.mes - 1]} ${w.anio}`,
+        viales: w.viales, gasto: w.gasto, preparaciones: w.preparaciones, pacientes: w.pacientes,
+      });
+    }
+  }
+  return [...map.values()];
+}
+
+/** Serie mensual continua: histórico mensual + semanas reales agregadas por mes + huecos a cero. */
+function buildCompleteMonthlyTemporal(
+  historicRows: ClassifiedRow[],
+  recentWeekly: TemporalPoint[],
+  desde: string,
+  hasta: string,
+): TemporalPoint[] {
+  const merged = new Map<string, TemporalPoint>();
+  for (const p of buildMonthlyTemporal(historicRows)) {
+    merged.set(`${p.anio}-${String(p.mes).padStart(2, '0')}`, { ...p });
+  }
+  for (const p of rollupWeeklyToMonthly(recentWeekly)) {
+    if (ymKey(p.anio, p.mes) < CUT_YM) continue;
+    const key = `${p.anio}-${String(p.mes).padStart(2, '0')}`;
+    const ex = merged.get(key);
+    if (ex) {
+      ex.viales += p.viales; ex.gasto += p.gasto;
+      ex.preparaciones += p.preparaciones; ex.pacientes += p.pacientes;
+    } else {
+      merged.set(key, { ...p });
+    }
+  }
+  return fillTemporalGaps([...merged.values()], desde, hasta);
+}
+
 function buildWeeklyTemporal(rows: ClassifiedRow[], maxWeeks?: number): TemporalPoint[] {
   const map = new Map<string, TemporalPoint>();
   for (const r of rows) {
@@ -856,6 +927,7 @@ function buildTopMeds(
   rows: ClassifiedRow[],
   limit = 10,
   yoyByCn?: Map<string, number | null>,
+  periodo?: { desde: string; hasta: string },
 ): TopMed[] {
   type MedAcc = {
     pa: string; nom: string; gasto: number; viales: number; prep: number;
@@ -926,9 +998,12 @@ function buildTopMeds(
     .sort(([, a], [, b]) => b.gasto - a.gasto)
     .slice(0, limit)
     .map(([cn, m]) => {
-      const temporalMensual = [...m.months.values()].sort((a, b) =>
+      const temporalMensualRaw = [...m.months.values()].sort((a, b) =>
         a.anio !== b.anio ? a.anio - b.anio : a.mes - b.mes,
       );
+      const temporalMensual = periodo
+        ? fillTemporalGaps(temporalMensualRaw, periodo.desde, periodo.hasta)
+        : temporalMensualRaw;
       return {
         cn, principioActivo: m.pa, nombre: m.nom,
         totalViales: m.viales, totalGasto: m.gasto, totalPreparaciones: m.prep,
@@ -1058,6 +1133,8 @@ function computeGrupoDetalle(
   current: ClassifiedRow[],
   grupoYoy: number | null,
   yoyByCn: Map<string, number | null>,
+  desde: string,
+  hasta: string,
 ): GrupoDetalle {
   const totalGasto    = current.reduce((s, r) => s + r.gasto, 0);
   const totalPrep     = current.reduce((s, r) => s + r.preparaciones, 0);
@@ -1146,12 +1223,14 @@ function computeGrupoDetalle(
       mediaPackientesSemana: semanas > 0 ? Math.round((totalPacientes / semanas) * 10) / 10 : 0,
       costePorPreparacion: totalPrep > 0 ? totalGasto / totalPrep : 0,
       variacionYoy: grupoYoy,
+      medicamentosDistintos: new Set(current.map(r => r.cn)).size,
+      protocolosActivos: new Set(current.map(r => r.protocolo).filter(Boolean)).size,
     },
     gastoPorAnio,
-    temporalHistorico: buildMonthlyTemporal(historic),
+    temporalHistorico: buildCompleteMonthlyTemporal(historic, buildWeeklyTemporal(recent), desde, hasta),
     temporalReciente:  buildWeeklyTemporal(recent),
     topProtocolos:    buildTopProtocols(current),
-    topMedicamentos:  buildTopMeds(current, 10, yoyByCn),
+    topMedicamentos:  buildTopMeds(current, 10, yoyByCn, { desde, hasta }),
     diagnosticos,
   };
 }
@@ -1210,9 +1289,11 @@ export async function getAnalisisDatos(
     });
 
   const isService = servicioFiltro === 'oncologia-solida' || servicioFiltro === 'hematologia';
-  const scopeRows = isService
-    ? classified.filter(r => gruposParaServicio(servicioFiltro as Servicio).includes(r.grupo))
-    : classified;
+  const scopeRows = grupoFiltro
+    ? classified.filter(r => r.grupo === grupoFiltro)
+    : isService
+      ? classified.filter(r => gruposParaServicio(servicioFiltro as Servicio).includes(r.grupo))
+      : classified;
 
   const scopeGasto     = scopeRows.reduce((s, r) => s + r.gasto, 0);
   const totalPrep      = scopeRows.reduce((s, r) => s + r.preparaciones, 0);
@@ -1231,11 +1312,10 @@ export async function getAnalisisDatos(
     variacionYoy: yoyFromGastoAnual(gastoAnualServicio, servicioFiltro),
   };
 
-  const rowsForTops: ClassifiedRow[] = (servicioFiltro && !grupoFiltro)
-    ? classified.filter(r => gruposParaServicio(servicioFiltro as Servicio).includes(r.grupo))
-    : classified;
+  const rowsForTops: ClassifiedRow[] = scopeRows;
 
-  const { historic } = splitRows(rowsForTops);
+  const { historic, recent } = splitRows(rowsForTops);
+  const recentWeekly = buildWeeklyTemporal(recent);
 
   let grupoDetalle: GrupoDetalle | null = null;
   if (grupoFiltro) {
@@ -1243,6 +1323,7 @@ export async function getAnalisisDatos(
     grupoDetalle = computeGrupoDetalle(
       grupoFiltro as DiagnosticoGrupo, grupoRows,
       yoyDeGrupos(yoy, [grupoFiltro as DiagnosticoGrupo]), yoyByCn,
+      desde, hasta,
     );
   }
 
@@ -1254,8 +1335,8 @@ export async function getAnalisisDatos(
     gastoAnualServicio,
     grupos,
     topProtocolos:     buildTopProtocols(rowsForTops),
-    topMedicamentos:   buildTopMeds(rowsForTops, 10, yoyByCn),
-    temporalHistorico: buildMonthlyTemporal(historic),
+    topMedicamentos:   buildTopMeds(rowsForTops, 10, yoyByCn, { desde, hasta }),
+    temporalHistorico: buildCompleteMonthlyTemporal(historic, recentWeekly, desde, hasta),
     temporalReciente,
     pareto:            buildPareto(scopeRows),
     costePacienteCiclo: buildCostePacienteCiclo(scopeRows),

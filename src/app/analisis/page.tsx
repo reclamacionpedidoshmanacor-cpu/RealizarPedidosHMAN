@@ -797,7 +797,7 @@ function GrupoDetallePanel({ gd }: { gd: GrupoDetalle }) {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <TemporalChart data={gd.temporalHistorico} title="Evolución mensual (histórico fiable)" color={c.chart} />
+        <TemporalChart data={gd.temporalHistorico} title="Evolución mensual (todos los meses del periodo)" color={c.chart} />
         <TemporalChart data={gd.temporalReciente}  title="Últimas semanas (dato semanal real)" color={c.chart + 'cc'}
           emptyHint="Sin importaciones semanales recientes para este grupo." />
       </div>
@@ -1160,7 +1160,7 @@ export default function AnalisisPage() {
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <TemporalChart
                   data={datos.temporalHistorico}
-                  title={`Evolución mensual (histórico fiable) — ${scopeLabel(servicio)}`}
+                  title={`Evolución mensual (todos los meses del periodo) — ${scopeLabel(servicio)}`}
                   color={scopeColor(servicio)}
                 />
                 <TemporalChart
