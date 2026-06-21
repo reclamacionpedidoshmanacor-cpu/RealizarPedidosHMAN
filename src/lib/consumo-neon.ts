@@ -580,17 +580,6 @@ export type AlertaCompra = {
 export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
   const sql = getDb();
 
-  // Número de la semana ISO actual y del año
-  const nowRows = (await sql`
-    SELECT
-      EXTRACT(ISOYEAR FROM CURRENT_DATE)::int  AS iso_year,
-      EXTRACT(WEEK     FROM CURRENT_DATE)::int AS iso_week;
-  `) as Array<{ iso_year: number; iso_week: number }>;
-  const isoYear = num(nowRows[0]!.iso_year);
-  const isoWeek = num(nowRows[0]!.iso_week);
-
-  // Generamos las últimas 16 semanas ordenadas (las más recientes = índice 0)
-  // Para evitar complejidad de cruce de año con semana_iso, usamos ventana por fecha.
   // 16 sem = 112 días atrás; últimas 8 = 56 días atrás.
   const agrupado = (await sql`
     WITH
@@ -599,7 +588,7 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
              COALESCE(so.stock_minimo,  0) AS stock_minimo,
              COALESCE(so.stock_maximo,  0) AS stock_maximo
       FROM medicamentos m
-      LEFT JOIN stock_objetivo so ON so.cn = m.cn AND so.area = m.area
+      LEFT JOIN stock_objetivo so ON so.cn = m.cn
       WHERE m.area = ${area} AND m.activo = TRUE
     ),
     stock_actual AS (
@@ -608,7 +597,7 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
              sr.cn,
              sr.stock_unidades
       FROM stock_registros sr
-      JOIN stock_importaciones si ON si.id = sr.importacion_id
+      JOIN importaciones_stock si ON si.id = sr.importacion_id
       WHERE si.area = ${area}
       ORDER BY sr.cn, si.importado_en DESC, sr.id DESC
     ),

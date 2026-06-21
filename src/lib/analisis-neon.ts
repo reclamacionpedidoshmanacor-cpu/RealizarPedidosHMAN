@@ -31,12 +31,12 @@ export function computeYoy(current: number, previous: number): number | null {
   return Math.round(((current / previous) - 1) * 1000) / 10;
 }
 
-// Punto de corte: 3 meses antes de hoy → datos más antiguos van al histórico (mensual)
-// y los más recientes al semanal de detalle.
-function getSplitYM(): number {
+// Punto de corte: 3 meses antes de hoy → usamos la fecha real (fecha_min) para evitar
+// errores con semanas ISO que cruzan año (ej: semana 1/2026 = 29 dic 2025).
+function getSplitIso(): string {
   const d = new Date();
   d.setMonth(d.getMonth() - 3);
-  return d.getFullYear() * 100 + (d.getMonth() + 1);
+  return d.toISOString().slice(0, 10);
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +129,15 @@ export type TopProtocolo = {
   costePorPreparacion: number;
 };
 
+export type DxBreakdown = {
+  diagnostico: string;
+  indicacion: string;
+  grupo: DiagnosticoGrupo;
+  viales: number;
+  gasto: number;
+  preparaciones: number;
+};
+
 export type TopMed = {
   cn: string;
   principioActivo: string;
@@ -140,6 +149,7 @@ export type TopMed = {
   variacionYoy: number | null;
   grupo: DiagnosticoGrupo;
   temporalSemanal: TemporalPoint[];
+  desgloseByDx: DxBreakdown[];
 };
 
 export type GrupoDetalle = {
@@ -180,6 +190,7 @@ type ClassifiedRow = {
   anio: number;
   mes: number;
   semana_iso: number | null;
+  fecha_min: string;      // fecha real ISO yyyy-MM-dd para el corte histórico/reciente
   diagnostico: string;
   indicacion: string;
   protocolo: string;
@@ -216,7 +227,8 @@ async function getAnalisisRaw(
       SUM(cr.viales_dispensados)::float                                       AS viales,
       SUM(cr.num_pacientes)::int                                              AS pacientes,
       COUNT(*)::int                                                           AS preparaciones,
-      SUM(cr.viales_dispensados * COALESCE(m.precio_unidad, 0))::float       AS gasto
+      SUM(cr.viales_dispensados * COALESCE(m.precio_unidad, 0))::float       AS gasto,
+      MIN(cr.fecha)::text                                                     AS fecha_min
     FROM consumo_registros cr
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
     LEFT JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
@@ -231,11 +243,13 @@ async function getAnalisisRaw(
     diagnostico: string; indicacion: string; protocolo: string;
     cn: string; principio_activo: string; nombre: string;
     viales: number; pacientes: number; preparaciones: number; gasto: number;
+    fecha_min: string;
   }>;
 
   return rows.map(r => ({
     anio: num(r.anio), mes: num(r.mes),
     semana_iso: r.semana_iso != null ? num(r.semana_iso) : null,
+    fecha_min: r.fecha_min,
     diagnostico: r.diagnostico, indicacion: r.indicacion, protocolo: r.protocolo,
     cn: r.cn, principio_activo: r.principio_activo, nombre: r.nombre,
     viales: Number(r.viales), pacientes: num(r.pacientes),
@@ -277,11 +291,12 @@ async function getGastoByYear(area: string): Promise<GastoAnual[]> {
 // Helpers de agrupación temporal
 // ---------------------------------------------------------------------------
 function splitRows(rows: ClassifiedRow[]): { historic: ClassifiedRow[]; recent: ClassifiedRow[] } {
-  const splitYM = getSplitYM();
+  const splitIso = getSplitIso();
   const historic: ClassifiedRow[] = [];
   const recent: ClassifiedRow[] = [];
   for (const r of rows) {
-    if (r.anio * 100 + r.mes < splitYM) historic.push(r);
+    // Usamos la fecha real mínima del grupo para evitar errores con semanas ISO que cruzan año
+    if (r.fecha_min < splitIso) historic.push(r);
     else recent.push(r);
   }
   return { historic, recent };
@@ -409,6 +424,7 @@ function buildTopMeds(
       temporalSemanal: [...m.weeks.values()].sort((a, b) =>
         a.anio !== b.anio ? a.anio - b.anio : (a.semana ?? a.mes) - (b.semana ?? b.mes)
       ),
+      desgloseByDx: [],
     }));
 }
 
