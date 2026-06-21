@@ -39,6 +39,13 @@ function fmtEurTable(n: number): string {
   return Math.round(n).toLocaleString('es-ES');
 }
 
+/** Importe sobre barra del grafico mensual. */
+function fmtEurBar(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace('.', ',')}M`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}k`;
+  return String(Math.round(n));
+}
+
 function truncateToWidth(text: string, font: PDFFont, size: number, maxW: number): string {
   let disp = pdfSafe(text);
   if (font.widthOfTextAtSize(disp, size) <= maxW) return disp;
@@ -130,6 +137,35 @@ class PageWriter {
     this.gap(18);
   }
 
+  /** Reserva espacio minimo (titulo + cabecera + N filas) antes de una tabla. */
+  ensureTableBlock(headerRows: number, dataRows: number, rowH = 15) {
+    const headerBlock = 14 + 4 + 1 + 14;
+    const needed = 36 + 18 + headerBlock + rowH * dataRows;
+    this.ensureSpace(needed);
+  }
+
+  tableBody<T>(
+    headerCols: { text: string; x: number; maxWidth: number; align?: 'left' | 'right' }[],
+    rows: T[],
+    buildCols: (row: T, index: number) => { text: string; x: number; maxWidth?: number; align?: 'left' | 'right'; size?: number; font?: PDFFont; color?: RGB }[],
+    rowH = 15,
+  ) {
+    const headerBlock = 14 + 4 + 1 + 14;
+    let i = 0;
+    while (i < rows.length) {
+      if (this.y - headerBlock - rowH < MARGIN + FOOTER_H) {
+        this.page = this.doc.addPage([PAGE_W, PAGE_H]);
+        this.y = PAGE_H - MARGIN;
+      }
+      this.tableHeader(headerCols);
+      while (i < rows.length) {
+        if (this.y - rowH < MARGIN + FOOTER_H) break;
+        this.textRow(buildCols(rows[i]!, i), rowH);
+        i++;
+      }
+    }
+  }
+
   textRow(
     cols: { text: string; x: number; maxWidth?: number; align?: 'left' | 'right'; size?: number; font?: PDFFont; color?: RGB }[],
     rowH = 14,
@@ -172,11 +208,12 @@ class PageWriter {
     this.gap(14);
   }
 
-  drawMonthlyBars(points: TemporalPoint[], chartH = 155) {
+  drawMonthlyBars(points: TemporalPoint[], chartH = 150) {
     if (!points.length) return;
     const labelH = 28;
-    const topPad = 8;
-    const totalH = chartH + labelH + topPad + 16;
+    const valueH = 14;
+    const topPad = 6;
+    const totalH = chartH + labelH + valueH + topPad + 16;
     this.ensureSpace(totalH);
     this.gap(topPad);
 
@@ -185,8 +222,9 @@ class PageWriter {
     const maxVal = Math.max(...points.map(p => p.gasto), 1);
     const n = points.length;
     const slotW = chartW / n;
-    const barW = Math.min(22, Math.max(6, slotW * 0.52));
+    const barW = Math.min(22, Math.max(6, slotW * 0.5));
     const lblSize = 6.5;
+    const valSize = 5.5;
 
     this.page.drawLine({
       start: { x: MARGIN, y: baseY },
@@ -196,15 +234,28 @@ class PageWriter {
     });
 
     points.forEach((p, i) => {
-      const h = p.gasto > 0 ? Math.max(2, (p.gasto / maxVal) * (chartH - 14)) : 0;
+      const h = p.gasto > 0 ? Math.max(3, (p.gasto / maxVal) * (chartH - 16)) : 0;
       const slotX = MARGIN + i * slotW;
       const x = slotX + (slotW - barW) / 2;
+
+      const valStr = fmtEurBar(p.gasto);
+      const valW = this.regular.widthOfTextAtSize(valStr, valSize);
+      const valY = h > 0 ? baseY + h + 3 : baseY + 3;
+      this.page.drawText(valStr, {
+        x: slotX + Math.max(0, (slotW - valW) / 2),
+        y: valY,
+        size: valSize,
+        font: this.bold,
+        color: p.gasto > 0 ? rgb(0.15, 0.15, 0.15) : rgb(0.55, 0.55, 0.55),
+      });
+
       if (h > 0) {
         this.page.drawRectangle({
           x, y: baseY, width: barW, height: h,
           color: rgb(0.05, 0.58, 0.53),
         });
       }
+
       const lbl = monthLabelShort(p.label);
       const lw = this.regular.widthOfTextAtSize(lbl, lblSize);
       this.page.drawText(lbl, {
@@ -217,7 +268,7 @@ class PageWriter {
     });
 
     this.y = baseY - labelH - 14;
-    this.gap(8);
+    this.gap(10);
   }
 
   drawHorizontalBars(
@@ -226,32 +277,34 @@ class PageWriter {
   ) {
     const slice = items.slice(0, maxItems);
     const maxVal = Math.max(...slice.map(i => i.value), 1);
-    const barMaxW = USABLE_W - 175;
-    const rowH = 22;
+    const labelW = 98;
+    const valueW = 108;
+    const barX = MARGIN + labelW + 6;
+    const barMaxW = USABLE_W - labelW - valueW - 14;
+    const rowH = 30;
 
     for (const item of slice) {
-      this.ensureSpace(rowH + 6);
-      this.text(item.label, MARGIN, { size: 8, maxWidth: 110 });
-      const barY = this.y - 13;
-      const bw = (item.value / maxVal) * barMaxW;
-      this.page.drawRectangle({
-        x: MARGIN + 115,
-        y: barY,
-        width: Math.max(bw, 2),
-        height: 9,
-        color: hexToRgb(item.color),
-      });
+      this.ensureSpace(rowH + 4);
+      this.text(item.label, MARGIN, { size: 8, maxWidth: labelW });
+
       const rightLabel = item.pct != null
-        ? `${fmtEur(item.value)} (${item.pct.toFixed(1)}%)`
-        : fmtEur(item.value);
+        ? `${fmtEurTable(item.value)} (${item.pct.toFixed(1)}%)`
+        : fmtEurTable(item.value);
       const rlW = this.regular.widthOfTextAtSize(pdfSafe(rightLabel), 7);
-      this.text(rightLabel, MARGIN + USABLE_W - rlW, {
-        size: 7,
-        color: rgb(0.35, 0.35, 0.35),
+      this.text(rightLabel, MARGIN + USABLE_W - rlW, { size: 7, color: rgb(0.35, 0.35, 0.35) });
+
+      const barY = this.y - 14;
+      const bw = Math.max(3, (item.value / maxVal) * barMaxW);
+      this.page.drawRectangle({
+        x: barX,
+        y: barY,
+        width: bw,
+        height: 10,
+        color: hexToRgb(item.color),
       });
       this.gap(rowH);
     }
-    this.gap(8);
+    this.gap(10);
   }
 
   drawMedDxBreakdown(meds: TopMed[], maxMeds = 5, maxDx = 6) {
@@ -392,57 +445,60 @@ export async function buildInformeAnalisisPdf(
     );
 
     w.sectionTitle('Detalle por grupo tumoral');
-    w.tableHeader([
-      { text: 'Grupo', x: MARGIN, maxWidth: 108 },
-      { text: 'Gasto EUR', x: MARGIN + 112, maxWidth: 68, align: 'right' },
-      { text: '% serv.', x: MARGIN + 186, maxWidth: 42, align: 'right' },
-      { text: 'YoY', x: MARGIN + 234, maxWidth: 40, align: 'right' },
-      { text: 'Prep.', x: MARGIN + 280, maxWidth: 38, align: 'right' },
-      { text: 'Prot.', x: MARGIN + 324, maxWidth: 38, align: 'right' },
-    ]);
-    for (const g of grupos) {
-      w.textRow([
+    w.ensureTableBlock(1, Math.min(grupos.length, 3));
+    w.tableBody(
+      [
+        { text: 'Grupo', x: MARGIN, maxWidth: 108 },
+        { text: 'Gasto EUR', x: MARGIN + 112, maxWidth: 68, align: 'right' },
+        { text: '% serv.', x: MARGIN + 186, maxWidth: 42, align: 'right' },
+        { text: 'YoY', x: MARGIN + 234, maxWidth: 40, align: 'right' },
+        { text: 'Prep.', x: MARGIN + 280, maxWidth: 38, align: 'right' },
+        { text: 'Prot.', x: MARGIN + 324, maxWidth: 38, align: 'right' },
+      ],
+      grupos,
+      g => [
         { text: g.label, x: MARGIN, maxWidth: 108, size: 8 },
         { text: fmtEurTable(g.totalGasto), x: MARGIN + 112, maxWidth: 68, size: 8, align: 'right' },
         { text: `${svcTotal > 0 ? ((g.totalGasto / svcTotal) * 100).toFixed(1) : '0.0'}%`, x: MARGIN + 186, maxWidth: 42, size: 8, align: 'right' },
         { text: fmtPct(g.variacionYoy), x: MARGIN + 234, maxWidth: 40, size: 8, align: 'right' },
         { text: String(g.totalPreparaciones), x: MARGIN + 280, maxWidth: 38, size: 8, align: 'right' },
         { text: String(g.protocolosActivos), x: MARGIN + 324, maxWidth: 38, size: 8, align: 'right' },
-      ], 15);
-    }
+      ],
+      15,
+    );
     w.gap(12);
   }
 
   // ── Top 10 protocolos ──
-  w.ensureSpace(120);
   w.sectionTitle('Top 10 protocolos');
-  drawTopProtocolosTable(w, topProtocolos, gray);
+  drawTopProtocolosTable(w, topProtocolos);
   w.gap(12);
 
   // ── Top 10 medicamentos ──
-  w.ensureSpace(120);
   w.sectionTitle('Top 10 medicamentos');
-  drawTopMedsTable(w, topMedicamentos, gray);
+  drawTopMedsTable(w, topMedicamentos);
   w.gap(12);
 
   // ── Pareto ──
   if (pareto.length) {
-    w.ensureSpace(80);
     w.sectionTitle('Concentracion del gasto (Pareto / ABC)');
-    w.tableHeader([
-      { text: 'Medicamento', x: MARGIN, maxWidth: 200 },
-      { text: 'Cl.', x: MARGIN + 206, maxWidth: 18 },
-      { text: 'Gasto EUR', x: MARGIN + 230, maxWidth: 68, align: 'right' },
-      { text: '% acum.', x: MARGIN + 304, maxWidth: 44, align: 'right' },
-    ]);
-    for (const p of pareto.slice(0, 10)) {
-      w.textRow([
+    w.ensureTableBlock(1, Math.min(pareto.length, 4));
+    w.tableBody(
+      [
+        { text: 'Medicamento', x: MARGIN, maxWidth: 200 },
+        { text: 'Cl.', x: MARGIN + 206, maxWidth: 18 },
+        { text: 'Gasto EUR', x: MARGIN + 230, maxWidth: 68, align: 'right' },
+        { text: '% acum.', x: MARGIN + 304, maxWidth: 44, align: 'right' },
+      ],
+      pareto.slice(0, 10),
+      p => [
         { text: p.principioActivo || p.nombre, x: MARGIN, maxWidth: 200, size: 8 },
         { text: p.clase, x: MARGIN + 206, maxWidth: 18, size: 8, font: bold },
         { text: fmtEurTable(p.gasto), x: MARGIN + 230, maxWidth: 68, size: 8, align: 'right' },
         { text: `${p.pctAcumulado.toFixed(0)}%`, x: MARGIN + 304, maxWidth: 44, size: 8, align: 'right' },
-      ], 15);
-    }
+      ],
+      15,
+    );
     w.gap(12);
   }
 
@@ -461,8 +517,7 @@ export async function buildInformeAnalisisPdf(
   w.gap(12);
   const notas = [
     'Gasto calculado: viales dispensados x precio unitario (catalogo farmacia).',
-    'Serie mensual: todos los meses del periodo; meses sin actividad aparecen a cero.',
-    'Desde jun 2026 el detalle semanal se agrega al mes correspondiente.',
+    'Serie mensual: dato mensual fiable; si no hay mensual se usa suma semanal del mes.',
     'Variacion YoY: mismo tramo de meses del ano en curso vs ano anterior (dato mensual fiable).',
   ];
   for (const n of notas) {
@@ -480,43 +535,49 @@ export async function buildInformeAnalisisPdf(
   return doc.save();
 }
 
-function drawTopProtocolosTable(w: PageWriter, data: TopProtocolo[], _gray: RGB) {
-  w.tableHeader([
-    { text: '#', x: TBL.rank.x, maxWidth: TBL.rank.w },
-    { text: 'Protocolo', x: TBL.name.x, maxWidth: TBL.name.w },
-    { text: 'Gasto EUR', x: TBL.gasto.x, maxWidth: TBL.gasto.w, align: 'right' },
-    { text: 'Prep.', x: TBL.prep.x, maxWidth: TBL.prep.w, align: 'right' },
-    { text: 'EUR/prep', x: TBL.extra.x, maxWidth: TBL.extra.w, align: 'right' },
-  ]);
-  for (const [i, p] of data.entries()) {
-    w.textRow([
+function drawTopProtocolosTable(w: PageWriter, data: TopProtocolo[]) {
+  w.ensureTableBlock(1, Math.min(data.length, 4));
+  w.tableBody(
+    [
+      { text: '#', x: TBL.rank.x, maxWidth: TBL.rank.w },
+      { text: 'Protocolo', x: TBL.name.x, maxWidth: TBL.name.w },
+      { text: 'Gasto EUR', x: TBL.gasto.x, maxWidth: TBL.gasto.w, align: 'right' },
+      { text: 'Prep.', x: TBL.prep.x, maxWidth: TBL.prep.w, align: 'right' },
+      { text: 'EUR/prep', x: TBL.extra.x, maxWidth: TBL.extra.w, align: 'right' },
+    ],
+    data,
+    (p, i) => [
       { text: String(i + 1), x: TBL.rank.x, maxWidth: TBL.rank.w, size: 8 },
       { text: p.protocolo, x: TBL.name.x, maxWidth: TBL.name.w, size: 8 },
       { text: fmtEurTable(p.totalGasto), x: TBL.gasto.x, maxWidth: TBL.gasto.w, size: 8, align: 'right' },
       { text: String(p.totalPreparaciones), x: TBL.prep.x, maxWidth: TBL.prep.w, size: 8, align: 'right' },
       { text: fmtEurTable(p.costePorPreparacion), x: TBL.extra.x, maxWidth: TBL.extra.w, size: 8, align: 'right' },
-    ], 15);
-  }
+    ],
+    15,
+  );
 }
 
-function drawTopMedsTable(w: PageWriter, data: TopMed[], _gray: RGB) {
+function drawTopMedsTable(w: PageWriter, data: TopMed[]) {
   const yoyX = MARGIN + 376;
-  w.tableHeader([
-    { text: '#', x: TBL.rank.x, maxWidth: TBL.rank.w },
-    { text: 'Principio activo', x: TBL.name.x, maxWidth: 198 },
-    { text: 'Gasto EUR', x: TBL.gasto.x, maxWidth: TBL.gasto.w, align: 'right' },
-    { text: 'Prep.', x: TBL.prep.x, maxWidth: TBL.prep.w, align: 'right' },
-    { text: 'YoY', x: yoyX, maxWidth: 28, align: 'right' },
-    { text: 'EUR/prep', x: TBL.extra.x, maxWidth: TBL.extra.w, align: 'right' },
-  ]);
-  for (const [i, m] of data.entries()) {
-    w.textRow([
+  w.ensureTableBlock(1, Math.min(data.length, 4));
+  w.tableBody(
+    [
+      { text: '#', x: TBL.rank.x, maxWidth: TBL.rank.w },
+      { text: 'Principio activo', x: TBL.name.x, maxWidth: 198 },
+      { text: 'Gasto EUR', x: TBL.gasto.x, maxWidth: TBL.gasto.w, align: 'right' },
+      { text: 'Prep.', x: TBL.prep.x, maxWidth: TBL.prep.w, align: 'right' },
+      { text: 'YoY', x: yoyX, maxWidth: 28, align: 'right' },
+      { text: 'EUR/prep', x: TBL.extra.x, maxWidth: TBL.extra.w, align: 'right' },
+    ],
+    data,
+    (m, i) => [
       { text: String(i + 1), x: TBL.rank.x, maxWidth: TBL.rank.w, size: 8 },
       { text: m.principioActivo || m.nombre, x: TBL.name.x, maxWidth: 198, size: 8 },
       { text: fmtEurTable(m.totalGasto), x: TBL.gasto.x, maxWidth: TBL.gasto.w, size: 8, align: 'right' },
       { text: String(m.totalPreparaciones), x: TBL.prep.x, maxWidth: TBL.prep.w, size: 8, align: 'right' },
       { text: fmtPct(m.variacionYoy), x: yoyX, maxWidth: 28, size: 8, align: 'right' },
       { text: fmtEurTable(m.costePorPreparacion), x: TBL.extra.x, maxWidth: TBL.extra.w, size: 8, align: 'right' },
-    ], 15);
-  }
+    ],
+    15,
+  );
 }

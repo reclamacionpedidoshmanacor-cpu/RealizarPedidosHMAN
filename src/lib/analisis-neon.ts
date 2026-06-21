@@ -718,23 +718,51 @@ function splitRows(rows: ClassifiedRow[]): { historic: ClassifiedRow[]; recent: 
   return { historic, recent };
 }
 
-function buildMonthlyTemporal(rows: ClassifiedRow[]): TemporalPoint[] {
-  const map = new Map<string, TemporalPoint>();
+type MonthAcc = {
+  anio: number; mes: number;
+  mGasto: number; sGasto: number;
+  mViales: number; sViales: number;
+  mPrep: number; sPrep: number;
+  mPac: number; sPac: number;
+};
+
+function pickFiable(mensual: number, semanal: number, anio: number, mes: number): number {
+  return gastoCeldaFiable(mensual, semanal, anio, mes);
+}
+
+function monthAccToPoint(a: MonthAcc): TemporalPoint {
+  return {
+    anio: a.anio, mes: a.mes, semana: null,
+    label: `${MESES_SHORT[a.mes - 1]} ${a.anio}`,
+    gasto: pickFiable(a.mGasto, a.sGasto, a.anio, a.mes),
+    viales: pickFiable(a.mViales, a.sViales, a.anio, a.mes),
+    preparaciones: pickFiable(a.mPrep, a.sPrep, a.anio, a.mes),
+    pacientes: pickFiable(a.mPac, a.sPac, a.anio, a.mes),
+  };
+}
+
+/** Agrega por mes preferiendo filas mensuales (evita subtotales semanales parciales). */
+function buildMonthlyTemporalFiable(rows: ClassifiedRow[]): TemporalPoint[] {
+  const map = new Map<string, MonthAcc>();
   for (const r of rows) {
     const key = `${r.anio}-${String(r.mes).padStart(2, '0')}`;
-    const ex = map.get(key);
-    if (ex) {
-      ex.viales += r.viales; ex.gasto += r.gasto;
-      ex.preparaciones += r.preparaciones; ex.pacientes += r.pacientes;
+    let a = map.get(key);
+    if (!a) {
+      a = { anio: r.anio, mes: r.mes, mGasto: 0, sGasto: 0, mViales: 0, sViales: 0, mPrep: 0, sPrep: 0, mPac: 0, sPac: 0 };
+      map.set(key, a);
+    }
+    const isMensual = r.semana_iso == null || r.semana_iso <= 0;
+    if (isMensual) {
+      a.mGasto += r.gasto; a.mViales += r.viales;
+      a.mPrep += r.preparaciones; a.mPac += r.pacientes;
     } else {
-      map.set(key, {
-        anio: r.anio, mes: r.mes, semana: null,
-        label: `${MESES_SHORT[r.mes - 1]} ${r.anio}`,
-        viales: r.viales, gasto: r.gasto, preparaciones: r.preparaciones, pacientes: r.pacientes,
-      });
+      a.sGasto += r.gasto; a.sViales += r.viales;
+      a.sPrep += r.preparaciones; a.sPac += r.pacientes;
     }
   }
-  return [...map.values()].sort((a, b) => a.anio !== b.anio ? a.anio - b.anio : a.mes - b.mes);
+  return [...map.values()]
+    .map(monthAccToPoint)
+    .sort((a, b) => a.anio !== b.anio ? a.anio - b.anio : a.mes - b.mes);
 }
 
 function monthsInRange(desde: string, hasta: string): { anio: number; mes: number; label: string }[] {
@@ -762,48 +790,13 @@ function fillTemporalGaps(points: TemporalPoint[], desde: string, hasta: string)
   });
 }
 
-function rollupWeeklyToMonthly(weeks: TemporalPoint[]): TemporalPoint[] {
-  const map = new Map<string, TemporalPoint>();
-  for (const w of weeks) {
-    const key = `${w.anio}-${String(w.mes).padStart(2, '0')}`;
-    const ex = map.get(key);
-    if (ex) {
-      ex.viales += w.viales; ex.gasto += w.gasto;
-      ex.preparaciones += w.preparaciones; ex.pacientes += w.pacientes;
-    } else {
-      map.set(key, {
-        anio: w.anio, mes: w.mes, semana: null,
-        label: `${MESES_SHORT[w.mes - 1]} ${w.anio}`,
-        viales: w.viales, gasto: w.gasto, preparaciones: w.preparaciones, pacientes: w.pacientes,
-      });
-    }
-  }
-  return [...map.values()];
-}
-
-/** Serie mensual continua: histórico mensual + semanas reales agregadas por mes + huecos a cero. */
+/** Serie mensual continua con dato fiable + huecos a cero en el periodo. */
 function buildCompleteMonthlyTemporal(
-  historicRows: ClassifiedRow[],
-  recentWeekly: TemporalPoint[],
+  rows: ClassifiedRow[],
   desde: string,
   hasta: string,
 ): TemporalPoint[] {
-  const merged = new Map<string, TemporalPoint>();
-  for (const p of buildMonthlyTemporal(historicRows)) {
-    merged.set(`${p.anio}-${String(p.mes).padStart(2, '0')}`, { ...p });
-  }
-  for (const p of rollupWeeklyToMonthly(recentWeekly)) {
-    if (ymKey(p.anio, p.mes) < CUT_YM) continue;
-    const key = `${p.anio}-${String(p.mes).padStart(2, '0')}`;
-    const ex = merged.get(key);
-    if (ex) {
-      ex.viales += p.viales; ex.gasto += p.gasto;
-      ex.preparaciones += p.preparaciones; ex.pacientes += p.pacientes;
-    } else {
-      merged.set(key, { ...p });
-    }
-  }
-  return fillTemporalGaps([...merged.values()], desde, hasta);
+  return fillTemporalGaps(buildMonthlyTemporalFiable(rows), desde, hasta);
 }
 
 function buildWeeklyTemporal(rows: ClassifiedRow[], maxWeeks?: number): TemporalPoint[] {
@@ -932,7 +925,7 @@ function buildTopMeds(
   type MedAcc = {
     pa: string; nom: string; gasto: number; viales: number; prep: number;
     grupo: DiagnosticoGrupo;
-    months: Map<string, TemporalPoint>;
+    months: Map<string, MonthAcc>;
     monthGrupo: Map<string, Map<string, { label: string; gasto: number }>>;
     monthDx: Map<string, Map<string, { label: string; gasto: number }>>;
     dxMap: Map<string, DxBreakdown>;
@@ -954,16 +947,18 @@ function buildTopMeds(
     m.gasto += r.gasto; m.viales += r.viales; m.prep += r.preparaciones;
 
     const mk = `${r.anio}-${String(r.mes).padStart(2, '0')}`;
-    const mp = m.months.get(mk);
-    if (mp) {
-      mp.viales += r.viales; mp.gasto += r.gasto;
-      mp.preparaciones += r.preparaciones; mp.pacientes += r.pacientes;
+    let ma = m.months.get(mk);
+    if (!ma) {
+      ma = { anio: r.anio, mes: r.mes, mGasto: 0, sGasto: 0, mViales: 0, sViales: 0, mPrep: 0, sPrep: 0, mPac: 0, sPac: 0 };
+      m.months.set(mk, ma);
+    }
+    const isMensual = r.semana_iso == null || r.semana_iso <= 0;
+    if (isMensual) {
+      ma.mGasto += r.gasto; ma.mViales += r.viales;
+      ma.mPrep += r.preparaciones; ma.mPac += r.pacientes;
     } else {
-      m.months.set(mk, {
-        anio: r.anio, mes: r.mes, semana: null,
-        label: `${MESES_SHORT[r.mes - 1]} ${r.anio}`,
-        viales: r.viales, gasto: r.gasto, preparaciones: r.preparaciones, pacientes: r.pacientes,
-      });
+      ma.sGasto += r.gasto; ma.sViales += r.viales;
+      ma.sPrep += r.preparaciones; ma.sPac += r.pacientes;
     }
 
     // Apilado por tipo tumoral (vista total)
@@ -998,9 +993,9 @@ function buildTopMeds(
     .sort(([, a], [, b]) => b.gasto - a.gasto)
     .slice(0, limit)
     .map(([cn, m]) => {
-      const temporalMensualRaw = [...m.months.values()].sort((a, b) =>
-        a.anio !== b.anio ? a.anio - b.anio : a.mes - b.mes,
-      );
+      const temporalMensualRaw = [...m.months.values()]
+        .map(monthAccToPoint)
+        .sort((a, b) => a.anio !== b.anio ? a.anio - b.anio : a.mes - b.mes);
       const temporalMensual = periodo
         ? fillTemporalGaps(temporalMensualRaw, periodo.desde, periodo.hasta)
         : temporalMensualRaw;
@@ -1227,7 +1222,7 @@ function computeGrupoDetalle(
       protocolosActivos: new Set(current.map(r => r.protocolo).filter(Boolean)).size,
     },
     gastoPorAnio,
-    temporalHistorico: buildCompleteMonthlyTemporal(historic, buildWeeklyTemporal(recent), desde, hasta),
+    temporalHistorico: buildCompleteMonthlyTemporal(current, desde, hasta),
     temporalReciente:  buildWeeklyTemporal(recent),
     topProtocolos:    buildTopProtocols(current),
     topMedicamentos:  buildTopMeds(current, 10, yoyByCn, { desde, hasta }),
@@ -1314,9 +1309,6 @@ export async function getAnalisisDatos(
 
   const rowsForTops: ClassifiedRow[] = scopeRows;
 
-  const { historic, recent } = splitRows(rowsForTops);
-  const recentWeekly = buildWeeklyTemporal(recent);
-
   let grupoDetalle: GrupoDetalle | null = null;
   if (grupoFiltro) {
     const grupoRows = classified.filter(r => r.grupo === grupoFiltro);
@@ -1336,7 +1328,7 @@ export async function getAnalisisDatos(
     grupos,
     topProtocolos:     buildTopProtocols(rowsForTops),
     topMedicamentos:   buildTopMeds(rowsForTops, 10, yoyByCn, { desde, hasta }),
-    temporalHistorico: buildCompleteMonthlyTemporal(historic, recentWeekly, desde, hasta),
+    temporalHistorico: buildCompleteMonthlyTemporal(rowsForTops, desde, hasta),
     temporalReciente,
     pareto:            buildPareto(scopeRows),
     costePacienteCiclo: buildCostePacienteCiclo(scopeRows),
