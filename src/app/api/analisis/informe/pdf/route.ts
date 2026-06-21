@@ -56,17 +56,12 @@ export async function GET(req: NextRequest) {
     tipo === 'servicio' ? servicio : null,
   );
 
-  const titulo = tipo === 'servicio'
-    ? `Informe por servicio — ${SERVICIO_LABELS[servicio!]}`
-    : `Informe por grupo tumoral — ${GRUPO_LABELS[grupo!]}`;
-
-  const subtitulo = tipo === 'servicio'
-    ? 'Resumen farmaeconomico del servicio (12 meses). Destinado a responsables clinicos del area.'
-    : `Detalle del grupo ${GRUPO_LABELS[grupo!]} (12 meses).`;
+  const lineaInforme = tipo === 'servicio'
+    ? `Informe por servicio: ${SERVICIO_LABELS[servicio!]}`
+    : `Informe por grupo tumoral: ${GRUPO_LABELS[grupo!]}`;
 
   const pdfBytes = await buildInformeAnalisisPdf(tipo, datos, {
-    titulo,
-    subtitulo,
+    lineaInforme,
     servicio: tipo === 'servicio' ? servicio! : undefined,
     grupo: tipo === 'grupo' ? grupo! : undefined,
   });

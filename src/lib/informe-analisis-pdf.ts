@@ -1,4 +1,6 @@
-import { PDFDocument, StandardFonts, rgb, PDFFont, PDFPage, RGB } from 'pdf-lib';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { PDFDocument, StandardFonts, rgb, PDFFont, PDFPage, RGB, PDFImage } from 'pdf-lib';
 import type { AnalisisDatos, KpisAnalisis, TemporalPoint, TopMed, TopProtocolo } from '@/lib/analisis-neon';
 import {
   GRUPO_COLORS,
@@ -13,6 +15,9 @@ const PAGE_W = 595.28;
 const PAGE_H = 841.89;
 const USABLE_W = PAGE_W - MARGIN * 2;
 const FOOTER_H = 40;
+const LOGO_PATH = path.join(process.cwd(), 'public', 'Logo-Hospital-neg-MANACOR.jpg');
+const LOGO_H = 46;
+const HEADER_INSTITUCION = 'SERVICIO DE FARMACIA HOSPITALARIA - HOSPITAL DE MANACOR';
 
 /** Columnas alineadas para tablas de protocolos / medicamentos. */
 const TBL = {
@@ -370,12 +375,75 @@ function resolveInformeData(datos: AnalisisDatos, tipo: InformeTipo) {
   };
 }
 
+async function loadInformeLogo(doc: PDFDocument): Promise<PDFImage | null> {
+  try {
+    const bytes = await readFile(LOGO_PATH);
+    return await doc.embedJpg(bytes);
+  } catch {
+    return null;
+  }
+}
+
+function drawInformeCabecera(
+  w: PageWriter,
+  logo: PDFImage | null,
+  oblique: PDFFont,
+  datos: AnalisisDatos,
+  lineaInforme: string,
+) {
+  const gray = rgb(0.4, 0.4, 0.4);
+  const brand = rgb(0.05, 0.2, 0.45);
+
+  if (logo) {
+    const scale = LOGO_H / logo.height;
+    const logoW = logo.width * scale;
+    w.page.drawImage(logo, {
+      x: MARGIN,
+      y: w.y - LOGO_H,
+      width: logoW,
+      height: LOGO_H,
+    });
+    const textX = MARGIN + logoW + 12;
+    w.text(HEADER_INSTITUCION, textX, {
+      size: 9,
+      font: w.bold,
+      color: gray,
+      y: w.y - 14,
+      maxWidth: PAGE_W - MARGIN - textX,
+    });
+    w.y -= LOGO_H + 16;
+  } else {
+    w.text(HEADER_INSTITUCION, MARGIN, { size: 9, font: w.bold, color: gray });
+    w.gap(14);
+  }
+
+  w.text('Informe farmaeconomico de actividad', MARGIN, { size: 15, font: w.bold, color: brand });
+  w.gap(18);
+  w.text(lineaInforme, MARGIN, { size: 12, font: w.bold });
+  w.gap(14);
+  const hoy = fmtDate(new Date().toISOString().slice(0, 10));
+  w.text(
+    `Periodo: ${fmtDate(datos.periodo.desde)} - ${fmtDate(datos.periodo.hasta)} (12 meses)  |  Generado: ${hoy}`,
+    MARGIN,
+    { size: 9, color: gray, maxWidth: USABLE_W },
+  );
+  w.gap(10);
+  w.text(`Comparativa YoY: ${pdfSafe(datos.yoyEtiqueta)}`, MARGIN, {
+    size: 8,
+    font: oblique,
+    color: gray,
+    maxWidth: USABLE_W,
+  });
+  w.gap(16);
+  w.line(rgb(0.55, 0.55, 0.55), 1);
+  w.gap(18);
+}
+
 export async function buildInformeAnalisisPdf(
   tipo: InformeTipo,
   datos: AnalisisDatos,
   opts: {
-    titulo: string;
-    subtitulo: string;
+    lineaInforme: string;
     servicio?: Servicio;
     grupo?: DiagnosticoGrupo;
   },
@@ -384,30 +452,13 @@ export async function buildInformeAnalisisPdf(
   const regular = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
   const oblique = await doc.embedFont(StandardFonts.HelveticaOblique);
+  const logo = await loadInformeLogo(doc);
   const w = new PageWriter(doc, regular, bold);
   const gray = rgb(0.4, 0.4, 0.4);
 
   const { kpis, topProtocolos, topMedicamentos, temporalMensual, pareto } = resolveInformeData(datos, tipo);
 
-  // ── Cabecera ──
-  w.text('SERVICIO DE FARMACIA HOSPITALARIA', MARGIN, { size: 9, color: gray });
-  w.gap(14);
-  w.text('Informe farmaeconomico de actividad', MARGIN, { size: 16, font: bold, color: rgb(0.05, 0.2, 0.45) });
-  w.gap(20);
-  w.text(opts.titulo, MARGIN, { size: 13, font: bold });
-  w.gap(14);
-  w.text(opts.subtitulo, MARGIN, { size: 10, color: gray, maxWidth: USABLE_W });
-  w.gap(12);
-  w.text(
-    `Periodo: ${fmtDate(datos.periodo.desde)} - ${fmtDate(datos.periodo.hasta)} (12 meses)  |  Generado: ${fmtDate(new Date().toISOString().slice(0, 10))}`,
-    MARGIN,
-    { size: 9, color: gray, maxWidth: USABLE_W },
-  );
-  w.gap(10);
-  w.text(`Comparativa YoY: ${pdfSafe(datos.yoyEtiqueta)}`, MARGIN, { size: 8, font: oblique, color: gray, maxWidth: USABLE_W });
-  w.gap(16);
-  w.line(rgb(0.55, 0.55, 0.55), 1);
-  w.gap(18);
+  drawInformeCabecera(w, logo, oblique, datos, opts.lineaInforme);
 
   // ── KPIs ──
   w.sectionTitle('Resumen del periodo', 0);
