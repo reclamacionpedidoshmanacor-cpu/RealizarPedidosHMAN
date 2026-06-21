@@ -314,6 +314,49 @@ export async function eliminarLineaRecuento(importacionId: number, cn: string): 
   return rows.length > 0;
 }
 
+function normalizeUbicacionKey(value: string | null | undefined): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ');
+}
+
+export async function incorporarFaltantesRecuento(
+  importacionId: number,
+  catalogo: Array<{
+    cn: string;
+    activo: boolean;
+    ubicacion: string | null;
+    unidadesPorCaja: number;
+  }>,
+  options?: { ubicacionNormalizada?: string }
+): Promise<{ insertadas: number; totalLineas: number }> {
+  const existentes = await getLineasRecuento(importacionId);
+  const existentesCn = new Set(existentes.map((l) => l.cn));
+  const ubicacionKey = options?.ubicacionNormalizada ?? null;
+
+  let insertadas = 0;
+  for (const med of catalogo) {
+    if (!med.activo) continue;
+    if (ubicacionKey && normalizeUbicacionKey(med.ubicacion) !== ubicacionKey) continue;
+    if (existentesCn.has(med.cn)) continue;
+
+    await upsertLineaRecuento(importacionId, {
+      cn: med.cn,
+      stockUnidades: 0,
+      stockCajas: 0,
+      valorTotal: null,
+    });
+    existentesCn.add(med.cn);
+    insertadas += 1;
+  }
+
+  const totalLineas = await recalcularTotalLineasRecuento(importacionId);
+  return { insertadas, totalLineas };
+}
+
 export async function recalcularTotalLineasRecuento(importacionId: number): Promise<number> {
   const sql = getDb();
   const rows = (await sql`

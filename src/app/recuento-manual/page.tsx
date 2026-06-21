@@ -25,6 +25,8 @@ type ApiResponse = {
   ubicaciones: string[];
   ubicacionSeleccionada: string | null;
   medicamentos: MedicamentoManual[];
+  faltantesActivosArea?: number;
+  faltantesActivosUbicacion?: number;
 };
 
 /* ─── tipos reposición (solo UPE) ─── */
@@ -70,6 +72,7 @@ export default function RecuentoManualPage() {
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [incorporando, setIncorporando] = useState(false);
 
   /* ── estado recuento manual ── */
   const [draft, setDraft] = useState<Record<string, DraftLinea>>({});
@@ -98,13 +101,10 @@ export default function RecuentoManualPage() {
       const typed = payload as ApiResponse;
       setData(typed);
 
-      const esManual = typed.pendiente?.origen === 'manual';
       const nextDraft: Record<string, DraftLinea> = {};
       const nextBaseline: Record<string, DraftLinea> = {};
       for (const med of typed.medicamentos) {
-        const vals = esManual
-          ? { cajas: med.cajas, unidadesSueltas: med.unidadesSueltas }
-          : { cajas: 0, unidadesSueltas: 0 };
+        const vals = { cajas: med.cajas, unidadesSueltas: med.unidadesSueltas };
         nextDraft[med.cn] = { ...vals };
         nextBaseline[med.cn] = { ...vals };
       }
@@ -169,6 +169,40 @@ export default function RecuentoManualPage() {
       return cur && (cur.cajas !== base.cajas || cur.unidadesSueltas !== base.unidadesSueltas);
     });
   }, [data, draft, baseline]);
+
+  const handleIncorporarFaltantes = async (alcance: 'ubicacion' | 'area') => {
+    if (!data?.pendiente) {
+      toast.error('No hay recuento pendiente.');
+      return;
+    }
+    if (alcance === 'ubicacion' && !ubicacion) return;
+
+    setIncorporando(true);
+    try {
+      const res = await fetch('/api/recuento-manual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'incorporar-faltantes',
+          ubicacion: alcance === 'ubicacion' ? ubicacion : undefined,
+        }),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudieron incorporar faltantes.');
+      toast.success(`✅ ${payload.insertadas} medicamento(s) añadido(s) con stock 0`);
+      if (alcance === 'ubicacion' && ubicacion) {
+        await cargarUbicacion(ubicacion);
+      } else {
+        const res2 = await fetch('/api/recuento-manual', { cache: 'no-store' });
+        const data2 = (await res2.json()) as ApiResponse;
+        setData(data2);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setIncorporando(false);
+    }
+  };
 
   const handleGuardar = async () => {
     if (!data || !ubicacion) return;
@@ -439,9 +473,23 @@ export default function RecuentoManualPage() {
         </div>
 
         {data?.pendiente ? (
-          <div className="rounded-2xl border-2 border-teal-200 bg-teal-50 px-6 py-4">
-            <p className="text-lg font-semibold text-teal-700">📂 Recuento en curso: #{data.pendiente.id}</p>
-            <p className="text-base text-teal-600">Fecha: {formatDate(data.pendiente.fechaRecuento)} · {data.pendiente.totalLineas} líneas</p>
+          <div className="rounded-2xl border-2 border-teal-200 bg-teal-50 px-6 py-4 space-y-3">
+            <div>
+              <p className="text-lg font-semibold text-teal-700">📂 Recuento en curso: #{data.pendiente.id}</p>
+              <p className="text-base text-teal-600">
+                Fecha: {formatDate(data.pendiente.fechaRecuento)} · {data.pendiente.origen} · {data.pendiente.totalLineas} líneas
+              </p>
+            </div>
+            {(data.faltantesActivosArea ?? 0) > 0 && (
+              <button
+                type="button"
+                onClick={() => void handleIncorporarFaltantes('area')}
+                disabled={incorporando}
+                className="w-full rounded-xl border-2 border-teal-400 bg-white px-4 py-3 text-base font-bold text-teal-800 hover:bg-teal-100 active:scale-[0.99] disabled:opacity-50"
+              >
+                {incorporando ? 'Incorporando…' : `➕ Añadir ${data.faltantesActivosArea} activo(s) faltante(s) con stock 0`}
+              </button>
+            )}
           </div>
         ) : (
           <div className="rounded-2xl border-2 border-amber-200 bg-amber-50 px-6 py-4">
@@ -519,9 +567,21 @@ export default function RecuentoManualPage() {
             </div>
           ) : (
             <>
-              <p className="text-base text-slate-500 font-semibold">
-                {medicamentos.length} medicamento{medicamentos.length !== 1 ? 's' : ''}
-              </p>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-base text-slate-500 font-semibold">
+                  {medicamentos.length} medicamento{medicamentos.length !== 1 ? 's' : ''} activo{medicamentos.length !== 1 ? 's' : ''}
+                </p>
+                {(data?.faltantesActivosUbicacion ?? 0) > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => void handleIncorporarFaltantes('ubicacion')}
+                    disabled={incorporando}
+                    className="rounded-xl border-2 border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 active:scale-95 disabled:opacity-50"
+                  >
+                    {incorporando ? '…' : `➕ ${data?.faltantesActivosUbicacion} faltante(s) → stock 0`}
+                  </button>
+                )}
+              </div>
               {medicamentos.map((med, idx) => {
                 const val = draft[med.cn] ?? { cajas: 0, unidadesSueltas: 0 };
                 const base = baseline[med.cn] ?? { cajas: 0, unidadesSueltas: 0 };

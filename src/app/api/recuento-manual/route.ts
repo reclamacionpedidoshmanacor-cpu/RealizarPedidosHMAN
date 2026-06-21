@@ -5,6 +5,7 @@ import {
   crearRecuento,
   getLineasRecuento,
   getPendienteRecuento,
+  incorporarFaltantesRecuento,
   recalcularTotalLineasRecuento,
   upsertLineaRecuento,
 } from '@/lib/stock-propuesta-neon';
@@ -94,9 +95,20 @@ export async function GET(req: NextRequest) {
     const lineasPendiente = pendiente ? await getLineasRecuento(pendiente.id) : [];
     const lineasByCn = new Map(lineasPendiente.map((linea) => [linea.cn, linea]));
 
+    const lineasCn = new Set(lineasPendiente.map((l) => l.cn));
+    const faltantesActivosArea = catalogo.filter((med) => med.activo && !lineasCn.has(med.cn)).length;
+    const faltantesActivosUbicacion = ubicacionSeleccionada
+      ? catalogo.filter(
+          (med) =>
+            med.activo &&
+            normalizeText(med.ubicacion) === selectedKey &&
+            !lineasCn.has(med.cn)
+        ).length
+      : 0;
+
     const medicamentos = ubicacionSeleccionada
       ? catalogo
-          .filter((med) => normalizeText(med.ubicacion) === selectedKey)
+          .filter((med) => med.activo && normalizeText(med.ubicacion) === selectedKey)
           .map((med) => {
             const unidadesPorCaja = Number(med.unidadesPorCaja) > 0 ? Number(med.unidadesPorCaja) : 1;
             const linea = lineasByCn.get(med.cn);
@@ -125,6 +137,8 @@ export async function GET(req: NextRequest) {
       ubicaciones,
       ubicacionSeleccionada,
       medicamentos,
+      faltantesActivosArea,
+      faltantesActivosUbicacion,
     });
     return withAreaCookie(res, area);
   } catch (err) {
@@ -136,17 +150,53 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as {
+      action?: unknown;
       area?: unknown;
       ubicacion?: unknown;
       fechaRecuento?: unknown;
       lineas?: unknown;
     };
 
+    const action = String(body.action ?? '').trim().toLowerCase();
     const areaRaw = String(body.area ?? '').trim();
     if (areaRaw && !isValidArea(areaRaw)) {
       return NextResponse.json({ error: 'Area no valida.' }, { status: 400 });
     }
     const area = isValidArea(areaRaw) ? areaRaw : getAreaFromCookie(req);
+
+    if (action === 'incorporar-faltantes') {
+      const catalogo = await listMedicamentosByArea(area);
+      const pendiente = await getPendienteRecuento(area);
+      if (!pendiente) {
+        return NextResponse.json({ error: 'No hay recuento pendiente en esta area.' }, { status: 404 });
+      }
+
+      const ubicacionRaw = String(body.ubicacion ?? '').trim();
+      const ubicacionesMap = buildUbicacionesMap(catalogo);
+      let ubicacionKey: string | undefined;
+      if (ubicacionRaw) {
+        ubicacionKey = normalizeText(ubicacionRaw);
+        if (!ubicacionesMap.has(ubicacionKey)) {
+          return NextResponse.json({ error: 'Ubicacion no valida para el area seleccionada.' }, { status: 400 });
+        }
+      }
+
+      const { insertadas, totalLineas } = await incorporarFaltantesRecuento(
+        pendiente.id,
+        catalogo,
+        ubicacionKey ? { ubicacionNormalizada: ubicacionKey } : undefined
+      );
+
+      const res = NextResponse.json({
+        ok: true,
+        action: 'incorporar-faltantes',
+        importacionId: pendiente.id,
+        insertadas,
+        totalLineas,
+        alcance: ubicacionKey ? 'ubicacion' : 'area',
+      });
+      return withAreaCookie(res, area);
+    }
 
     const ubicacionRaw = String(body.ubicacion ?? '').trim();
     if (!ubicacionRaw) {
@@ -227,15 +277,6 @@ export async function POST(req: NextRequest) {
     }
 
     const pendiente = await getPendienteRecuento(area);
-    if (pendiente && pendiente.origen.toLowerCase() !== 'manual') {
-      return NextResponse.json(
-        {
-          error:
-            'Ya existe un recuento pendiente de otro origen. Tramítalo o elimínalo antes de usar el recuento manual.',
-        },
-        { status: 409 }
-      );
-    }
 
     if (!pendiente && preparadas.length === 0) {
       return NextResponse.json(
