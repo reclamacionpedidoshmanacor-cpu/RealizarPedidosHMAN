@@ -541,6 +541,232 @@ export async function getResumenConsumoArea(
   }));
 }
 
+// ---------------------------------------------------------------------------
+// Panel "Alertas de compra" para Inicio
+// Calcula cobertura de stock, tendencia de consumo y semáforo por medicamento.
+//
+// Lógica:
+//   - consumo_reciente  = viales en las últimas 8 semanas ISO (semana_iso)
+//   - consumo_anterior  = viales en las 8 semanas anteriores
+//   - promedio_semanal  = consumo_reciente / 8
+//   - cobertura         = stock_actual_unidades / promedio_semanal  (en semanas)
+//   - tendencia         = variacion_pct > 25 % Y cambio_abs >= 2 viales/sem O >= 1 caja/sem
+//   - semáforo:
+//       rojo    < 4 semanas
+//       naranja 4–6 sem  O  (tendencia creciente relevante)
+//       verde   6–10 sem
+//       azul    > 10 sem Y tendencia decreciente
+// ---------------------------------------------------------------------------
+export type AlertaCompra = {
+  cn: string;
+  componente: string;
+  medicamento: string;
+  unidadesPorCaja: number;
+  stockActualUnidades: number;
+  stockActualCajas: number;
+  stockMinimo: number;
+  stockMaximo: number;
+  consumoReciente: number;        // viales totales últimas 8 sem
+  consumoAnterior: number;        // viales totales 8 sem previas
+  promedioSemanal: number;        // viales/semana
+  variacionPct: number | null;    // null si sin datos anteriores
+  tendenciaCreciente: boolean;
+  tendenciaRelevante: boolean;
+  coberturaSemanas: number | null; // null si sin consumo reciente
+  semaforo: 'rojo' | 'naranja' | 'verde' | 'azul' | 'gris'; // gris = sin datos
+  semanasSeries: { semana: number; anio: number; label: string; viales: number }[];
+};
+
+export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
+  const sql = getDb();
+
+  // Número de la semana ISO actual y del año
+  const nowRows = (await sql`
+    SELECT
+      EXTRACT(ISOYEAR FROM CURRENT_DATE)::int  AS iso_year,
+      EXTRACT(WEEK     FROM CURRENT_DATE)::int AS iso_week;
+  `) as Array<{ iso_year: number; iso_week: number }>;
+  const isoYear = num(nowRows[0]!.iso_year);
+  const isoWeek = num(nowRows[0]!.iso_week);
+
+  // Generamos las últimas 16 semanas ordenadas (las más recientes = índice 0)
+  // Para evitar complejidad de cruce de año con semana_iso, usamos ventana por fecha.
+  // 16 sem = 112 días atrás; últimas 8 = 56 días atrás.
+  const agrupado = (await sql`
+    WITH
+    meds AS (
+      SELECT m.cn, m.principio_activo, m.nombre, m.unidades_por_caja,
+             COALESCE(so.stock_minimo,  0) AS stock_minimo,
+             COALESCE(so.stock_maximo,  0) AS stock_maximo
+      FROM medicamentos m
+      LEFT JOIN stock_objetivo so ON so.cn = m.cn AND so.area = m.area
+      WHERE m.area = ${area} AND m.activo = TRUE
+    ),
+    stock_actual AS (
+      -- Último recuento disponible para el área
+      SELECT DISTINCT ON (sr.cn)
+             sr.cn,
+             sr.stock_unidades
+      FROM stock_registros sr
+      JOIN stock_importaciones si ON si.id = sr.importacion_id
+      WHERE si.area = ${area}
+      ORDER BY sr.cn, si.importado_en DESC, sr.id DESC
+    ),
+    consumo_periodos AS (
+      SELECT
+        cr.cn,
+        SUM(CASE WHEN cr.fecha > (CURRENT_DATE - INTERVAL '56 days')  THEN cr.viales_dispensados ELSE 0 END)::float  AS reciente,
+        SUM(CASE WHEN cr.fecha <= (CURRENT_DATE - INTERVAL '56 days')
+                  AND cr.fecha >  (CURRENT_DATE - INTERVAL '112 days') THEN cr.viales_dispensados ELSE 0 END)::float AS anterior
+      FROM consumo_registros cr
+      JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+      WHERE ic.area = ${area}
+        AND cr.fecha > (CURRENT_DATE - INTERVAL '112 days')
+        AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
+      GROUP BY cr.cn
+    )
+    SELECT
+      m.cn,
+      COALESCE(m.principio_activo, '') AS componente,
+      COALESCE(m.nombre, '')           AS medicamento,
+      m.unidades_por_caja,
+      m.stock_minimo,
+      m.stock_maximo,
+      COALESCE(sa.stock_unidades, 0)::float  AS stock_unidades,
+      COALESCE(cp.reciente,  0)::float AS consumo_reciente,
+      COALESCE(cp.anterior,  0)::float AS consumo_anterior
+    FROM meds m
+    LEFT JOIN stock_actual sa    ON sa.cn = m.cn
+    LEFT JOIN consumo_periodos cp ON cp.cn = m.cn
+    WHERE COALESCE(cp.reciente, 0) > 0
+       OR COALESCE(sa.stock_unidades, 0) > 0
+    ORDER BY m.principio_activo, m.nombre;
+  `) as Array<{
+    cn: string; componente: string; medicamento: string;
+    unidades_por_caja: number; stock_minimo: number; stock_maximo: number;
+    stock_unidades: number; consumo_reciente: number; consumo_anterior: number;
+  }>;
+
+  if (agrupado.length === 0) return [];
+
+  // Series semanales (últimas 16 semanas) para los CNs encontrados
+  const cns = agrupado.map(r => r.cn);
+  const seriesRows = (await sql`
+    SELECT
+      cr.cn,
+      EXTRACT(ISOYEAR FROM cr.fecha)::int AS iso_year,
+      EXTRACT(WEEK     FROM cr.fecha)::int AS iso_week,
+      SUM(cr.viales_dispensados)::float   AS viales
+    FROM consumo_registros cr
+    JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+    WHERE ic.area = ${area}
+      AND cr.cn = ANY(${cns})
+      AND cr.fecha > (CURRENT_DATE - INTERVAL '112 days')
+      AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
+    GROUP BY cr.cn, EXTRACT(ISOYEAR FROM cr.fecha), EXTRACT(WEEK FROM cr.fecha)
+    ORDER BY cr.cn, iso_year, iso_week;
+  `) as Array<{ cn: string; iso_year: number; iso_week: number; viales: number }>;
+
+  // Construimos el resultado con semáforo
+  return agrupado.map(r => {
+    const upx   = Math.max(1, num(r.unidades_por_caja));
+    const stockU = num(r.stock_unidades);
+    const stockC = stockU / upx;
+    const rec    = num(r.consumo_reciente);
+    const ant    = num(r.consumo_anterior);
+    const promSem = rec / 8;
+    const cobertura = promSem > 0 ? stockU / promSem : null;
+
+    let variacionPct: number | null = null;
+    let tendenciaCreciente = false;
+    let tendenciaRelevante = false;
+
+    if (ant > 0) {
+      variacionPct = ((rec - ant) / ant) * 100;
+      tendenciaCreciente = variacionPct > 0;
+      // Cambio absoluto en viales/semana
+      const cambioAbsViales = Math.abs((rec - ant) / 8);
+      const cambioAbsCajas  = cambioAbsViales / upx;
+      tendenciaRelevante =
+        Math.abs(variacionPct) > 25 &&
+        (cambioAbsViales >= 2 || cambioAbsCajas >= 1);
+    }
+
+    // Semáforo
+    let semaforo: AlertaCompra['semaforo'] = 'gris';
+    if (rec === 0 && stockU === 0) {
+      semaforo = 'gris';
+    } else if (cobertura !== null && cobertura < 4) {
+      semaforo = 'rojo';
+    } else if (
+      (cobertura !== null && cobertura >= 4 && cobertura < 6) ||
+      (tendenciaRelevante && tendenciaCreciente)
+    ) {
+      semaforo = 'naranja';
+    } else if (cobertura !== null && cobertura >= 6 && cobertura <= 10) {
+      semaforo = 'verde';
+    } else if (cobertura !== null && cobertura > 10) {
+      semaforo = tendenciaRelevante && !tendenciaCreciente ? 'azul' : 'verde';
+    }
+
+    // Series semanales para la mini-gráfica
+    const series = seriesRows
+      .filter(s => s.cn === r.cn)
+      .map(s => ({
+        semana: num(s.iso_week),
+        anio: num(s.iso_year),
+        label: `S${String(num(s.iso_week)).padStart(2, '0')}/${String(num(s.iso_year)).slice(-2)}`,
+        viales: Number(s.viales),
+      }));
+
+    // Llenar huecos de semanas con viales = 0 para los últimas 16 semanas
+    const semanasFilled: AlertaCompra['semanasSeries'] = [];
+    for (let i = 15; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i * 7);
+      // Calcular semana ISO y año ISO
+      const thursday = new Date(d);
+      thursday.setDate(d.getDate() - ((d.getDay() + 6) % 7) + 3);
+      const jan4 = new Date(thursday.getFullYear(), 0, 4);
+      const diffDays = (thursday.getTime() - jan4.getTime()) / 86400000;
+      const sw = Math.round(diffDays / 7) + 1;
+      const sy = thursday.getFullYear();
+      const found = series.find(s => s.semana === sw && s.anio === sy);
+      semanasFilled.push({
+        semana: sw,
+        anio: sy,
+        label: `S${String(sw).padStart(2, '0')}/${String(sy).slice(-2)}`,
+        viales: found ? found.viales : 0,
+      });
+    }
+
+    return {
+      cn: r.cn,
+      componente: r.componente,
+      medicamento: r.medicamento,
+      unidadesPorCaja: upx,
+      stockActualUnidades: stockU,
+      stockActualCajas: stockC,
+      stockMinimo: num(r.stock_minimo),
+      stockMaximo: num(r.stock_maximo),
+      consumoReciente: rec,
+      consumoAnterior: ant,
+      promedioSemanal: promSem,
+      variacionPct,
+      tendenciaCreciente,
+      tendenciaRelevante,
+      coberturaSemanas: cobertura,
+      semaforo,
+      semanasSeries: semanasFilled,
+    } satisfies AlertaCompra;
+  }).sort((a, b) => {
+    const orden: Record<AlertaCompra['semaforo'], number> = {
+      rojo: 0, naranja: 1, verde: 2, azul: 3, gris: 4
+    };
+    return orden[a.semaforo] - orden[b.semaforo];
+  });
+}
+
 export async function getTemporalGlobalArea(
   area: string,
   fechaDesde?: string | null,

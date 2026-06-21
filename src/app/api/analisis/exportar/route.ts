@@ -7,19 +7,15 @@ import { GRUPO_LABELS, type DiagnosticoGrupo } from '@/lib/diagnostico-grupos';
 export const runtime = 'nodejs';
 
 function defaultDesde(): string {
-  const d = new Date();
-  d.setMonth(d.getMonth() - 6);
-  d.setDate(1);
+  const d = new Date(); d.setFullYear(d.getFullYear() - 2); d.setMonth(0); d.setDate(1);
   return d.toISOString().slice(0, 10);
 }
-
 function eur(n: number) { return Math.round(n * 100) / 100; }
-function fmtEur(n: number) { return `${eur(n).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} €`; }
 
 function styleHeader(row: ExcelJS.Row, color = '1e3a5f') {
   row.eachCell(cell => {
-    cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
-    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${color}` } };
+    cell.font  = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
+    cell.fill  = { type: 'pattern', pattern: 'solid', fgColor: { argb: `FF${color}` } };
     cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
     cell.border = {
       bottom: { style: 'thin', color: { argb: 'FFD0D7DE' } },
@@ -28,21 +24,21 @@ function styleHeader(row: ExcelJS.Row, color = '1e3a5f') {
   });
 }
 
-function styleData(row: ExcelJS.Row) {
+function styleData(row: ExcelJS.Row, even = false) {
   row.eachCell(cell => {
     cell.font = { size: 10 };
-    cell.alignment = { vertical: 'middle', wrapText: false };
+    cell.alignment = { vertical: 'middle' };
     cell.border = {
       bottom: { style: 'thin', color: { argb: 'FFE5E7EB' } },
       right:  { style: 'thin', color: { argb: 'FFE5E7EB' } },
     };
+    if (even) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } };
   });
 }
 
 export async function GET(req: NextRequest) {
   const session = requireApiSession(req);
   if (!session.ok) return session.response;
-
   if (session.area !== 'oncologia') {
     return NextResponse.json({ error: 'Solo disponible para Oncología.' }, { status: 403 });
   }
@@ -53,141 +49,149 @@ export async function GET(req: NextRequest) {
   const grupo  = searchParams.get('grupo')  || null;
 
   const datos = await getAnalisisDatos(session.area, desde, hasta, grupo);
-  const titulo = grupo ? GRUPO_LABELS[grupo as DiagnosticoGrupo] ?? grupo : 'Global';
+  const titulo = grupo ? (GRUPO_LABELS[grupo as DiagnosticoGrupo] ?? grupo) : 'Global';
 
   const wb = new ExcelJS.Workbook();
-  wb.creator = 'Farmacia Oncológica HMAN';
+  wb.creator = 'Farmacia HMAN';
   wb.created = new Date();
 
-  // ── Hoja 1: Resumen por grupo ──────────────────────────────────────────
+  // ── Hoja 1: Gasto histórico por año ────────────────────────────────────
+  const shAnual = wb.addWorksheet('Gasto por año');
+  shAnual.columns = [
+    { header: 'Año',              key: 'anio',  width: 8  },
+    { header: 'Gasto (€)',        key: 'gasto', width: 16 },
+    { header: 'Preparaciones',    key: 'prep',  width: 14 },
+    { header: '€ / preparación',  key: 'cxp',   width: 16 },
+    { header: 'Variación YoY',    key: 'yoy',   width: 14 },
+  ];
+  styleHeader(shAnual.getRow(1));
+  datos.gastoPorAnio.forEach((r, i) => {
+    const row = shAnual.addRow({ anio: r.anio, gasto: eur(r.gasto), prep: r.preparaciones, cxp: eur(r.costePorPreparacion), yoy: r.variacionYoy != null ? `${r.variacionYoy > 0 ? '+' : ''}${r.variacionYoy.toFixed(1)}%` : '1er año' });
+    styleData(row, i % 2 === 1);
+    row.getCell('gasto').numFmt = '#,##0.00 "€"';
+    row.getCell('cxp').numFmt  = '#,##0.00 "€"';
+  });
+
+  // ── Hoja 2: Resumen por grupo ──────────────────────────────────────────
   const shResumen = wb.addWorksheet('Resumen por grupo');
   shResumen.columns = [
-    { header: 'Grupo tumoral',     key: 'label',  width: 22 },
-    { header: 'Preparaciones',     key: 'prep',   width: 14 },
-    { header: 'Viales',            key: 'viales', width: 10 },
-    { header: 'Gasto (€)',         key: 'gasto',  width: 14 },
-    { header: '% del total',       key: 'pct',    width: 12 },
-    { header: 'Medicamentos',      key: 'meds',   width: 14 },
-    { header: 'Protocolos',        key: 'prots',  width: 12 },
+    { header: 'Grupo tumoral',   key: 'label', width: 22 },
+    { header: 'Gasto (€)',       key: 'gasto', width: 16 },
+    { header: '% del total',     key: 'pct',   width: 12 },
+    { header: 'Variación YoY',   key: 'yoy',   width: 14 },
+    { header: 'Preparaciones',   key: 'prep',  width: 14 },
+    { header: 'Medicamentos',    key: 'meds',  width: 14 },
+    { header: 'Protocolos',      key: 'prots', width: 12 },
   ];
   styleHeader(shResumen.getRow(1));
   datos.grupos.forEach((g, i) => {
-    const row = shResumen.addRow({
-      label:  g.label,
-      prep:   g.totalPreparaciones,
-      viales: Math.round(g.totalViales * 10) / 10,
-      gasto:  eur(g.totalGasto),
-      pct:    Math.round(g.pctGasto * 10) / 10,
-      meds:   g.medicamentosDistintos,
-      prots:  g.protocolosActivos,
-    });
-    styleData(row);
-    if (i % 2 === 1) {
-      row.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } }; });
-    }
+    const row = shResumen.addRow({ label: g.label, gasto: eur(g.totalGasto), pct: Math.round(g.pctGasto * 10) / 10, yoy: g.variacionYoy != null ? `${g.variacionYoy > 0 ? '+' : ''}${g.variacionYoy.toFixed(1)}%` : '—', prep: g.totalPreparaciones, meds: g.medicamentosDistintos, prots: g.protocolosActivos });
+    styleData(row, i % 2 === 1);
     row.getCell('gasto').numFmt = '#,##0.00 "€"';
-    row.getCell('pct').numFmt = '0.0"%"';
+    row.getCell('pct').numFmt  = '0.0"%"';
   });
 
-  // Totales
-  const totRow = shResumen.addRow({
-    label: 'TOTAL', prep: datos.kpis.totalPreparaciones,
-    viales: Math.round(datos.kpis.totalViales * 10) / 10,
-    gasto: eur(datos.kpis.totalGasto), pct: 100,
-    meds: datos.kpis.medicamentosDistintos, prots: datos.kpis.protocolosActivos,
+  // ── Hoja 3: Top 10 protocolos ──────────────────────────────────────────
+  const shProt = wb.addWorksheet('Top 10 protocolos');
+  shProt.columns = [
+    { header: '#',               key: 'rank',  width: 5  },
+    { header: 'Protocolo',       key: 'prot',  width: 32 },
+    { header: 'Gasto (€)',       key: 'gasto', width: 16 },
+    { header: 'Preparaciones',   key: 'prep',  width: 14 },
+    { header: '€ / preparación', key: 'cxp',   width: 16 },
+    { header: 'Medicamentos',    key: 'meds',  width: 12 },
+  ];
+  styleHeader(shProt.getRow(1));
+  datos.topProtocolos.forEach((p, i) => {
+    const row = shProt.addRow({ rank: i + 1, prot: p.protocolo, gasto: eur(p.totalGasto), prep: p.totalPreparaciones, cxp: eur(p.costePorPreparacion), meds: p.medicamentosDistintos });
+    styleData(row, i % 2 === 1);
+    row.getCell('gasto').numFmt = '#,##0.00 "€"';
+    row.getCell('cxp').numFmt  = '#,##0.00 "€"';
   });
-  totRow.font = { bold: true, size: 10 };
-  totRow.getCell('gasto').numFmt = '#,##0.00 "€"';
 
-  // ── Hoja 2: Top 10 medicamentos ────────────────────────────────────────
-  const shTop = wb.addWorksheet('Top 10 medicamentos');
-  shTop.columns = [
+  // ── Hoja 4: Top 10 medicamentos ────────────────────────────────────────
+  const shMeds = wb.addWorksheet('Top 10 medicamentos');
+  shMeds.columns = [
     { header: '#',               key: 'rank',  width: 5  },
     { header: 'Principio activo',key: 'pa',    width: 28 },
-    { header: 'Marca comercial', key: 'nom',   width: 24 },
+    { header: 'Marca comercial', key: 'nom',   width: 22 },
     { header: 'CN',              key: 'cn',    width: 10 },
     { header: 'Grupo tumoral',   key: 'grupo', width: 20 },
+    { header: 'Gasto (€)',       key: 'gasto', width: 16 },
     { header: 'Preparaciones',   key: 'prep',  width: 14 },
     { header: 'Viales',          key: 'viales',width: 10 },
-    { header: 'Gasto (€)',       key: 'gasto', width: 14 },
+    { header: '€ / preparación', key: 'cxp',   width: 16 },
+    { header: 'Variación YoY',   key: 'yoy',   width: 14 },
   ];
-  styleHeader(shTop.getRow(1));
+  styleHeader(shMeds.getRow(1));
   datos.topMedicamentos.forEach((m, i) => {
-    const row = shTop.addRow({
-      rank: i + 1,
-      pa:   m.principioActivo,
-      nom:  m.nombre,
-      cn:   m.cn,
-      grupo: GRUPO_LABELS[m.grupo] ?? m.grupo,
-      prep: m.totalPreparaciones,
-      viales: Math.round(m.totalViales * 10) / 10,
-      gasto: eur(m.totalGasto),
-    });
-    styleData(row);
-    if (i % 2 === 1) row.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } }; });
+    const row = shMeds.addRow({ rank: i + 1, pa: m.principioActivo, nom: m.nombre, cn: m.cn, grupo: GRUPO_LABELS[m.grupo] ?? m.grupo, gasto: eur(m.totalGasto), prep: m.totalPreparaciones, viales: Math.round(m.totalViales * 10) / 10, cxp: eur(m.costePorPreparacion), yoy: m.variacionYoy != null ? `${m.variacionYoy > 0 ? '+' : ''}${m.variacionYoy.toFixed(1)}%` : '—' });
+    styleData(row, i % 2 === 1);
     row.getCell('gasto').numFmt = '#,##0.00 "€"';
+    row.getCell('cxp').numFmt  = '#,##0.00 "€"';
   });
 
-  // ── Hoja 3: Evolución semanal (global o del grupo) ─────────────────────
-  const shTemporal = wb.addWorksheet('Evolución semanal');
-  shTemporal.columns = [
-    { header: 'Año',          key: 'anio',  width: 8  },
-    { header: 'Semana',       key: 'sem',   width: 8  },
-    { header: 'Mes',          key: 'mes',   width: 6  },
-    { header: 'Período',      key: 'label', width: 12 },
-    { header: 'Preparaciones',key: 'prep',  width: 14 },
-    { header: 'Viales',       key: 'viales',width: 10 },
-    { header: 'Gasto (€)',    key: 'gasto', width: 14 },
-    { header: 'Pac./semana',  key: 'pac',   width: 12 },
+  // ── Hoja 5: Evolución histórica mensual ───────────────────────────────
+  const shHist = wb.addWorksheet('Evolución histórica');
+  shHist.columns = [
+    { header: 'Período',       key: 'label', width: 12 },
+    { header: 'Año',           key: 'anio',  width: 8  },
+    { header: 'Mes',           key: 'mes',   width: 6  },
+    { header: 'Gasto (€)',     key: 'gasto', width: 16 },
+    { header: 'Preparaciones', key: 'prep',  width: 14 },
   ];
-  styleHeader(shTemporal.getRow(1));
-  const temporalData = datos.grupoDetalle?.temporal ?? datos.temporal;
-  temporalData.forEach((t, i) => {
-    const row = shTemporal.addRow({
-      anio: t.anio, sem: t.semana ?? '', mes: t.mes, label: t.label,
-      prep: t.preparaciones, viales: Math.round(t.viales * 10) / 10,
-      gasto: eur(t.gasto), pac: t.pacientes,
-    });
-    styleData(row);
-    if (i % 2 === 1) row.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } }; });
+  styleHeader(shHist.getRow(1));
+  const histData = datos.grupoDetalle?.temporalHistorico ?? datos.temporalHistorico;
+  histData.forEach((t, i) => {
+    const row = shHist.addRow({ label: t.label, anio: t.anio, mes: t.mes, gasto: eur(t.gasto), prep: t.preparaciones });
+    styleData(row, i % 2 === 1);
     row.getCell('gasto').numFmt = '#,##0.00 "€"';
   });
 
-  // ── Hoja 4 (opcional): Detalle del grupo ──────────────────────────────
+  // ── Hoja 6: Detalle semanal reciente ──────────────────────────────────
+  const shSem = wb.addWorksheet('Detalle semanal');
+  shSem.columns = [
+    { header: 'Semana',        key: 'label', width: 12 },
+    { header: 'Año',           key: 'anio',  width: 8  },
+    { header: 'Semana ISO',    key: 'sem',   width: 10 },
+    { header: 'Gasto (€)',     key: 'gasto', width: 16 },
+    { header: 'Preparaciones', key: 'prep',  width: 14 },
+  ];
+  styleHeader(shSem.getRow(1));
+  const semData = datos.grupoDetalle?.temporalReciente ?? datos.temporalReciente;
+  semData.forEach((t, i) => {
+    const row = shSem.addRow({ label: t.label, anio: t.anio, sem: t.semana ?? '', gasto: eur(t.gasto), prep: t.preparaciones });
+    styleData(row, i % 2 === 1);
+    row.getCell('gasto').numFmt = '#,##0.00 "€"';
+  });
+
+  // ── Hoja 7 (si hay grupo): Detalle diagnóstico → indicación → protocolo → med ──
   if (datos.grupoDetalle) {
     const gd = datos.grupoDetalle;
-    const shDetalle = wb.addWorksheet(`Detalle ${titulo}`);
-    shDetalle.columns = [
-      { header: 'Diagnóstico',     key: 'dx',    width: 32 },
-      { header: 'Protocolo',       key: 'prot',  width: 30 },
-      { header: 'Principio activo',key: 'pa',    width: 28 },
-      { header: 'Marca comercial', key: 'nom',   width: 24 },
-      { header: 'CN',              key: 'cn',    width: 10 },
-      { header: 'Preparaciones',   key: 'prep',  width: 14 },
-      { header: 'Viales',          key: 'viales',width: 10 },
-      { header: 'Gasto (€)',       key: 'gasto', width: 14 },
-      { header: 'Pac./semana',     key: 'pac',   width: 12 },
+    const shDet = wb.addWorksheet(`Detalle ${titulo}`.slice(0, 31));
+    shDet.columns = [
+      { header: 'Diagnóstico',      key: 'dx',    width: 32 },
+      { header: 'Indicación',       key: 'ind',   width: 28 },
+      { header: 'Protocolo',        key: 'prot',  width: 28 },
+      { header: 'Principio activo', key: 'pa',    width: 28 },
+      { header: 'Marca comercial',  key: 'nom',   width: 22 },
+      { header: 'Preparaciones',    key: 'prep',  width: 14 },
+      { header: 'Viales',           key: 'viales',width: 10 },
+      { header: 'Gasto (€)',        key: 'gasto', width: 16 },
+      { header: '€ / preparación',  key: 'cxp',   width: 16 },
     ];
-    styleHeader(shDetalle.getRow(1));
-    let rowIdx = 0;
+    styleHeader(shDet.getRow(1));
+    let idx = 0;
     for (const dx of gd.diagnosticos) {
-      for (const prot of dx.protocolos) {
-        for (const med of prot.medicamentos) {
-          const row = shDetalle.addRow({
-            dx:   dx.diagnostico,
-            prot: prot.protocolo,
-            pa:   med.principioActivo,
-            nom:  med.nombre,
-            cn:   med.cn,
-            prep: med.totalPreparaciones,
-            viales: Math.round(med.totalViales * 10) / 10,
-            gasto: eur(med.totalGasto),
-            pac: prot.mediaPackientesSemana,
-          });
-          styleData(row);
-          if (rowIdx % 2 === 1) row.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } }; });
-          row.getCell('gasto').numFmt = '#,##0.00 "€"';
-          rowIdx++;
+      for (const ind of dx.indicaciones) {
+        for (const prot of ind.protocolos) {
+          for (const med of prot.medicamentos) {
+            const row = shDet.addRow({ dx: dx.diagnostico, ind: ind.indicacion, prot: prot.protocolo, pa: med.principioActivo, nom: med.nombre, prep: med.totalPreparaciones, viales: Math.round(med.totalViales * 10) / 10, gasto: eur(med.totalGasto), cxp: eur(prot.costePorPreparacion) });
+            styleData(row, idx % 2 === 1);
+            row.getCell('gasto').numFmt = '#,##0.00 "€"';
+            row.getCell('cxp').numFmt  = '#,##0.00 "€"';
+            idx++;
+          }
         }
       }
     }
