@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
-import { parseConsumoExcel } from '@/lib/consumo-parser';
+import { parseConsumoExcel, SEMANAL_DESDE_FECHA } from '@/lib/consumo-parser';
 import {
   ensureConsumoTables,
   insertarImportacionConsumo,
@@ -64,16 +64,15 @@ export async function POST(req: NextRequest) {
     let periodoFin = parsed.periodoFin;
 
     const monday = isoWeekStartDate(anioManual, semanaManual);
-    const ymSemana = monday.getUTCFullYear() * 100 + (monday.getUTCMonth() + 1);
-    if (ymSemana < 202605) {
+    const fechaMonday = toIsoDateUTC(monday);
+    if (fechaMonday < SEMANAL_DESDE_FECHA) {
       return NextResponse.json({
-        error: 'La importación semanal aplica desde mayo 2026. Para meses anteriores usa «Importar histórico (mensual)».',
+        error: 'La importación semanal aplica desde el lunes 4 de mayo de 2026. Para datos anteriores usa «Importar histórico (mensual)».',
       }, { status: 400 });
     }
 
     const sunday = new Date(monday);
     sunday.setUTCDate(monday.getUTCDate() + 6);
-    const fechaMonday = toIsoDateUTC(monday);
     for (const r of rows) {
       // Para evitar incoherencias "Dic {año manual}" en semanas ISO que arrancan en diciembre,
       // guardamos año/mes reales de la fecha asignada.

@@ -231,8 +231,11 @@ export function parseConsumoExcel(buffer: Buffer): ConsumoParseResult {
   };
 }
 
-/** Límite inclusive del histórico mensual (abril 2026). Desde mayo → importación semanal. */
-export const HISTORICO_MENSUAL_HASTA_YM = 202604;
+/** Último año/mes inclusive del histórico mensual (mayo 2026, hasta el 3 incl.). */
+export const HISTORICO_MENSUAL_HASTA_YM = 202605;
+
+/** Primer lunes con importación semanal (4 mayo 2026). */
+export const SEMANAL_DESDE_FECHA = '2026-05-04';
 
 export function ymFromAnioMes(anio: number, mes: number): number {
   return anio * 100 + mes;
@@ -271,7 +274,7 @@ export function assignHistoricoMensual(
     const ym = ymFromAnioMes(r.anio, r.mes);
     if (ym > HISTORICO_MENSUAL_HASTA_YM) {
       throw new Error(
-        `El histórico mensual solo admite hasta abril 2026. Hay filas de ${r.mes}/${r.anio}.`,
+        `El histórico mensual solo admite hasta mayo 2026 (corte 3 may). Hay filas de ${r.mes}/${r.anio}.`,
       );
     }
     r.dia = null;

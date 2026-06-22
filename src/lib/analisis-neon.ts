@@ -44,8 +44,8 @@ export function computeYoy(current: number, previous: number): number | null {
 //  · Histórico (antes de esta fecha)  → se agrega y muestra por MESES (correcto).
 //  · Reciente (a partir de esta fecha) → se muestra por SEMANAS reales.
 // Cuando se disponga de más histórico semanal real, basta con adelantar esta fecha.
-export const SEMANA_REAL_DESDE = '2026-06-01';
-const CUT_YM = 2026 * 100 + 6; // jun 2026 — antes: mensual fiable; después: semanal real
+export const SEMANA_REAL_DESDE = '2026-05-04';
+const CUT_YM = 2026 * 100 + 5; // may 2026 — mensual fiable hasta el 3; semanal real desde el lunes 4
 /** Último mes con dato mensual fiable completo (mayo 2026). YoY del año en curso no pasa de aquí. */
 const YOY_MES_MAX_FIABLE = 5;
 
@@ -790,9 +790,10 @@ function splitRows(rows: ClassifiedRow[]): { historic: ClassifiedRow[]; recent: 
   const historic: ClassifiedRow[] = [];
   const recent: ClassifiedRow[] = [];
   for (const r of rows) {
-    // Corte por columnas anio/mes (dato fiable), no por fecha
-    if (ymKey(r.anio, r.mes) < CUT_YM) historic.push(r);
-    else if (r.semana_iso != null && r.semana_iso > 0) recent.push(r);
+    const ym = ymKey(r.anio, r.mes);
+    const hasSemana = r.semana_iso != null && r.semana_iso > 0;
+    if (hasSemana && ym >= CUT_YM) recent.push(r);
+    else if (!hasSemana) historic.push(r);
   }
   return { historic, recent };
 }

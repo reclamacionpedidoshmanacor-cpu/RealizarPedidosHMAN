@@ -1191,7 +1191,7 @@ export default function AnalisisPage() {
                   data={datos.temporalReciente}
                   title={`Últimas 6 semanas (dato semanal real) — ${scopeLabel(servicio)}`}
                   color={scopeColor(servicio)}
-                  emptyHint="Importa consumo semanal desde junio 2026 para ver este detalle."
+                  emptyHint="Importa consumo semanal desde el 4 de mayo de 2026 para ver este detalle."
                 />
               </div>
 

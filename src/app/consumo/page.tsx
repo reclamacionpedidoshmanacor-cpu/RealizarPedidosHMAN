@@ -352,7 +352,7 @@ export default function ConsumoPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-800 mb-1">Consumo</h1>
           <p className="text-sm text-slate-500 max-w-2xl">
-            Histórico mensual (sin semana ISO) hasta abril 2026. Desde mayo 2026, importación por semana.
+            Histórico mensual (sin semana ISO) hasta mayo 2026 (corte 3 may). Desde el lunes 4 de mayo, importación por semana.
           </p>
         </div>
       </div>
@@ -412,7 +412,7 @@ export default function ConsumoPage() {
         </div>
 
         <div className="rounded-xl border border-teal-200 bg-teal-50/40 px-4 py-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-teal-800 mb-2">Importar semana (desde mayo 2026)</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-teal-800 mb-2">Importar semana (desde 4 may 2026)</p>
           <p className="text-xs text-teal-900/80 mb-3">Ancla la carga por año ISO + semana + lunes de referencia.</p>
           <div className="flex items-end gap-2 flex-wrap">
             <div>
