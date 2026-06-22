@@ -27,7 +27,19 @@ type InventarioRow = {
   materialSap: string | null;
 };
 
+type InventarioGuardadoResumen = {
+  id: number;
+  manualRecuentoId: number;
+  manualFechaRecuento: string | null;
+  sapFicheroNombre: string;
+  guardadoEn: string;
+  totalLineas: number;
+  totalAjusteImporte: number;
+};
+
 type InventarioResultado = {
+  inventarioId?: number;
+  guardadoEn?: string;
   manualRecuento: {
     id: number;
     fechaRecuento: string;
@@ -69,6 +81,10 @@ export default function InventarioPage() {
   const [loadingRecuentos, setLoadingRecuentos] = useState(true);
   const [comparing, setComparing] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [loadingGuardados, setLoadingGuardados] = useState(true);
+  const [loadingDetalle, setLoadingDetalle] = useState(false);
+  const [guardados, setGuardados] = useState<InventarioGuardadoResumen[]>([]);
   const [resultado, setResultado] = useState<InventarioResultado | null>(null);
   const [search, setSearch] = useState('');
 
@@ -88,8 +104,39 @@ export default function InventarioPage() {
     }
   };
 
+  const loadGuardados = async () => {
+    setLoadingGuardados(true);
+    try {
+      const res = await fetch('/api/inventario', { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? 'No se pudieron cargar inventarios guardados.');
+      setGuardados((data.inventarios ?? []).map((inv: {
+        id: number;
+        manualRecuentoId: number;
+        manualFechaRecuento: string | null;
+        sapFicheroNombre: string;
+        guardadoEn: string;
+        totalLineas: number;
+        resumen: { totalAjusteImporte: number };
+      }) => ({
+        id: inv.id,
+        manualRecuentoId: inv.manualRecuentoId,
+        manualFechaRecuento: inv.manualFechaRecuento,
+        sapFicheroNombre: inv.sapFicheroNombre,
+        guardadoEn: inv.guardadoEn,
+        totalLineas: inv.totalLineas,
+        totalAjusteImporte: inv.resumen?.totalAjusteImporte ?? 0,
+      })));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setLoadingGuardados(false);
+    }
+  };
+
   useEffect(() => {
     void loadRecuentos();
+    void loadGuardados();
   }, []);
 
   const handleComparar = async () => {
@@ -127,6 +174,58 @@ export default function InventarioPage() {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
       setComparing(false);
+    }
+  };
+
+  const handleGuardar = async () => {
+    if (!resultado) return;
+    setSaving(true);
+    try {
+      const res = await fetch('/api/inventario/guardar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          manualRecuento: resultado.manualRecuento,
+          sapFileName: resultado.sapFileName,
+          warnings: resultado.warnings,
+          resumen: resultado.resumen,
+          rows: resultado.rows,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? 'No se pudo guardar el inventario.');
+      setResultado((prev) => prev ? { ...prev, inventarioId: data.inventarioId, guardadoEn: new Date().toISOString() } : prev);
+      await loadGuardados();
+      toast.success(`Inventario guardado (#${data.inventarioId}).`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleAbrirGuardado = async (id: number) => {
+    setLoadingDetalle(true);
+    try {
+      const res = await fetch(`/api/inventario/${id}`, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? 'No se pudo abrir el inventario.');
+      setResultado({
+        inventarioId: data.inventarioId,
+        guardadoEn: data.guardadoEn,
+        manualRecuento: data.manualRecuento,
+        sapFileName: data.sapFileName,
+        warnings: data.warnings ?? [],
+        resumen: data.resumen,
+        rows: data.rows ?? [],
+      });
+      setSelectedManualId(data.manualRecuento?.id ?? null);
+      setSearch('');
+      toast.success(`Inventario #${id} cargado.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setLoadingDetalle(false);
     }
   };
 
@@ -224,13 +323,20 @@ export default function InventarioPage() {
             </button>
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
             <button
               onClick={handleComparar}
               disabled={comparing || loadingRecuentos || recuentos.length === 0}
-              className="flex-1 rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
+              className="flex-1 min-w-[140px] rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
             >
               {comparing ? 'Calculando…' : 'Calcular comparativa'}
+            </button>
+            <button
+              onClick={handleGuardar}
+              disabled={!resultado || saving}
+              className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-900 disabled:opacity-50"
+            >
+              {saving ? 'Guardando…' : 'Guardar'}
             </button>
             <button
               onClick={handleExportar}
@@ -241,6 +347,69 @@ export default function InventarioPage() {
             </button>
           </div>
         </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-white p-4">
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-800">Inventarios guardados</h2>
+            <p className="text-xs text-slate-500">Historial de comparativas guardadas en el área activa.</p>
+          </div>
+          <button
+            onClick={() => void loadGuardados()}
+            disabled={loadingGuardados}
+            className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Actualizar
+          </button>
+        </div>
+        {loadingGuardados ? (
+          <p className="text-sm text-slate-400">Cargando inventarios…</p>
+        ) : guardados.length === 0 ? (
+          <p className="text-sm text-slate-500">Aún no hay inventarios guardados. Calcula una comparativa y pulsa Guardar.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50 text-slate-600">
+                <tr>
+                  <th className="px-3 py-2 text-left">#</th>
+                  <th className="px-3 py-2 text-left">Guardado</th>
+                  <th className="px-3 py-2 text-left">Recuento manual</th>
+                  <th className="px-3 py-2 text-left">SAP</th>
+                  <th className="px-3 py-2 text-right">Líneas</th>
+                  <th className="px-3 py-2 text-right">Ajuste (€)</th>
+                  <th className="px-3 py-2 text-center">Acción</th>
+                </tr>
+              </thead>
+              <tbody>
+                {guardados.map((inv) => (
+                  <tr key={inv.id} className="border-t border-slate-100">
+                    <td className="px-3 py-2 font-mono text-slate-700">{inv.id}</td>
+                    <td className="px-3 py-2 text-slate-600">{fmtDate(inv.guardadoEn)}</td>
+                    <td className="px-3 py-2 text-slate-600">
+                      #{inv.manualRecuentoId}
+                      {inv.manualFechaRecuento ? ` · ${fmtDate(inv.manualFechaRecuento)}` : ''}
+                    </td>
+                    <td className="px-3 py-2 text-slate-600 max-w-[200px] truncate" title={inv.sapFicheroNombre}>
+                      {inv.sapFicheroNombre}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">{inv.totalLineas}</td>
+                    <td className="px-3 py-2 text-right tabular-nums font-medium">{fmtCurrency(inv.totalAjusteImporte)}</td>
+                    <td className="px-3 py-2 text-center">
+                      <button
+                        onClick={() => void handleAbrirGuardado(inv.id)}
+                        disabled={loadingDetalle}
+                        className="rounded border border-slate-200 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        Abrir
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {resultado && (
@@ -277,6 +446,9 @@ export default function InventarioPage() {
               className="w-full max-w-md rounded-lg border border-slate-300 px-3 py-2 text-sm"
             />
             <p className="text-xs text-slate-500">
+              {resultado.inventarioId
+                ? `Inventario guardado #${resultado.inventarioId}${resultado.guardadoEn ? ` · ${fmtDate(resultado.guardadoEn)}` : ''} · `
+                : 'Sin guardar · '}
               Recuento manual #{resultado.manualRecuento.id} · SAP: {resultado.sapFileName}
             </p>
           </div>
