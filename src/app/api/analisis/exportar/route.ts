@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import ExcelJS from 'exceljs';
 import { requireApiSession } from '@/lib/api-auth';
-import { getAnalisisDatos } from '@/lib/analisis-neon';
+import { getAnalisisDatos, parseModoComparativa } from '@/lib/analisis-neon';
 import { GRUPO_LABELS, type DiagnosticoGrupo } from '@/lib/diagnostico-grupos';
 
 export const runtime = 'nodejs';
@@ -48,8 +48,9 @@ export async function GET(req: NextRequest) {
   const hasta    = searchParams.get('hasta')    || new Date().toISOString().slice(0, 10);
   const grupo    = searchParams.get('grupo')    || null;
   const servicio = searchParams.get('servicio') || null;
+  const comparativa = parseModoComparativa(searchParams.get('comparativa'));
 
-  const datos = await getAnalisisDatos(session.area, desde, hasta, grupo, servicio);
+  const datos = await getAnalisisDatos(session.area, desde, hasta, grupo, servicio, comparativa);
   const titulo = grupo ? (GRUPO_LABELS[grupo as DiagnosticoGrupo] ?? grupo) : 'Global';
 
   const wb = new ExcelJS.Workbook();

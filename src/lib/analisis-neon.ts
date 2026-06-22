@@ -8,6 +8,15 @@ import {
   gruposParaServicio,
   getServicioFromGrupo,
 } from './diagnostico-grupos';
+import {
+  type ModoComparativa,
+  resolvePeriodoBase,
+  etiquetaComparativa,
+  parseModoComparativa,
+} from './analisis-comparativa';
+
+export type { ModoComparativa } from './analisis-comparativa';
+export { parseModoComparativa, MODO_COMPARATIVA_LABELS } from './analisis-comparativa';
 
 function getDb() {
   const url = process.env.REALIZAR_PEDIDOS_DATABASE_URL ?? process.env.DATABASE_URL;
@@ -242,8 +251,15 @@ export type OutlierItem = {
   ratio: number;
 };
 
+export type ComparativaInfo = {
+  modo: ModoComparativa;
+  etiqueta: string;
+  base: { desde: string; hasta: string };
+};
+
 export type AnalisisDatos = {
   periodo: { desde: string; hasta: string };
+  comparativa: ComparativaInfo;
   yoyEtiqueta: string;
   kpis: KpisAnalisis;
   gastoPorAnio: GastoAnual[];
@@ -592,6 +608,69 @@ function yoyMapByCn(yoy: YoyYtd): Map<string, number | null> {
   const m = new Map<string, number | null>();
   for (const [cn, v] of yoy.porCn) m.set(cn, computeYoy(v.cur, v.prev));
   return m;
+}
+
+type ComparativaMaps = {
+  porGrupo: Map<DiagnosticoGrupo, { cur: number; prev: number }>;
+  porCn: Map<string, { cur: number; prev: number }>;
+};
+
+function buildComparativaFromRows(cur: ClassifiedRow[], base: ClassifiedRow[]): ComparativaMaps {
+  const porGrupo = new Map<DiagnosticoGrupo, { cur: number; prev: number }>();
+  const porCn = new Map<string, { cur: number; prev: number }>();
+
+  for (const r of cur) {
+    const ga = porGrupo.get(r.grupo) ?? { cur: 0, prev: 0 };
+    ga.cur += r.gasto;
+    porGrupo.set(r.grupo, ga);
+    const ca = porCn.get(r.cn) ?? { cur: 0, prev: 0 };
+    ca.cur += r.gasto;
+    porCn.set(r.cn, ca);
+  }
+  for (const r of base) {
+    const ga = porGrupo.get(r.grupo) ?? { cur: 0, prev: 0 };
+    ga.prev += r.gasto;
+    porGrupo.set(r.grupo, ga);
+    const ca = porCn.get(r.cn) ?? { cur: 0, prev: 0 };
+    ca.prev += r.gasto;
+    porCn.set(r.cn, ca);
+  }
+  return { porGrupo, porCn };
+}
+
+function variacionDeGrupos(comp: ComparativaMaps, grupos: DiagnosticoGrupo[]): number | null {
+  let cur = 0;
+  let prev = 0;
+  for (const g of grupos) {
+    const v = comp.porGrupo.get(g);
+    if (v) { cur += v.cur; prev += v.prev; }
+  }
+  return computeYoy(cur, prev);
+}
+
+function variacionFromRows(cur: ClassifiedRow[], base: ClassifiedRow[]): number | null {
+  const curSum = cur.reduce((s, r) => s + r.gasto, 0);
+  const prevSum = base.reduce((s, r) => s + r.gasto, 0);
+  return computeYoy(curSum, prevSum);
+}
+
+function comparativaMapByCn(comp: ComparativaMaps): Map<string, number | null> {
+  const m = new Map<string, number | null>();
+  for (const [cn, v] of comp.porCn) m.set(cn, computeYoy(v.cur, v.prev));
+  return m;
+}
+
+function filterScopeRows(
+  rows: ClassifiedRow[],
+  grupoFiltro: string | null | undefined,
+  servicioFiltro: string | null | undefined,
+): ClassifiedRow[] {
+  if (grupoFiltro) return rows.filter(r => r.grupo === grupoFiltro);
+  const isService = servicioFiltro === 'oncologia-solida' || servicioFiltro === 'hematologia';
+  if (isService) {
+    return rows.filter(r => gruposParaServicio(servicioFiltro as Servicio).includes(r.grupo));
+  }
+  return rows;
 }
 
 function yoyFromGastoAnual(
@@ -1239,21 +1318,22 @@ export async function getAnalisisDatos(
   hasta: string,
   grupoFiltro?: string | null,
   servicioFiltro?: string | null,
+  modoComparativa: ModoComparativa = 'yoy',
 ): Promise<AnalisisDatos> {
-  const realYear = new Date().getFullYear();
+  const modo = parseModoComparativa(modoComparativa);
+  const { baseDesde, baseHasta } = resolvePeriodoBase(desde, hasta, modo);
+  const comparativaEtiqueta = etiquetaComparativa(desde, hasta, baseDesde, baseHasta);
 
-  const [classified, gastoPorAnio, gastoAnualServicio, temporalReciente] = await Promise.all([
+  const [classified, classifiedBase, gastoPorAnio, gastoAnualServicio, temporalReciente] = await Promise.all([
     getAnalisisRaw(area, desde, hasta),
+    getAnalisisRaw(area, baseDesde, baseHasta),
     getGastoByYear(area),
     getGastoAnualPorServicio(area),
     getTemporalSemanalReciente(area, servicioFiltro, 6),
   ]);
 
-  const curAnual = gastoAnualServicio.find(g => g.anio === realYear);
-  const mesHasta = curAnual?.mesHasta ?? new Date().getMonth() + 1;
-  const yoy = await getYoyYtd(area, mesHasta, realYear);
-  const yoyByCn = yoyMapByCn(yoy);
-  const yoyEtiqueta = yoyEtiquetaFromAnual(gastoAnualServicio);
+  const comparativaGlobal = buildComparativaFromRows(classified, classifiedBase);
+  const yoyByCn = comparativaMapByCn(comparativaGlobal);
 
   // Group aggregation
   type GAcc = { gasto: number; prep: number; viales: number; cns: Set<string>; prots: Set<string>; yearMap: Map<number, number> };
@@ -1278,17 +1358,13 @@ export async function getAnalisisDatos(
         totalGasto: d.gasto, totalPreparaciones: d.prep, totalViales: d.viales,
         medicamentosDistintos: d.cns.size, protocolosActivos: d.prots.size,
         pctGasto: totalGastoGlobal > 0 ? (d.gasto / totalGastoGlobal) * 100 : 0,
-        variacionYoy: yoyDeGrupos(yoy, [g]),
+        variacionYoy: variacionDeGrupos(comparativaGlobal, [g]),
         gastoPorAnio: [...d.yearMap.entries()].sort(([a], [b]) => a - b).map(([anio, gasto]) => ({ anio, gasto })),
       };
     });
 
-  const isService = servicioFiltro === 'oncologia-solida' || servicioFiltro === 'hematologia';
-  const scopeRows = grupoFiltro
-    ? classified.filter(r => r.grupo === grupoFiltro)
-    : isService
-      ? classified.filter(r => gruposParaServicio(servicioFiltro as Servicio).includes(r.grupo))
-      : classified;
+  const scopeRows = filterScopeRows(classified, grupoFiltro, servicioFiltro);
+  const scopeRowsBase = filterScopeRows(classifiedBase, grupoFiltro, servicioFiltro);
 
   const scopeGasto     = scopeRows.reduce((s, r) => s + r.gasto, 0);
   const totalPrep      = scopeRows.reduce((s, r) => s + r.preparaciones, 0);
@@ -1303,8 +1379,7 @@ export async function getAnalisisDatos(
     mediaPackientesSemana: semanas > 0 ? Math.round((totalPacientes / semanas) * 10) / 10 : 0,
     protocolosActivos: allProts.size, medicamentosDistintos: allCns.size,
     costePorPreparacion: totalPrep > 0 ? scopeGasto / totalPrep : 0,
-    // Coherente con el gráfico anual: mismo periodo del año en curso vs año anterior
-    variacionYoy: yoyFromGastoAnual(gastoAnualServicio, servicioFiltro),
+    variacionYoy: variacionFromRows(scopeRows, scopeRowsBase),
   };
 
   const rowsForTops: ClassifiedRow[] = scopeRows;
@@ -1314,14 +1389,19 @@ export async function getAnalisisDatos(
     const grupoRows = classified.filter(r => r.grupo === grupoFiltro);
     grupoDetalle = computeGrupoDetalle(
       grupoFiltro as DiagnosticoGrupo, grupoRows,
-      yoyDeGrupos(yoy, [grupoFiltro as DiagnosticoGrupo]), yoyByCn,
+      variacionDeGrupos(comparativaGlobal, [grupoFiltro as DiagnosticoGrupo]), yoyByCn,
       desde, hasta,
     );
   }
 
   return {
     periodo: { desde, hasta },
-    yoyEtiqueta,
+    comparativa: {
+      modo,
+      etiqueta: comparativaEtiqueta,
+      base: { desde: baseDesde, hasta: baseHasta },
+    },
+    yoyEtiqueta: comparativaEtiqueta,
     kpis,
     gastoPorAnio,
     gastoAnualServicio,

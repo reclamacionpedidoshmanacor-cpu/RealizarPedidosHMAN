@@ -16,7 +16,9 @@ import type {
   AnalisisDatos, GrupoCard, TopMed, TopProtocolo,
   GrupoDetalle, DiagnosticoDetalle, IndicacionDetalle, GastoAnualServicio,
   AbcItem, CostePacienteCiclo, OutlierItem, TemporalMesStacked,
+  ModoComparativa,
 } from '@/lib/analisis-neon';
+import { MODO_COMPARATIVA_LABELS } from '@/lib/analisis-neon';
 
 // Alcance de visualización: total del área o un servicio concreto
 type ServicioSel = Servicio | 'total';
@@ -93,7 +95,7 @@ function defaultHasta() {
 // ---------------------------------------------------------------------------
 // Badge YoY (semáforo: bajar es bueno para gasto)
 // ---------------------------------------------------------------------------
-function YoyBadge({ pct, compact }: { pct: number | null; compact?: boolean }) {
+function YoyBadge({ pct, compact, label }: { pct: number | null; compact?: boolean; label?: string }) {
   if (pct === null) return <span className="text-[10px] text-slate-400">sin dato</span>;
   const down = pct < 0;
   const high = Math.abs(pct) > 10;
@@ -102,9 +104,10 @@ function YoyBadge({ pct, compact }: { pct: number | null; compact?: boolean }) {
     : high
     ? 'bg-red-50 text-red-700 ring-red-200'
     : 'bg-orange-50 text-orange-700 ring-orange-200';
+  const suffix = compact ? '' : (label ? ` ${label}` : ' YoY');
   return (
     <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ${cls}`}>
-      {down ? '▼' : '▲'} {Math.abs(pct).toFixed(1)}%{compact ? '' : ' YoY'}
+      {down ? '▼' : '▲'} {Math.abs(pct).toFixed(1)}%{suffix}
     </span>
   );
 }
@@ -853,6 +856,7 @@ export default function AnalisisPage() {
   const [grupoSel, setGrupoSel]         = useState<DiagnosticoGrupo | null>(null);
   const [desde, setDesde]               = useState(defaultDesde());
   const [hasta, setHasta]               = useState(defaultHasta());
+  const [modoComparativa, setModoComparativa] = useState<ModoComparativa>('yoy');
   const [activePreset, setActivePreset] = useState<string | null>('Todo el periodo');
   const [sortGrupos, setSortGrupos]     = useState<'gasto' | 'yoy'>('gasto');
   const [datos, setDatos]               = useState<AnalisisDatos | null>(null);
@@ -865,7 +869,7 @@ export default function AnalisisPage() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true); setError(null);
-    const p = new URLSearchParams({ desde, hasta });
+    const p = new URLSearchParams({ desde, hasta, comparativa: modoComparativa });
     if (servicio !== 'total') p.set('servicio', servicio);
     if (grupoSel) p.set('grupo', grupoSel);
     fetch(`/api/analisis/datos?${p}`)
@@ -874,7 +878,7 @@ export default function AnalisisPage() {
       .catch(e => { if (!cancelled) setError(String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [desde, hasta, servicio, grupoSel]);
+  }, [desde, hasta, servicio, grupoSel, modoComparativa]);
 
   // ── Handlers ──
   function handleSelectGrupo(g: DiagnosticoGrupo) {
@@ -888,7 +892,7 @@ export default function AnalisisPage() {
     setDesde(p.desde); setHasta(p.hasta); setActivePreset(p.label);
   }
   function handleExportar() {
-    const p = new URLSearchParams({ desde, hasta });
+    const p = new URLSearchParams({ desde, hasta, comparativa: modoComparativa });
     if (servicio !== 'total') p.set('servicio', servicio);
     if (grupoSel) p.set('grupo', grupoSel);
     window.open(`/api/analisis/exportar?${p}`, '_blank');
@@ -972,26 +976,40 @@ export default function AnalisisPage() {
           </div>
         </div>
 
-        {/* Badges de período + selector manual */}
-        <div className="flex flex-wrap items-center gap-2">
-          {presets.map(p => (
-            <button key={p.label} onClick={() => applyPreset(p)}
-              className={['rounded-full px-3 py-1 text-xs font-semibold transition-colors border',
-                activePreset === p.label
-                  ? 'bg-teal-600 text-white border-teal-600'
-                  : 'border-slate-200 text-slate-600 hover:bg-slate-50',
-              ].join(' ')}>
-              {p.label}
-            </button>
-          ))}
-          <div className="flex items-center gap-1.5 ml-2 text-xs text-slate-500">
-            <input type="date" value={desde}
-              onChange={e => { setDesde(e.target.value); setActivePreset(null); }}
-              className="rounded-lg border border-slate-200 px-2 py-1 text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-400" />
-            <span>—</span>
-            <input type="date" value={hasta}
-              onChange={e => { setHasta(e.target.value); setActivePreset(null); }}
-              className="rounded-lg border border-slate-200 px-2 py-1 text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-400" />
+        {/* Badges de período + selector manual + comparativa */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {presets.map(p => (
+              <button key={p.label} onClick={() => applyPreset(p)}
+                className={['rounded-full px-3 py-1 text-xs font-semibold transition-colors border',
+                  activePreset === p.label
+                    ? 'bg-teal-600 text-white border-teal-600'
+                    : 'border-slate-200 text-slate-600 hover:bg-slate-50',
+                ].join(' ')}>
+                {p.label}
+              </button>
+            ))}
+            <div className="flex items-center gap-1.5 ml-2 text-xs text-slate-500">
+              <input type="date" value={desde}
+                onChange={e => { setDesde(e.target.value); setActivePreset(null); }}
+                className="rounded-lg border border-slate-200 px-2 py-1 text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-400" />
+              <span>—</span>
+              <input type="date" value={hasta}
+                onChange={e => { setHasta(e.target.value); setActivePreset(null); }}
+                className="rounded-lg border border-slate-200 px-2 py-1 text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-400" />
+            </div>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-slate-600">
+            <span className="font-medium text-slate-500 whitespace-nowrap">Comparar con:</span>
+            <select
+              value={modoComparativa}
+              onChange={e => setModoComparativa(e.target.value as ModoComparativa)}
+              className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-400 max-w-[220px] sm:max-w-none"
+            >
+              {(Object.entries(MODO_COMPARATIVA_LABELS) as [ModoComparativa, string][]).map(([k, label]) => (
+                <option key={k} value={k}>{label}</option>
+              ))}
+            </select>
           </div>
         </div>
       </div>
@@ -1045,10 +1063,16 @@ export default function AnalisisPage() {
             />
             <KpiCard label="€ / preparación" value={fmtEur(datos.kpis.costePorPreparacion)} />
             <div className="rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
-              <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">vs año anterior</p>
-              <div className="mt-2"><YoyBadge pct={datos.kpis.variacionYoy} /></div>
-              <p className="mt-1.5 text-[10px] text-slate-400 leading-tight">{datos.yoyEtiqueta}</p>
-              <p className="text-[10px] text-slate-400">Sin doble conteo semanal estimado</p>
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">
+                {modoComparativa === 'yoy' ? 'vs año anterior' : 'vs periodo anterior'}
+              </p>
+              <div className="mt-2">
+                <YoyBadge
+                  pct={datos.kpis.variacionYoy}
+                  label={modoComparativa === 'yoy' ? 'YoY' : 'Δ'}
+                />
+              </div>
+              <p className="mt-1.5 text-[10px] text-slate-400 leading-tight">{datos.comparativa?.etiqueta ?? datos.yoyEtiqueta}</p>
             </div>
             <KpiCard label="Preparaciones" value={fmtNum(datos.kpis.totalPreparaciones, 0)} />
             <KpiCard label="Protocolos activos" value={String(datos.kpis.protocolosActivos)} />

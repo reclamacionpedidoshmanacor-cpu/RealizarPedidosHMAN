@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
-import { getAnalisisDatos } from '@/lib/analisis-neon';
+import { getAnalisisDatos, parseModoComparativa } from '@/lib/analisis-neon';
 import {
   buildInformeAnalisisPdf,
   buildInformePdfFilename,
@@ -47,6 +47,7 @@ export async function GET(req: NextRequest) {
   }
 
   const { desde, hasta } = periodoInforme12Meses();
+  const comparativa = parseModoComparativa(searchParams.get('comparativa'));
 
   const datos = await getAnalisisDatos(
     session.area,
@@ -54,6 +55,7 @@ export async function GET(req: NextRequest) {
     hasta,
     tipo === 'grupo' ? grupo : null,
     tipo === 'servicio' ? servicio : null,
+    comparativa,
   );
 
   const lineaInforme = tipo === 'servicio'

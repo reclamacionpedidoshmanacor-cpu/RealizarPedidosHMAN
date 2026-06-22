@@ -428,7 +428,7 @@ function drawInformeCabecera(
     { size: 9, color: gray, maxWidth: USABLE_W },
   );
   w.gap(10);
-  w.text(`Comparativa YoY: ${pdfSafe(datos.yoyEtiqueta)}`, MARGIN, {
+  w.text(`Comparativa: ${pdfSafe(datos.comparativa?.etiqueta ?? datos.yoyEtiqueta)}`, MARGIN, {
     size: 8,
     font: oblique,
     color: gray,
