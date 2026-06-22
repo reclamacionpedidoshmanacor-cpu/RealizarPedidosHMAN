@@ -14,16 +14,29 @@ export function calcularCajasPropuestas(
   puntoPedido: number,
   stockMaximo: number,
   stockTransito = 0,
-  multiploPedido = 1
+  unidadesPorCaja = 1,
 ): number {
   const stockDisponible = stockActual + stockTransito;
   if (stockDisponible > puntoPedido) return 0;
-  const faltante = Math.max(Math.ceil(stockMaximo - stockDisponible), 0);
-  const multiplo = Number.isFinite(multiploPedido) && multiploPedido > 1
-    ? Math.trunc(multiploPedido)
+
+  const faltanteCajas = Math.max(stockMaximo - stockDisponible, 0);
+  if (faltanteCajas <= 0) return 0;
+
+  const upc = Number.isFinite(unidadesPorCaja) && unidadesPorCaja > 0
+    ? Math.trunc(unidadesPorCaja)
     : 1;
-  if (multiplo <= 1 || faltante === 0) return faltante;
-  return Math.ceil(faltante / multiplo) * multiplo;
+
+  // Múltiplo de pedido = unidades/caja → pedir siempre cajas completas
+  const faltanteUnidades = Math.ceil(faltanteCajas * upc);
+  const unidadesPedido = Math.ceil(faltanteUnidades / upc) * upc;
+  return unidadesPedido / upc;
+}
+
+export function cajasAUnidades(cajas: number, unidadesPorCaja: number): number {
+  const upc = Number.isFinite(unidadesPorCaja) && unidadesPorCaja > 0
+    ? Math.trunc(unidadesPorCaja)
+    : 1;
+  return Math.round(cajas * upc);
 }
 
 export function toSapCode(cn: string): string {

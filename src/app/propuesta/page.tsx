@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { MOTIVOS_AJUSTE } from '@/lib/propuesta';
+import { MOTIVOS_AJUSTE, cajasAUnidades } from '@/lib/propuesta';
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -393,8 +393,16 @@ export default function PropuestaPage() {
                       <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
                     </th>
                     <th className="px-4 py-3 text-center">
+                      <span>Calculado</span>
+                      <span className="ml-1 normal-case text-[10px] text-slate-400">(comprimidos)</span>
+                    </th>
+                    <th className="px-4 py-3 text-center">
                       <span>Validado</span>
                       <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
+                    </th>
+                    <th className="px-4 py-3 text-center">
+                      <span>Validado</span>
+                      <span className="ml-1 normal-case text-[10px] text-slate-400">(comprimidos)</span>
                     </th>
                     <th className="px-4 py-3 text-left">Motivo ajuste</th>
                   </tr>
@@ -470,14 +478,21 @@ export default function PropuestaPage() {
                           </span>
                         </td>
 
-                        {/* Calculado */}
+                        {/* Calculado (cajas) */}
                         <td className="px-4 py-3 text-center">
                           <span className="inline-block rounded-md bg-slate-100 px-3 py-1 text-base font-semibold tabular-nums text-slate-700 ring-1 ring-slate-200">
                             {linea.cajasPropuestas}
                           </span>
                         </td>
 
-                        {/* Validado */}
+                        {/* Calculado (comprimidos) */}
+                        <td className="px-4 py-3 text-center">
+                          <span className="inline-block rounded-md bg-slate-50 px-3 py-1 text-sm font-medium tabular-nums text-slate-600 ring-1 ring-slate-200">
+                            {fmtUnidades(cajasAUnidades(linea.cajasPropuestas, linea.unidadesPorCaja))}
+                          </span>
+                        </td>
+
+                        {/* Validado (cajas) */}
                         <td className="px-4 py-3 text-center">
                           {editable ? (
                             <div className="flex flex-col items-center gap-0.5">
@@ -532,6 +547,19 @@ export default function PropuestaPage() {
                               )}
                             </div>
                           )}
+                        </td>
+
+                        {/* Validado (comprimidos) */}
+                        <td className="px-4 py-3 text-center">
+                          <span className={`inline-block rounded-md px-3 py-1 text-sm font-medium tabular-nums ring-1 ${
+                            aumentado
+                              ? 'bg-emerald-50 text-emerald-800 ring-emerald-200'
+                              : reducido
+                                ? 'bg-amber-50 text-amber-800 ring-amber-200'
+                                : 'bg-slate-50 text-slate-600 ring-slate-200'
+                          }`}>
+                            {fmtUnidades(cajasAUnidades(cajasVal, linea.unidadesPorCaja))}
+                          </span>
                         </td>
 
                         {/* Motivo */}
@@ -718,8 +746,16 @@ export default function PropuestaPage() {
                                       <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
                                     </th>
                                     <th className="px-3 py-2 text-center">
+                                      <span>Calculado</span>
+                                      <span className="ml-1 normal-case text-[10px] text-slate-400">(uds)</span>
+                                    </th>
+                                    <th className="px-3 py-2 text-center">
                                       <span>Validado</span>
                                       <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
+                                    </th>
+                                    <th className="px-3 py-2 text-center">
+                                      <span>Validado</span>
+                                      <span className="ml-1 normal-case text-[10px] text-slate-400">(uds)</span>
                                     </th>
                                     <th className="px-3 py-2 text-left">Motivo</th>
                                   </tr>
@@ -740,7 +776,13 @@ export default function PropuestaPage() {
                                       <td className="px-3 py-2 text-center tabular-nums text-slate-600">{Number(linea.stockActual).toFixed(1)}</td>
                                       <td className="px-3 py-2 text-center tabular-nums text-violet-700">{Number(linea.stockTransito ?? 0).toFixed(1)}</td>
                                       <td className="px-3 py-2 text-center tabular-nums text-slate-600">{linea.cajasPropuestas}</td>
+                                      <td className="px-3 py-2 text-center tabular-nums text-slate-500">
+                                        {fmtUnidades(cajasAUnidades(linea.cajasPropuestas, linea.unidadesPorCaja))}
+                                      </td>
                                       <td className="px-3 py-2 text-center tabular-nums text-slate-700 font-semibold">{linea.cajasValidadas ?? linea.cajasPropuestas}</td>
+                                      <td className="px-3 py-2 text-center tabular-nums text-slate-600">
+                                        {fmtUnidades(cajasAUnidades(linea.cajasValidadas ?? linea.cajasPropuestas, linea.unidadesPorCaja))}
+                                      </td>
                                       <td className="px-3 py-2 text-slate-500">
                                         {linea.motivoAjuste === 'Otro'
                                           ? linea.motivoAjusteOtro ?? 'Otro'
