@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
 import {
-  assignHistoricoMensual,
-  parseConsumoExcel,
-  parseConsumoExcelHistorico,
+  finalizeOralImport,
+  parseConsumoExcelOral,
 } from '@/lib/consumo-parser';
 import {
   ensureConsumoTables,
@@ -40,13 +39,13 @@ export async function POST(req: NextRequest) {
         : undefined;
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const parsed = fallback
-      ? { ...parseConsumoExcel(buffer), tieneColumnasPeriodo: false as const }
-      : parseConsumoExcelHistorico(buffer);
+    const parsed = parseConsumoExcelOral(buffer, { allowMissingYm: !!fallback });
     const { rows, errors, tieneColumnasPeriodo } = parsed;
 
     if (!tieneColumnasPeriodo && !fallback) {
-      return NextResponse.json({ error: parsed.errors[0] ?? 'Faltan columnas AÑO y MES en el Excel.' }, { status: 422 });
+      return NextResponse.json({
+        error: parsed.errors[0] ?? 'Faltan columnas AÑO y mes en el Excel oral.',
+      }, { status: 422 });
     }
     if (errors.length && rows.length === 0) {
       return NextResponse.json({ error: errors[0], errors }, { status: 422 });
@@ -59,9 +58,9 @@ export async function POST(req: NextRequest) {
     let periodoFin: string;
     let meses: { anio: number; mes: number; filas: number }[];
     try {
-      ({ periodoInicio, periodoFin, meses } = assignHistoricoMensual(rows, fallback));
+      ({ periodoInicio, periodoFin, meses } = finalizeOralImport(rows, fallback));
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Error al asignar período mensual.';
+      const msg = err instanceof Error ? err.message : 'Error al asignar período.';
       return NextResponse.json({ error: msg }, { status: 400 });
     }
 
@@ -87,8 +86,8 @@ export async function POST(req: NextRequest) {
       periodoFin,
       meses,
       mesesLabel,
-      modo: 'historico-mensual',
-      formato: parsed.formato,
+      modo: 'oral-mensual',
+      formato: 'oral',
       cantidadColumna: parsed.cantidadColumna,
       advertencias: errors,
     });

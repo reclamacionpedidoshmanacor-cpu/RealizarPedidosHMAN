@@ -204,8 +204,10 @@ export default function ConsumoPage() {
   const initialMonday = toIsoDateUTC(isoWeekStartDate(initialWeek.isoYear, initialWeek.week));
   const fileRef = useRef<HTMLInputElement>(null);
   const historicoFileRef = useRef<HTMLInputElement>(null);
+  const oralFileRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadingHistorico, setUploadingHistorico] = useState(false);
+  const [uploadingOral, setUploadingOral] = useState(false);
   const [loadingRes, setLoadingRes] = useState(true);
   const [resumen, setResumen] = useState<ResumenData | null>(null);
   const [search, setSearch] = useState('');
@@ -215,6 +217,7 @@ export default function ConsumoPage() {
   const [anioHistorico, setAnioHistorico] = useState(2025);
   const [mesHistorico, setMesHistorico] = useState(1);
   const [usarPeriodoManual, setUsarPeriodoManual] = useState(false);
+  const [usarPeriodoManualOral, setUsarPeriodoManualOral] = useState(false);
   const [anioManual, setAnioManual] = useState(initialWeek.isoYear);
   const [semanaManual, setSemanaManual] = useState(initialWeek.week);
   const [lunesReferencia, setLunesReferencia] = useState(initialMonday);
@@ -274,7 +277,7 @@ export default function ConsumoPage() {
         ?? (payload.meses?.length
           ? payload.meses.map((m: { mes: number; anio: number }) => `${MESES_LABEL[m.mes - 1]} ${m.anio}`).join(', ')
           : `${MESES_LABEL[mesHistorico - 1]} ${anioHistorico}`);
-      toast.success(`Histórico importado: ${payload.totalLineas} filas · ${resumenMeses}`);
+      toast.success(`Histórico IV importado: ${payload.totalLineas} filas · ${resumenMeses}`);
       if (payload.advertencias?.length) toast.warning(`${payload.advertencias.length} advertencia(s) en la importación.`);
       setFechaDesde(payload.periodoInicio);
       setFechaHasta(payload.periodoFin);
@@ -299,7 +302,7 @@ export default function ConsumoPage() {
       const res = await fetch('/api/consumo/importar', { method: 'POST', body: form });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'Error al importar.');
-      toast.success(`Semana importada: ${payload.totalLineas} filas · Semana ${semanaManual}/${anioManual}`);
+      toast.success(`Semana IV importada: ${payload.totalLineas} filas · Semana ${semanaManual}/${anioManual}`);
       if (payload.advertencias?.length) toast.warning(`${payload.advertencias.length} advertencia(s) en la importación.`);
       setFechaDesde(payload.periodoInicio);
       setFechaHasta(payload.periodoFin);
@@ -309,6 +312,37 @@ export default function ConsumoPage() {
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const handleUploadOral = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingOral(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      if (usarPeriodoManualOral) {
+        form.append('anioManual', String(anioHistorico));
+        form.append('mesManual', String(mesHistorico));
+      }
+      const res = await fetch('/api/consumo/importar-oral', { method: 'POST', body: form });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'Error al importar orales.');
+      const resumenMeses = payload.mesesLabel
+        ?? (payload.meses?.length
+          ? payload.meses.map((m: { mes: number; anio: number }) => `${MESES_LABEL[m.mes - 1]} ${m.anio}`).join(', ')
+          : `${MESES_LABEL[mesHistorico - 1]} ${anioHistorico}`);
+      toast.success(`Orales importados: ${payload.totalLineas} filas · ${resumenMeses}`);
+      if (payload.advertencias?.length) toast.warning(`${payload.advertencias.length} advertencia(s) en la importación.`);
+      setFechaDesde(payload.periodoInicio);
+      setFechaHasta(payload.periodoFin);
+      await loadResumen(payload.periodoInicio, payload.periodoFin);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado.');
+    } finally {
+      setUploadingOral(false);
+      if (oralFileRef.current) oralFileRef.current.value = '';
     }
   };
 
@@ -352,16 +386,16 @@ export default function ConsumoPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-800 mb-1">Consumo</h1>
           <p className="text-sm text-slate-500 max-w-2xl">
-            Histórico mensual (sin semana ISO) hasta mayo 2026 (corte 3 may). Desde el lunes 4 de mayo, importación por semana.
+            IV: histórico mensual hasta mayo 2026 y semanal desde el 4 de mayo. Orales: importación mensual con informe de dispensación (botón dedicado).
           </p>
         </div>
       </div>
 
-      <div className="grid gap-3 lg:grid-cols-2">
+      <div className="grid gap-3 lg:grid-cols-3">
         <div className="rounded-xl border border-amber-200 bg-amber-50/60 px-4 py-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-amber-800 mb-2">Importar histórico (mensual)</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-amber-800 mb-2">Importar histórico IV (mensual)</p>
           <p className="text-xs text-amber-900/80 mb-3">
-            El Excel debe incluir columnas AÑO y MES (puede traer varios meses en un mismo archivo). No se registra semana ISO.
+            Columnas AÑO y MES (varios meses en un archivo). Hasta mayo 2026. Sin semana ISO.
           </p>
           <div className="flex items-end gap-2 flex-wrap">
             <label className="flex items-center gap-2 text-xs text-amber-900/90 pb-2 mr-1 cursor-pointer">
@@ -403,7 +437,7 @@ export default function ConsumoPage() {
             <input ref={historicoFileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleUploadHistorico} />
             <button
               onClick={() => historicoFileRef.current?.click()}
-              disabled={uploadingHistorico || uploading}
+              disabled={uploadingHistorico || uploading || uploadingOral}
               className="rounded-lg bg-amber-700 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-800 disabled:opacity-50 transition-colors"
             >
               {uploadingHistorico ? 'Importando…' : 'Importar histórico'}
@@ -411,8 +445,62 @@ export default function ConsumoPage() {
           </div>
         </div>
 
+        <div className="rounded-xl border border-violet-200 bg-violet-50/50 px-4 py-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-violet-800 mb-2">Importar orales (mensual)</p>
+          <p className="text-xs text-violet-900/80 mb-3">
+            AÑO, mes, fecha de dispensación, servicio clínico, UH, diagnóstico, CN, Medicamento, Componente principal, cantidad y nº de pacientes.
+            Protocolo e indicación no se importan.
+          </p>
+          <div className="flex items-end gap-2 flex-wrap">
+            <label className="flex items-center gap-2 text-xs text-violet-900/90 pb-2 mr-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={usarPeriodoManualOral}
+                onChange={(e) => setUsarPeriodoManualOral(e.target.checked)}
+                className="rounded border-violet-300"
+              />
+              Un solo mes sin columnas AÑO/mes
+            </label>
+            {usarPeriodoManualOral && (
+              <>
+                <div>
+                  <label className="block text-[11px] uppercase tracking-wide text-violet-700/80 font-medium mb-1">Año</label>
+                  <input
+                    type="number"
+                    min={2000}
+                    max={2100}
+                    value={anioHistorico}
+                    onChange={(e) => setAnioHistorico(Math.max(2000, Math.min(2100, Number(e.target.value) || 2025)))}
+                    className="w-24 rounded-lg border border-violet-200 bg-white px-2 py-2 text-sm text-slate-700"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] uppercase tracking-wide text-violet-700/80 font-medium mb-1">Mes</label>
+                  <select
+                    value={mesHistorico}
+                    onChange={(e) => setMesHistorico(Number(e.target.value))}
+                    className="w-28 rounded-lg border border-violet-200 bg-white px-2 py-2 text-sm text-slate-700"
+                  >
+                    {MESES_LABEL.map((label, idx) => (
+                      <option key={label} value={idx + 1}>{label}</option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            )}
+            <input ref={oralFileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleUploadOral} />
+            <button
+              onClick={() => oralFileRef.current?.click()}
+              disabled={uploadingOral || uploading || uploadingHistorico}
+              className="rounded-lg bg-violet-700 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-800 disabled:opacity-50 transition-colors"
+            >
+              {uploadingOral ? 'Importando…' : 'Importar orales'}
+            </button>
+          </div>
+        </div>
+
         <div className="rounded-xl border border-teal-200 bg-teal-50/40 px-4 py-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-teal-800 mb-2">Importar semana (desde 4 may 2026)</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-teal-800 mb-2">Importar semana IV (desde 4 may 2026)</p>
           <p className="text-xs text-teal-900/80 mb-3">Ancla la carga por año ISO + semana + lunes de referencia.</p>
           <div className="flex items-end gap-2 flex-wrap">
             <div>
@@ -472,7 +560,7 @@ export default function ConsumoPage() {
             <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleUpload} />
             <button
               onClick={() => fileRef.current?.click()}
-              disabled={uploading || uploadingHistorico}
+              disabled={uploading || uploadingHistorico || uploadingOral}
               className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-50 transition-colors"
             >
               {uploading ? 'Importando…' : 'Importar semana'}
@@ -514,7 +602,7 @@ export default function ConsumoPage() {
       {!loadingRes && resumen && (
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           <Kpi label="Medicamentos" value={String(medicamentosFiltrados.length)} />
-          <Kpi label="Total viales" value={fmtNum(totalViales)} />
+          <Kpi label="Total unidades" value={fmtNum(totalViales)} />
           <Kpi label="Período" value={`${fmt(resumen.periodoInicio)} – ${fmt(resumen.periodoFin)}`} />
         </div>
       )}
@@ -606,7 +694,7 @@ export default function ConsumoPage() {
                                   <th className="px-3 py-2 text-left">Indicación</th>
                                   <th className="px-3 py-2 text-left">Protocolo</th>
                                   <th className="px-3 py-2 text-center">Periodicidad</th>
-                                  <th className="px-3 py-2 text-right">Viales</th>
+                                  <th className="px-3 py-2 text-right">Unidades</th>
                                 </tr>
                               </thead>
                               <tbody>

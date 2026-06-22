@@ -102,6 +102,8 @@ export async function POST(req: NextRequest) {
       totalLineas: rows.length,
       periodoInicio,
       periodoFin,
+      formato: parsed.formato,
+      cantidadColumna: parsed.cantidadColumna,
       advertencias: errors,
     });
   } catch (err) {
