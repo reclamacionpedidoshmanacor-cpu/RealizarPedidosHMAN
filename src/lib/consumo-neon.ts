@@ -49,6 +49,7 @@ export async function ensureConsumoTables(): Promise<void> {
   `;
   // Columna semana_iso añadida en v2 — es seguro ejecutarla aunque ya exista
   await sql`ALTER TABLE consumo_registros ADD COLUMN IF NOT EXISTS semana_iso SMALLINT;`;
+  await sql`ALTER TABLE consumo_registros ADD COLUMN IF NOT EXISTS periodicidad SMALLINT;`;
   await sql`CREATE INDEX IF NOT EXISTS idx_consumo_importacion ON consumo_registros(importacion_id);`;
   await sql`CREATE INDEX IF NOT EXISTS idx_consumo_cn         ON consumo_registros(cn);`;
   await sql`CREATE INDEX IF NOT EXISTS idx_consumo_anio_mes   ON consumo_registros(anio, mes);`;
@@ -84,6 +85,7 @@ export type DesgloseItem = {
   diagnostico: string;
   indicacion: string;
   protocolo: string;
+  periodicidad: number | null;
   viales: number;
   pacientes: number;
 };
@@ -146,7 +148,7 @@ export async function insertarImportacionConsumo(
       INSERT INTO consumo_registros (
         importacion_id, anio, mes, dia, semana_iso, fecha,
         servicio, uh,
-        indicacion, diagnostico, protocolo,
+        indicacion, diagnostico, protocolo, periodicidad,
         tipo_terapia, tipo_componente, componente,
         cn, medicamento, viales_dispensados, num_pacientes
       )
@@ -162,6 +164,7 @@ export async function insertarImportacionConsumo(
         ${rows.map(r => r.indicacion || null)}::text[],
         ${rows.map(r => r.diagnostico || null)}::text[],
         ${rows.map(r => r.protocolo || null)}::text[],
+        ${rows.map(r => r.periodicidad ?? null)}::smallint[],
         ${rows.map(r => r.tipoTerapia || null)}::text[],
         ${rows.map(r => r.tipoComponente || null)}::text[],
         ${rows.map(r => r.componente || null)}::text[],
@@ -215,6 +218,7 @@ export async function getResumenConsumo(
       COALESCE(diagnostico, '—') AS diagnostico,
       COALESCE(indicacion, '—')  AS indicacion,
       COALESCE(protocolo, '—')   AS protocolo,
+      MAX(periodicidad)::int     AS periodicidad,
       SUM(viales_dispensados)::float AS viales,
       SUM(num_pacientes)::int        AS pacientes
     FROM consumo_registros
@@ -225,7 +229,7 @@ export async function getResumenConsumo(
     ORDER BY cn, SUM(viales_dispensados) DESC;
   `) as Array<{
     cn: string; diagnostico: string; indicacion: string; protocolo: string;
-    viales: number; pacientes: number;
+    periodicidad: number | null; viales: number; pacientes: number;
   }>;
 
   // Evolución temporal por CN
@@ -258,6 +262,7 @@ export async function getResumenConsumo(
         diagnostico: d.diagnostico,
         indicacion: d.indicacion,
         protocolo: d.protocolo,
+        periodicidad: d.periodicidad != null ? num(d.periodicidad) : null,
         viales: Number(d.viales),
         pacientes: num(d.pacientes),
       })),
@@ -645,6 +650,7 @@ export async function getResumenConsumoArea(
       COALESCE(cr.diagnostico, '—') AS diagnostico,
       COALESCE(cr.indicacion, '—')  AS indicacion,
       COALESCE(cr.protocolo, '—')   AS protocolo,
+      MAX(cr.periodicidad)::int     AS periodicidad,
       SUM(cr.viales_dispensados)::float AS viales
     FROM consumo_registros cr
     INNER JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
@@ -655,7 +661,8 @@ export async function getResumenConsumoArea(
     GROUP BY cr.cn, cr.diagnostico, cr.indicacion, cr.protocolo
     ORDER BY cr.cn, diagnostico ASC, indicacion ASC, protocolo ASC;
   `) as Array<{
-    cn: string; diagnostico: string; indicacion: string; protocolo: string; viales: number;
+    cn: string; diagnostico: string; indicacion: string; protocolo: string;
+    periodicidad: number | null; viales: number;
   }>;
 
   const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
@@ -689,6 +696,7 @@ export async function getResumenConsumoArea(
         diagnostico: d.diagnostico,
         indicacion: d.indicacion,
         protocolo: d.protocolo,
+        periodicidad: d.periodicidad != null ? num(d.periodicidad) : null,
         viales: Number(d.viales),
         pacientes: 0,
       })),

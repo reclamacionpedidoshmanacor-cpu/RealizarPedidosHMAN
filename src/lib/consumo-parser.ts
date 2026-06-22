@@ -14,6 +14,7 @@ export interface ConsumoRow {
   indicacion: string;
   diagnostico: string;
   protocolo: string;
+  periodicidad: number | null;  // días que dura el protocolo
   tipoTerapia: string;
   tipoComponente: string;
   componente: string;      // Principio activo
@@ -41,6 +42,17 @@ const COL_UH         = ['uh', 'unidad hospitalaria', 'unidad'];
 const COL_INDICACION = ['indicacion', 'indicación'];
 const COL_DIAGNOSTICO = ['diagnostico', 'diagnóstico', 'diagnostico'];
 const COL_PROTOCOLO  = ['protocolo'];
+const COL_PERIODICIDAD = [
+  'periodicidad',
+  'periodicidad dias',
+  'periodicidad días',
+  'periodicidad (dias)',
+  'periodicidad (días)',
+  'dias periodicidad',
+  'días periodicidad',
+  'dias del protocolo',
+  'días del protocolo',
+];
 const COL_TIPO_TERAPIA    = ['tipo de terapia', 'tipo terapia', 'terapia'];
 const COL_TIPO_COMPONENTE = ['tipo de componente', 'tipo componente'];
 const COL_COMPONENTE = ['componente'];  // principio activo
@@ -100,6 +112,12 @@ function toStr(v: unknown): string {
   return String(v ?? '').trim();
 }
 
+function parsePeriodicidad(v: unknown): number | null {
+  if (v == null || v === '') return null;
+  const n = Math.round(toNum(v));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 function toIsoDateUTC(d: Date): string {
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, '0');
@@ -145,6 +163,7 @@ export function parseConsumoExcel(buffer: Buffer): ConsumoParseResult {
   const idxIndicacion     = findCol(headers, COL_INDICACION);
   const idxDiagnostico    = findCol(headers, COL_DIAGNOSTICO);
   const idxProtocolo      = findCol(headers, COL_PROTOCOLO);
+  const idxPeriodicidad   = findCol(headers, COL_PERIODICIDAD);
   const idxTipoTerapia    = findCol(headers, COL_TIPO_TERAPIA);
   const idxTipoComponente = findCol(headers, COL_TIPO_COMPONENTE);
   const idxComponente     = findCol(headers, COL_COMPONENTE);
@@ -192,6 +211,7 @@ export function parseConsumoExcel(buffer: Buffer): ConsumoParseResult {
       indicacion:     idxIndicacion     !== -1 ? toStr(row[idxIndicacion])     : '',
       diagnostico:    idxDiagnostico    !== -1 ? toStr(row[idxDiagnostico])    : '',
       protocolo:      idxProtocolo      !== -1 ? toStr(row[idxProtocolo])      : '',
+      periodicidad:   idxPeriodicidad   !== -1 ? parsePeriodicidad(row[idxPeriodicidad]) : null,
       tipoTerapia:    idxTipoTerapia    !== -1 ? toStr(row[idxTipoTerapia])    : '',
       tipoComponente: idxTipoComponente !== -1 ? toStr(row[idxTipoComponente]) : '',
       componente:     idxComponente     !== -1 ? toStr(row[idxComponente])     : '',
@@ -302,6 +322,7 @@ export function parseConsumoExcelHistorico(buffer: Buffer): ConsumoParseResult &
   const idxIndicacion = findCol(headers, COL_INDICACION);
   const idxDiagnostico = findCol(headers, COL_DIAGNOSTICO);
   const idxProtocolo = findCol(headers, COL_PROTOCOLO);
+  const idxPeriodicidad = findCol(headers, COL_PERIODICIDAD);
   const idxTipoTerapia = findCol(headers, COL_TIPO_TERAPIA);
   const idxTipoComponente = findCol(headers, COL_TIPO_COMPONENTE);
   const idxComponente = findCol(headers, COL_COMPONENTE);
@@ -357,6 +378,7 @@ export function parseConsumoExcelHistorico(buffer: Buffer): ConsumoParseResult &
       indicacion: idxIndicacion !== -1 ? toStr(row[idxIndicacion]) : '',
       diagnostico: idxDiagnostico !== -1 ? toStr(row[idxDiagnostico]) : '',
       protocolo: idxProtocolo !== -1 ? toStr(row[idxProtocolo]) : '',
+      periodicidad: idxPeriodicidad !== -1 ? parsePeriodicidad(row[idxPeriodicidad]) : null,
       tipoTerapia: idxTipoTerapia !== -1 ? toStr(row[idxTipoTerapia]) : '',
       tipoComponente: idxTipoComponente !== -1 ? toStr(row[idxTipoComponente]) : '',
       componente: idxComponente !== -1 ? toStr(row[idxComponente]) : '',
