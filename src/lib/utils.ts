@@ -35,3 +35,8 @@ export function cnFromSapMaterial(material: string): string {
 export function isMSE(cn: string): boolean {
   return cn.trim().startsWith('02');
 }
+
+export function formatMseLabel(tipoMse: string | null | undefined): string {
+  const trimmed = tipoMse?.trim();
+  return trimmed || 'MSE';
+}

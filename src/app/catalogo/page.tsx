@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
-import { cn, formatEuro } from '@/lib/utils';
+import { cn, formatEuro, formatMseLabel, isMSE } from '@/lib/utils';
 import { toSapCode } from '@/lib/propuesta';
 
 interface Medicamento {
@@ -316,7 +316,7 @@ export default function CatalogoPage() {
   };
 
   const activos = meds.filter(m => m.activo).length;
-  const mseCount = meds.filter(m => m.mse).length;
+  const mseCount = meds.filter(m => isMSE(m.cn)).length;
 
   const thSort = (key: SortKey, label: string, align: 'left' | 'center' = 'left') => (
     <th
@@ -495,19 +495,19 @@ export default function CatalogoPage() {
                 ) : (
                   <tr key={med.cn} className={cn('hover:bg-slate-50 transition-colors', !med.activo && 'opacity-50')}>
                     <td className="px-4 py-3 font-mono text-xs text-slate-500">
-                      <span className="inline-flex items-center gap-1.5">
+                      <span className="inline-flex items-center gap-1.5 flex-wrap">
                         {med.cn}
                         {med.cimaConsultado && (
                           med.ppioActivoCima
                             ? <span title={`CIMA: ${med.ppioActivoCima}`} className="inline-block w-2 h-2 rounded-full bg-green-500 shrink-0" />
                             : <span title="CIMA consultado: principio activo no encontrado" className="inline-block w-2 h-2 rounded-full bg-red-400 shrink-0" />
                         )}
+                        {isMSE(med.cn) && (
+                          <span className="shrink-0 whitespace-nowrap rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-semibold text-orange-700">
+                            {formatMseLabel(med.tipoMse)}
+                          </span>
+                        )}
                       </span>
-                      {med.mse && (
-                        <span className="ml-1.5 rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-semibold text-orange-700">
-                          {med.tipoMse ?? 'MSE'}
-                        </span>
-                      )}
                     </td>
                     <td className="px-4 py-3 font-medium text-slate-800 max-w-[200px] truncate" title={med.principioActivo ?? ''}>
                       {med.principioActivo ?? '—'}

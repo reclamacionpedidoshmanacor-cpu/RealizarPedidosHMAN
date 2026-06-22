@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isValidArea } from '@/lib/areas';
 import { requireApiSession } from '@/lib/api-auth';
+import { isMSE } from '@/lib/utils';
 import {
   deleteMedicamentoByCn,
   getMedicamentoByCn,
@@ -61,8 +62,14 @@ export async function PATCH(
       unidadesPorCaja: Number((medUpdate.unidadesPorCaja as number | undefined) ?? existing.unidadesPorCaja),
       activo: (medUpdate.activo as boolean | undefined) ?? existing.activo,
       comprable: (medUpdate.comprable as boolean | undefined) ?? existing.comprable,
-      mse: existing.mse,
-      tipoMse: (medUpdate.tipoMse as string | null | undefined) ?? existing.tipoMse,
+      mse: isMSE(cn),
+      tipoMse: (() => {
+        if (!('tipoMse' in medUpdate)) return existing.tipoMse;
+        const raw = medUpdate.tipoMse as string | null | undefined;
+        if (raw == null) return null;
+        const trimmed = raw.trim();
+        return trimmed || null;
+      })(),
       precioUnidad: existing.precioUnidad,
       precioCaja: existing.precioCaja,
     });

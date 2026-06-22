@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { parseCatalogoExcel } from '@/lib/catalogo-parser';
 import { isValidArea } from '@/lib/areas';
 import { requireApiSession } from '@/lib/api-auth';
+import { isMSE } from '@/lib/utils';
 import {
   getMedicamentoByCn,
   insertMedicamento,
@@ -57,7 +58,7 @@ export async function POST(req: NextRequest) {
           ubicacion: row.ubicacion,
           unidadesPorCaja: row.unidadesPorCaja,
           activo: row.activo,
-          mse: row.mse,
+          mse: isMSE(row.cn),
         });
         actualizados++;
       } else {
@@ -71,7 +72,7 @@ export async function POST(req: NextRequest) {
           unidadesPorCaja: row.unidadesPorCaja,
           activo:          row.activo,
           comprable:       true,
-          mse:             row.mse,
+          mse:             isMSE(row.cn),
           tipoMse:         null,
           precioUnidad:    null,
           precioCaja:      null,

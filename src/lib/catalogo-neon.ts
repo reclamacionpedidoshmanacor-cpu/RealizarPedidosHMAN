@@ -1,4 +1,5 @@
 import { neon } from '@neondatabase/serverless';
+import { isMSE } from './utils';
 
 export type CatalogoMedicamento = {
   cn: string;
@@ -115,8 +116,8 @@ export async function listMedicamentosByArea(area: string): Promise<CatalogoMedi
     unidadesPorCaja: Number(row.unidades_por_caja),
     activo: row.activo,
     comprable: row.comprable,
-    mse: row.mse,
-    tipoMse: row.tipo_mse,
+    mse: isMSE(row.cn),
+    tipoMse: row.tipo_mse?.trim() || null,
     precioUnidad: numOrNull(row.precio_unidad),
     precioCaja: numOrNull(row.precio_caja),
     stockMinimo: row.stock_minimo == null ? null : Number(row.stock_minimo),
@@ -164,8 +165,8 @@ export async function getMedicamentoByCn(cn: string): Promise<MedicamentoBase | 
     unidadesPorCaja: Number(row.unidades_por_caja),
     activo: row.activo,
     comprable: row.comprable,
-    mse: row.mse,
-    tipoMse: row.tipo_mse,
+    mse: isMSE(row.cn),
+    tipoMse: row.tipo_mse?.trim() || null,
     precioUnidad: numOrNull(row.precio_unidad),
     precioCaja: numOrNull(row.precio_caja),
   };
@@ -197,19 +198,21 @@ export async function getStockObjetivoByCn(cn: string): Promise<StockObjetivo | 
 
 export async function insertMedicamento(row: MedicamentoBase) {
   const sql = getCatalogoClient();
+  const mse = isMSE(row.cn);
   await sql`
     INSERT INTO public.medicamentos (
       cn, nombre, principio_activo, via, area, ubicacion,
       unidades_por_caja, activo, comprable, mse, tipo_mse, precio_unidad, precio_caja, actualizado_en
     ) VALUES (
       ${row.cn}, ${row.nombre}, ${row.principioActivo}, ${row.via}, ${row.area}, ${row.ubicacion},
-      ${row.unidadesPorCaja}, ${row.activo}, ${row.comprable}, ${row.mse}, ${row.tipoMse}, ${row.precioUnidad}, ${row.precioCaja}, now()
+      ${row.unidadesPorCaja}, ${row.activo}, ${row.comprable}, ${mse}, ${row.tipoMse}, ${row.precioUnidad}, ${row.precioCaja}, now()
     );
   `;
 }
 
 export async function updateMedicamento(row: MedicamentoBase) {
   const sql = getCatalogoClient();
+  const mse = isMSE(row.cn);
   await sql`
     UPDATE public.medicamentos
     SET
@@ -221,7 +224,7 @@ export async function updateMedicamento(row: MedicamentoBase) {
       unidades_por_caja = ${row.unidadesPorCaja},
       activo = ${row.activo},
       comprable = ${row.comprable},
-      mse = ${row.mse},
+      mse = ${mse},
       tipo_mse = ${row.tipoMse},
       precio_unidad = ${row.precioUnidad},
       precio_caja = ${row.precioCaja},
