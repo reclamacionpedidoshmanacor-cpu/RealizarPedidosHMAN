@@ -32,6 +32,28 @@ export function cnFromSapMaterial(material: string): string {
   return digits;
 }
 
+/** CN listo para consultar la API REST de CIMA (AEMPS). */
+export function normalizarCnParaCima(raw: string): string {
+  const trimmed = String(raw ?? '').trim();
+  if (!trimmed) return '';
+
+  let digits = trimmed.replace(/\D/g, '');
+  if (!digits) return trimmed;
+
+  if (digits.startsWith('14') && digits.length > 6) {
+    digits = digits.slice(2);
+  }
+
+  // MSE: el CN puede tener más de 6 dígitos y empieza por 02.
+  if (digits.startsWith('02')) {
+    return digits;
+  }
+
+  if (digits.length > 6) digits = digits.slice(-6);
+  if (digits.length < 6) digits = digits.padStart(6, '0');
+  return digits;
+}
+
 export function isMSE(cn: string): boolean {
   return cn.trim().startsWith('02');
 }

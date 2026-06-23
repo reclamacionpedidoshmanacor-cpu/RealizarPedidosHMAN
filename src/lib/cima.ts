@@ -1,4 +1,11 @@
+import { normalizarCnParaCima } from './utils';
+
 const CIMA_REST = 'https://cima.aemps.es/cima/rest';
+
+const CIMA_HEADERS = {
+  Accept: 'application/json',
+  'User-Agent': 'Mozilla/5.0 (compatible; FarmaciaHMAN/1.0)',
+} as const;
 
 export interface CimaMedicamento {
   cn: string;
@@ -16,41 +23,85 @@ interface CimaApiResponse {
   nombre?: string;
   labtitular?: string;
   formaFarmaceutica?: { nombre?: string };
-  pactivos?: { nombre?: string; cant?: string; unidad?: string }[];
-  presentaciones?: { cn?: string; nombre?: string }[];
+  pactivos?: string | { nombre?: string; cant?: string; unidad?: string }[];
+  presentaciones?: { cn?: string | number; nombre?: string }[];
   estado?: { aut?: number };
 }
 
-export async function buscarMedicamentoPorCN(cn: string): Promise<CimaMedicamento | null> {
-  const trimmed = cn.trim();
-  if (!trimmed) return null;
+function formatPrincipioActivo(
+  pactivos: CimaApiResponse['pactivos']
+): string {
+  if (!pactivos) return '';
+  if (typeof pactivos === 'string') return pactivos.trim();
+  if (Array.isArray(pactivos)) {
+    return pactivos
+      .map((p) => [p.nombre, p.cant, p.unidad].filter(Boolean).join(' '))
+      .join(' / ')
+      .trim();
+  }
+  return '';
+}
+
+function cnCimaKey(value: string | number | undefined): string {
+  return normalizarCnParaCima(String(value ?? ''));
+}
+
+async function fetchCimaMedicamentoPorCn(cn: string): Promise<CimaApiResponse | null> {
+  const res = await fetch(
+    `${CIMA_REST}/medicamento?cn=${encodeURIComponent(cn)}`,
+    { headers: CIMA_HEADERS, signal: AbortSignal.timeout(8_000) }
+  );
+  if (!res.ok || res.status === 204) return null;
+
+  const text = await res.text();
+  if (!text.trim()) return null;
+
   try {
-    const res = await fetch(
-      `${CIMA_REST}/medicamento?cn=${encodeURIComponent(trimmed)}`,
-      { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8_000) }
-    );
-    if (!res.ok) return null;
-    const data: CimaApiResponse = await res.json();
+    const data = JSON.parse(text) as CimaApiResponse;
     if (!data.nregistro) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
 
-    const principioActivo = data.pactivos
-      ?.map(p => [p.nombre, p.cant, p.unidad].filter(Boolean).join(' '))
-      .join(' / ') ?? '';
+function mapCimaResponse(cn: string, data: CimaApiResponse): CimaMedicamento {
+  const cnKey = cnCimaKey(cn);
 
-    const presentacion = data.presentaciones?.find(p => p.cn === trimmed)?.nombre
-      ?? data.presentaciones?.[0]?.nombre
-      ?? '';
+  const principioActivo = formatPrincipioActivo(data.pactivos);
 
-    return {
-      cn: trimmed,
-      nregistro: String(data.nregistro),
-      nombre: String(data.nombre ?? '').trim(),
-      principioActivo: principioActivo.trim(),
-      presentacion: presentacion.trim(),
-      formaFarmaceutica: data.formaFarmaceutica?.nombre ?? '',
-      labTitular: data.labtitular ?? '',
-      autorizado: data.estado?.aut === 1,
-    };
+  const presentacion = data.presentaciones?.find(p => cnCimaKey(p.cn) === cnKey)?.nombre
+    ?? data.presentaciones?.[0]?.nombre
+    ?? '';
+
+  return {
+    cn,
+    nregistro: String(data.nregistro),
+    nombre: String(data.nombre ?? '').trim(),
+    principioActivo: principioActivo,
+    presentacion: presentacion.trim(),
+    formaFarmaceutica: data.formaFarmaceutica?.nombre ?? '',
+    labTitular: data.labtitular ?? '',
+    autorizado: data.estado?.aut === 1,
+  };
+}
+
+export async function buscarMedicamentoPorCN(rawCn: string): Promise<CimaMedicamento | null> {
+  const trimmed = String(rawCn ?? '').trim();
+  if (!trimmed) return null;
+
+  const candidatos = new Set<string>();
+  const normalizado = normalizarCnParaCima(trimmed);
+  if (normalizado) candidatos.add(normalizado);
+  candidatos.add(trimmed.replace(/\D/g, '') || trimmed);
+
+  try {
+    for (const cn of candidatos) {
+      if (!cn) continue;
+      const data = await fetchCimaMedicamentoPorCn(cn);
+      if (data) return mapCimaResponse(cn, data);
+    }
+    return null;
   } catch {
     return null;
   }
@@ -63,42 +114,34 @@ export interface CimaProblemaSupministro {
   descripcion: string | null;
 }
 
-export async function checkDesabastecimiento(cn: string): Promise<CimaProblemaSupministro | null> {
-  const trimmed = cn.trim();
-  if (!trimmed) return null;
-  try {
-    const res = await fetch(
-      `${CIMA_REST}/medicamento?cn=${encodeURIComponent(trimmed)}`,
-      { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(8_000) }
-    );
-    if (!res.ok) return null;
-    const data: CimaApiResponse = await res.json();
-    if (!data.nregistro) return null;
-    const nregistro = String(data.nregistro).trim();
+export async function checkDesabastecimiento(rawCn: string): Promise<CimaProblemaSupministro | null> {
+  const datos = await buscarMedicamentoPorCN(rawCn);
+  if (!datos) return null;
 
-    // Consultar problema de suministro
-    let descripcion: string | null = null;
-    try {
-      const psRes = await fetch(
-        `${CIMA_REST}/problemaSuministro?nregistro=${encodeURIComponent(nregistro)}`,
-        { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(6_000) }
-      );
-      if (psRes.ok) {
-        const ps = await psRes.json();
+  const nregistro = datos.nregistro.trim();
+
+  let descripcion: string | null = null;
+  try {
+    const psRes = await fetch(
+      `${CIMA_REST}/problemaSuministro?nregistro=${encodeURIComponent(nregistro)}`,
+      { headers: CIMA_HEADERS, signal: AbortSignal.timeout(6_000) }
+    );
+    if (psRes.ok && psRes.status !== 204) {
+      const text = await psRes.text();
+      if (text.trim()) {
+        const ps = JSON.parse(text);
         const item = Array.isArray(ps) ? ps[0] : ps;
         if (item) {
           descripcion = item.descripcion ?? item.motivo ?? item.detalle ?? null;
         }
       }
-    } catch { /* sin descripcion */ }
+    }
+  } catch { /* sin descripcion */ }
 
-    return {
-      nregistro,
-      cn: trimmed,
-      nombre: String(data.nombre ?? '').trim(),
-      descripcion,
-    };
-  } catch {
-    return null;
-  }
+  return {
+    nregistro,
+    cn: datos.cn,
+    nombre: datos.nombre,
+    descripcion,
+  };
 }

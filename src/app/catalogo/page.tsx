@@ -118,10 +118,15 @@ export default function CatalogoPage() {
 
   const buscarCimaPorCn = async (cn: string) => {
     const trimmed = cn.trim();
-    if (trimmed.length < 6) return;
+    if (!trimmed) {
+      toast.error('Introduce un CN o código SAP.');
+      return;
+    }
     setCimaBuscando(true);
     try {
-      const res = await fetch(`/api/catalogo/cima?cn=${encodeURIComponent(trimmed)}`);
+      const res = await fetch(`/api/catalogo/cima?cn=${encodeURIComponent(trimmed)}`, {
+        credentials: 'include',
+      });
       const data = await res.json();
       if (!res.ok) {
         toast.error(data.error ?? 'CN no encontrado en CIMA');
@@ -129,13 +134,13 @@ export default function CatalogoPage() {
       }
       setNuevoData((prev) => ({
         ...prev,
-        cn: trimmed,
+        cn: data.cn || trimmed,
         nombre: data.nombre || prev.nombre,
         principioActivo: data.principioActivo || prev.principioActivo,
         presentacion: data.presentacion || prev.presentacion,
         unidadesPorCaja: data.unidadesPorCajaInferidas ?? prev.unidadesPorCaja,
       }));
-      toast.success('Datos cargados desde CIMA (AEMPS)');
+      toast.success(`Datos cargados desde CIMA (CN ${data.cn})`);
     } catch {
       toast.error('Error al consultar CIMA');
     } finally {
@@ -782,7 +787,7 @@ export default function CatalogoPage() {
               </div>
               {esAlmacen && (
                 <p className="text-xs text-violet-600 -mt-1">
-                  Al salir del campo CN se consulta CIMA para nombre, principio activo y presentación.
+                  Acepta CN de 6 dígitos o código SAP (14+CN). Al salir del campo o pulsar CIMA se consulta AEMPS.
                 </p>
               )}
               <Field label="Nombre / Marca *">
