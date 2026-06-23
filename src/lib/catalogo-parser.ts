@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { cnFromSapMaterial, isMSE, roundCajas } from './utils';
+import { cnFromSapMaterial, isMSE, normalizarCnParaCima, roundCajas } from './utils';
 import type { AreaId } from './areas';
 
 export interface CatalogoRow {
@@ -7,6 +7,7 @@ export interface CatalogoRow {
   sapCode: string;
   principioActivo: string;
   nombre: string;
+  presentacion?: string | null;
   via: 'IV' | 'ORAL' | 'OTRO';
   ubicacion: string;
   unidadesPorCaja: number;
@@ -297,7 +298,121 @@ export function parseCatalogoExcelNutricion(buffer: Buffer): CatalogoParseResult
   return { rows, errors, via: 'OTRO' };
 }
 
+function firstNonEmpty(...values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function resolveCnAlmacen(cnCimaRaw: string, sapRaw: string): string {
+  if (cnCimaRaw) return normalizarCnParaCima(cnCimaRaw);
+  if (sapRaw) return cnFromSapMaterial(sapRaw);
+  return '';
+}
+
+/** Formato Almacén: Excel revisado con CIMA (sin consulta API en importación). */
+export function parseCatalogoExcelAlmacen(buffer: Buffer): CatalogoParseResult {
+  const errors: string[] = [];
+  const rows: CatalogoRow[] = [];
+
+  const { raw, errors: readErrors } = readWorkbookRows(buffer);
+  if (readErrors.length) return { rows, errors: readErrors, via: 'OTRO' };
+
+  const headers = (raw[0] as string[]).map((h) => String(h));
+  const headerNorm = headers.map(normalize);
+
+  const idx = {
+    sap: findCol(headerNorm, ['codigo sap', 'codigo material', 'material', 'sap']),
+    prActivo: findCol(headerNorm, ['pr. activo', 'pr activo', 'ppio activo', 'principio activo']),
+    denominacion: findCol(headerNorm, ['denominacion', 'denominación', 'descripcion', 'descripción']),
+    ubic: findCol(headerNorm, ['ubicacion', 'ubic']),
+    cnCima: findCol(headerNorm, ['cn_cima', 'cn cima']),
+    ppioCima: findCol(headerNorm, ['principio activo_cima', 'principio activo cima']),
+    marcaCima: findCol(headerNorm, ['marca comercial_cima', 'marca comercial cima']),
+    presentacion: findCol(headerNorm, ['presentacion', 'presentación']),
+    udesCaja: findCol(headerNorm, [
+      'udes/caja', 'uds/caja', 'ud/caja', 'unidades/caja', 'unidades por caja', 'unidades x caja',
+    ]),
+  };
+
+  const requiredMissing: string[] = [];
+  if (idx.sap === -1 && idx.cnCima === -1) {
+    requiredMissing.push('Código SAP o CN_CIMA');
+  }
+  if (idx.ubic === -1) requiredMissing.push('ubicacion');
+  if (idx.udesCaja === -1) requiredMissing.push('udes/caja');
+  if (requiredMissing.length) {
+    return {
+      rows,
+      errors: [
+        `Columnas obligatorias no encontradas: ${requiredMissing.join(', ')}.`,
+        'Esperado: Código SAP, Pr. Activo, Denominación, ubicacion, CN_CIMA, Principio Activo_CIMA, Marca Comercial_CIMA, Presentacion, udes/caja.',
+      ],
+      via: 'OTRO',
+    };
+  }
+
+  for (let i = 1; i < raw.length; i++) {
+    const row = raw[i] as unknown[];
+    const sapRaw = idx.sap !== -1 ? String(row[idx.sap] ?? '').trim() : '';
+    const cnCimaRaw = idx.cnCima !== -1 ? String(row[idx.cnCima] ?? '').trim() : '';
+    if (!sapRaw && !cnCimaRaw) continue;
+
+    const cn = resolveCnAlmacen(cnCimaRaw, sapRaw);
+    if (!cn) {
+      errors.push(`Fila ${i + 1}: no se pudo obtener CN (SAP "${sapRaw}", CN_CIMA "${cnCimaRaw}").`);
+      continue;
+    }
+
+    const prActivo = idx.prActivo !== -1 ? String(row[idx.prActivo] ?? '').trim() : '';
+    const denominacion = idx.denominacion !== -1 ? String(row[idx.denominacion] ?? '').trim() : '';
+    const ppioCima = idx.ppioCima !== -1 ? String(row[idx.ppioCima] ?? '').trim() : '';
+    const marcaCima = idx.marcaCima !== -1 ? String(row[idx.marcaCima] ?? '').trim() : '';
+    const presentacion = idx.presentacion !== -1 ? String(row[idx.presentacion] ?? '').trim() : '';
+    const ubicacion = String(row[idx.ubic] ?? '').trim();
+
+    if (!ubicacion) {
+      errors.push(`Fila ${i + 1}: ubicación vacía (CN ${cn}).`);
+      continue;
+    }
+
+    const unidadesPorCaja = toIntOrNull(row[idx.udesCaja]);
+    if (unidadesPorCaja == null || unidadesPorCaja <= 0) {
+      errors.push(`Fila ${i + 1}: udes/caja inválidas ("${row[idx.udesCaja]}") para CN ${cn}.`);
+      continue;
+    }
+
+    const principioActivo = firstNonEmpty(ppioCima, prActivo, denominacion);
+    const nombre = firstNonEmpty(marcaCima, denominacion, prActivo, principioActivo, cn);
+    if (!principioActivo) {
+      errors.push(`Fila ${i + 1}: falta principio activo (CN ${cn}).`);
+      continue;
+    }
+
+    rows.push({
+      cn,
+      sapCode: sapRaw || cn,
+      principioActivo,
+      nombre,
+      presentacion: presentacion || null,
+      via: 'OTRO',
+      ubicacion,
+      unidadesPorCaja,
+      activo: true,
+      mse: isMSE(cn),
+      stockMinimo: 0,
+      puntoPedido: 0,
+      stockMaximo: null,
+    });
+  }
+
+  return { rows, errors, via: 'OTRO' };
+}
+
 export function parseCatalogoByArea(buffer: Buffer, area: AreaId): CatalogoParseResult {
   if (area === 'nutricion') return parseCatalogoExcelNutricion(buffer);
+  if (area === 'almacen') return parseCatalogoExcelAlmacen(buffer);
   return parseCatalogoExcel(buffer);
 }

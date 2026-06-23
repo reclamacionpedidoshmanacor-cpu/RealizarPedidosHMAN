@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { parseCatalogoByArea } from '@/lib/catalogo-parser';
 import { isValidArea } from '@/lib/areas';
 import { requireApiSession } from '@/lib/api-auth';
+import { isAlmacenArea } from '@/lib/almacen';
 import { isMSE } from '@/lib/utils';
 import {
   getMedicamentoByCn,
@@ -49,11 +50,14 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
+      const presentacion = row.presentacion?.trim() || null;
+
       if (existing) {
         await updateMedicamento({
           ...existing,
           nombre: row.nombre,
           principioActivo: row.principioActivo,
+          presentacion,
           via: row.via,
           ubicacion: row.ubicacion,
           unidadesPorCaja: row.unidadesPorCaja,
@@ -66,6 +70,7 @@ export async function POST(req: NextRequest) {
           cn:              row.cn,
           nombre:          row.nombre,
           principioActivo: row.principioActivo,
+          presentacion,
           via:             row.via,
           area,
           ubicacion:       row.ubicacion,
@@ -80,12 +85,14 @@ export async function POST(req: NextRequest) {
         insertados++;
       }
 
-      await upsertStockObjetivo(
-        row.cn,
-        row.stockMinimo,
-        row.puntoPedido,
-        row.stockMaximo ?? null
-      );
+      if (!isAlmacenArea(area)) {
+        await upsertStockObjetivo(
+          row.cn,
+          row.stockMinimo,
+          row.puntoPedido,
+          row.stockMaximo ?? null
+        );
+      }
     }
 
     return NextResponse.json({
