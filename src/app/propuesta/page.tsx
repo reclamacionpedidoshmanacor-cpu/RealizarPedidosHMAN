@@ -38,6 +38,8 @@ type Linea = {
   motivoAjuste: string | null;
   motivoAjusteOtro: string | null;
   ajustado: boolean;
+  activo?: boolean;
+  editable?: boolean;
 };
 
 type ApiResponse = {
@@ -87,6 +89,14 @@ function fmtUnidades(value: number) {
   return new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 }).format(value);
 }
 
+function lineasPedibles(lineas: Linea[]): Linea[] {
+  return lineas.filter((linea) => linea.activo !== false);
+}
+
+function esLineaInactiva(linea: Linea): boolean {
+  return linea.activo === false;
+}
+
 // ---------------------------------------------------------------------------
 // Página principal
 // ---------------------------------------------------------------------------
@@ -113,10 +123,20 @@ export default function PropuestaPage() {
     try {
       const res     = await fetch('/api/propuestas/actual', { cache: 'no-store' });
       const payload = await res.json();
-      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo preparar la propuesta.');
+      if (!res.ok) {
+        if (res.status === 404) {
+          setData(null);
+          setError(null);
+        } else {
+          setData(null);
+          setError(payload?.error ?? 'No se pudo preparar la propuesta.');
+        }
+        return;
+      }
       setData(payload);
       const nextEdits: Record<number, DraftEdit> = {};
       for (const linea of payload.lineas as Linea[]) {
+        if (esLineaInactiva(linea) || linea.id <= 0) continue;
         nextEdits[linea.id] = {
           cajasValidadas:   linea.cajasValidadas ?? linea.cajasPropuestas,
           motivoAjuste:     linea.motivoAjuste ?? '',
@@ -125,9 +145,8 @@ export default function PropuestaPage() {
       }
       setEdits(nextEdits);
     } catch (err) {
-      // No hay recuento pendiente — es normal si ya se tramitó
       setData(null);
-      setError(null); // No mostramos error, mostramos historial
+      setError(err instanceof Error ? err.message : 'Error inesperado al cargar la propuesta.');
     } finally {
       setLoading(false);
     }
@@ -152,7 +171,7 @@ export default function PropuestaPage() {
 
   // ── Validación ────────────────────────────────────────────────────────────
   const validateEdits = (lineas: Linea[]): string | null => {
-    for (const linea of lineas) {
+    for (const linea of lineasPedibles(lineas)) {
       const draft   = edits[linea.id];
       if (!draft) continue;
       const ajustado = draft.cajasValidadas !== linea.cajasPropuestas;
@@ -165,7 +184,7 @@ export default function PropuestaPage() {
   };
 
   const saveAll = async (lineas: Linea[]) => {
-    for (const linea of lineas) {
+    for (const linea of lineasPedibles(lineas)) {
       const draft = edits[linea.id];
       if (!draft) continue;
       await fetch(`/api/propuestas/lineas/${linea.id}`, {
@@ -354,7 +373,13 @@ export default function PropuestaPage() {
 
         {loading && <p className="text-sm text-slate-500">Cargando propuesta…</p>}
 
-        {!loading && !data && (
+        {!loading && error && (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-6 py-4 text-center mb-4">
+            <p className="text-rose-700 text-sm">{error}</p>
+          </div>
+        )}
+
+        {!loading && !data && !error && (
           <div className="rounded-xl border border-slate-200 bg-slate-50 px-6 py-10 text-center">
             <p className="text-slate-500 text-sm">No hay ningún recuento pendiente de propuesta.</p>
             <p className="text-slate-400 text-xs mt-1">Importa un recuento de stock para generar una nueva propuesta.</p>
@@ -372,7 +397,15 @@ export default function PropuestaPage() {
                 value={data.propuesta.estado.charAt(0).toUpperCase() + data.propuesta.estado.slice(1)}
                 accent={data.propuesta.estado === 'tramitada' ? 'green' : 'amber'}
               />
-              <Kpi label="Líneas" value={String(data.lineas.length)} sub="artículos activos" />
+              <Kpi
+                label="Líneas"
+                value={String(lineasPedibles(data.lineas).length)}
+                sub={
+                  data.lineas.length > lineasPedibles(data.lineas).length
+                    ? `${data.lineas.length} en recuento · ${data.lineas.length - lineasPedibles(data.lineas).length} inactivos`
+                    : 'artículos a pedir'
+                }
+              />
             </div>
 
             {/* Tabla */}
@@ -409,35 +442,56 @@ export default function PropuestaPage() {
                 </thead>
                 <tbody>
                   {data.lineas.map((linea, idx) => {
+                    const inactiva   = esLineaInactiva(linea);
                     const draft      = edits[linea.id];
-                    const editable   = data.propuesta.estado === 'borrador';
+                    const editable   = !inactiva && linea.editable !== false && data.propuesta.estado === 'borrador';
                     const cajasVal   = draft?.cajasValidadas ?? linea.cajasPropuestas;
                     const diff       = cajasVal - linea.cajasPropuestas;
                     const aumentado  = diff > 0;
                     const reducido   = diff < 0;
                     const stockDisponible = linea.stockActual + (linea.stockTransito ?? 0);
-                    // Rojo: stock disponible (actual + tránsito) por debajo del punto de pedido.
-                    const bajoMinimo = stockDisponible <= linea.puntoPedidoSnap;
+                    const bajoMinimo = !inactiva && stockDisponible <= linea.puntoPedidoSnap;
 
                     return (
-                      <tr key={linea.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
+                      <tr
+                        key={inactiva ? `inactivo-${linea.cn}` : linea.id}
+                        className={`${
+                          inactiva
+                            ? 'bg-slate-100/90 text-slate-400 italic'
+                            : idx % 2 === 0
+                              ? 'bg-white'
+                              : 'bg-slate-50/50'
+                        }`}
+                      >
 
                         {/* Medicamento */}
                         <td className="px-4 py-3">
                           <div className="flex items-start gap-2">
                             {bajoMinimo && (
-                              <span className="mt-[5px] h-2 w-2 shrink-0 rounded-full bg-rose-400" title="Stock por debajo del punto de pedido" />
+                              <span className="mt-[5px] h-2 w-2 shrink-0 rounded-full bg-rose-400 not-italic" title="Stock por debajo del punto de pedido" />
                             )}
                             <div>
-                              <span className="inline-block rounded bg-slate-100 px-1.5 py-px font-mono text-[11px] text-slate-500 tracking-wide mb-0.5">
-                                {linea.cn}
-                              </span>
-                              <p className="font-semibold text-slate-800 leading-snug">
+                              <div className="flex flex-wrap items-center gap-1.5 mb-0.5 not-italic">
+                                <span className="inline-block rounded bg-slate-100 px-1.5 py-px font-mono text-[11px] text-slate-500 tracking-wide">
+                                  {linea.cn}
+                                </span>
+                                {inactiva && (
+                                  <span className="rounded-full bg-slate-200 px-2 py-px text-[10px] font-semibold uppercase tracking-wide text-slate-500 not-italic">
+                                    Inactivo
+                                  </span>
+                                )}
+                              </div>
+                              <p className={`leading-snug not-italic ${inactiva ? 'font-medium text-slate-500' : 'font-semibold text-slate-800'}`}>
                                 {linea.principioActivo ?? linea.nombreMedicamento ?? '—'}
                               </p>
                               {linea.principioActivo && linea.nombreMedicamento && (
                                 <p className="text-[11px] italic text-slate-400 font-sans mt-0.5">
                                   {linea.nombreMedicamento}
+                                </p>
+                              )}
+                              {inactiva && (
+                                <p className="text-[11px] text-slate-400 not-italic mt-0.5">
+                                  Solo consulta — no se incluye en el pedido
                                 </p>
                               )}
                             </div>
@@ -446,26 +500,32 @@ export default function PropuestaPage() {
 
                         {/* Stock objetivo */}
                         <td className="px-4 py-3 text-center">
-                          <span className="text-sm font-medium text-slate-600 tabular-nums">
-                            Min:&nbsp;<strong className="text-slate-800">{linea.stockMinimoSnap}</strong>
+                          <span className={`text-sm font-medium tabular-nums not-italic ${inactiva ? 'text-slate-400' : 'text-slate-600'}`}>
+                            Min:&nbsp;<strong className={inactiva ? 'text-slate-500' : 'text-slate-800'}>{linea.stockMinimoSnap}</strong>
                             &nbsp;·&nbsp;
-                            Máx:&nbsp;<strong className="text-slate-800">{linea.stockMaximoSnap}</strong>
+                            Máx:&nbsp;<strong className={inactiva ? 'text-slate-500' : 'text-slate-800'}>{linea.stockMaximoSnap}</strong>
                           </span>
                         </td>
 
                         {/* Stock actual en unidades (informativo) */}
                         <td className="px-4 py-3 text-center">
-                          <span className="inline-block rounded-md bg-slate-100 px-3 py-1 text-base font-semibold tabular-nums text-slate-700 ring-1 ring-slate-200">
+                          <span className={`inline-block rounded-md px-3 py-1 text-base font-semibold tabular-nums ring-1 not-italic ${
+                            inactiva
+                              ? 'bg-slate-200/60 text-slate-500 ring-slate-200'
+                              : 'bg-slate-100 text-slate-700 ring-slate-200'
+                          }`}>
                             {fmtUnidades(Number(linea.stockActual) * Number(linea.unidadesPorCaja))}
                           </span>
                         </td>
 
-                        {/* Stock actual (nº cajas) — azul corporativo / rojo si bajo mínimo */}
+                        {/* Stock actual (nº cajas) */}
                         <td className="px-4 py-3 text-center">
-                          <span className={`inline-block rounded-md px-3 py-1 text-base font-semibold tabular-nums ring-1 ${
-                            bajoMinimo
-                              ? 'bg-rose-50 text-rose-800 ring-rose-200'
-                              : 'bg-sky-50 text-sky-800 ring-sky-200'
+                          <span className={`inline-block rounded-md px-3 py-1 text-base font-semibold tabular-nums ring-1 not-italic ${
+                            inactiva
+                              ? 'bg-slate-200/60 text-slate-500 ring-slate-200'
+                              : bajoMinimo
+                                ? 'bg-rose-50 text-rose-800 ring-rose-200'
+                                : 'bg-sky-50 text-sky-800 ring-sky-200'
                           }`}>
                             {Number(linea.stockActual).toFixed(1)}
                           </span>
@@ -473,28 +533,42 @@ export default function PropuestaPage() {
 
                         {/* En tránsito */}
                         <td className="px-4 py-3 text-center">
-                          <span className="inline-block rounded-md bg-violet-50 px-3 py-1 text-base font-semibold tabular-nums text-violet-800 ring-1 ring-violet-200">
-                            {Number(linea.stockTransito ?? 0).toFixed(1)}
-                          </span>
+                          {inactiva ? (
+                            <span className="text-slate-400">—</span>
+                          ) : (
+                            <span className="inline-block rounded-md bg-violet-50 px-3 py-1 text-base font-semibold tabular-nums text-violet-800 ring-1 ring-violet-200 not-italic">
+                              {Number(linea.stockTransito ?? 0).toFixed(1)}
+                            </span>
+                          )}
                         </td>
 
                         {/* Calculado (cajas) */}
                         <td className="px-4 py-3 text-center">
-                          <span className="inline-block rounded-md bg-slate-100 px-3 py-1 text-base font-semibold tabular-nums text-slate-700 ring-1 ring-slate-200">
-                            {linea.cajasPropuestas}
-                          </span>
+                          {inactiva ? (
+                            <span className="text-slate-400">—</span>
+                          ) : (
+                            <span className="inline-block rounded-md bg-slate-100 px-3 py-1 text-base font-semibold tabular-nums text-slate-700 ring-1 ring-slate-200 not-italic">
+                              {linea.cajasPropuestas}
+                            </span>
+                          )}
                         </td>
 
                         {/* Calculado (comprimidos) */}
                         <td className="px-4 py-3 text-center">
-                          <span className="inline-block rounded-md bg-slate-50 px-3 py-1 text-sm font-medium tabular-nums text-slate-600 ring-1 ring-slate-200">
-                            {fmtUnidades(cajasAUnidades(linea.cajasPropuestas, linea.unidadesPorCaja))}
-                          </span>
+                          {inactiva ? (
+                            <span className="text-slate-400">—</span>
+                          ) : (
+                            <span className="inline-block rounded-md bg-slate-50 px-3 py-1 text-sm font-medium tabular-nums text-slate-600 ring-1 ring-slate-200 not-italic">
+                              {fmtUnidades(cajasAUnidades(linea.cajasPropuestas, linea.unidadesPorCaja))}
+                            </span>
+                          )}
                         </td>
 
                         {/* Validado (cajas) */}
                         <td className="px-4 py-3 text-center">
-                          {editable ? (
+                          {inactiva ? (
+                            <span className="text-slate-400">—</span>
+                          ) : editable ? (
                             <div className="flex flex-col items-center gap-0.5">
                               <input
                                 type="number"
@@ -551,7 +625,10 @@ export default function PropuestaPage() {
 
                         {/* Validado (comprimidos) */}
                         <td className="px-4 py-3 text-center">
-                          <span className={`inline-block rounded-md px-3 py-1 text-sm font-medium tabular-nums ring-1 ${
+                          {inactiva ? (
+                            <span className="text-slate-400">—</span>
+                          ) : (
+                          <span className={`inline-block rounded-md px-3 py-1 text-sm font-medium tabular-nums ring-1 not-italic ${
                             aumentado
                               ? 'bg-emerald-50 text-emerald-800 ring-emerald-200'
                               : reducido
@@ -560,11 +637,14 @@ export default function PropuestaPage() {
                           }`}>
                             {fmtUnidades(cajasAUnidades(cajasVal, linea.unidadesPorCaja))}
                           </span>
+                          )}
                         </td>
 
                         {/* Motivo */}
                         <td className="px-4 py-3">
-                          {editable ? (
+                          {inactiva ? (
+                            <span className="text-slate-400">—</span>
+                          ) : editable ? (
                             <div className="space-y-1 min-w-[190px]">
                               <select
                                 value={draft?.motivoAjuste ?? ''}

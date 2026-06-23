@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
 import { actualizarLineaPropuesta, getLineaConPropuesta } from '@/lib/stock-propuesta-neon';
+import { roundCajas } from '@/lib/utils';
 
 export const runtime = 'nodejs';
 
@@ -19,7 +20,9 @@ export async function PATCH(
     }
 
     const body = await req.json();
-    const cajasValidadas = Number(body.cajasValidadas);
+    const cajasRaw = Number(body.cajasValidadas);
+    const cajasValidadas =
+      session.area === 'nutricion' ? roundCajas(cajasRaw) : Math.round(cajasRaw);
     const motivoAjuste = body.motivoAjuste ? String(body.motivoAjuste) : null;
     const motivoAjusteOtro = body.motivoAjusteOtro ? String(body.motivoAjusteOtro).trim() : null;
 
@@ -45,6 +48,7 @@ export async function PATCH(
     await actualizarLineaPropuesta(
       lineaId,
       linea.propuestaId,
+      linea.areaPropuesta,
       cajasValidadas,
       Math.round(cajasValidadas * linea.unidadesPorCaja),
       ajustado ? motivoAjuste : null,

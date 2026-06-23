@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
 import {
   getBorradorPropuesta,
-  getLineasPropuesta,
   getRecuentoById,
+  getRecuentoConStockParaPropuesta,
   reemplazarLineasPropuestaDesdeRecuento,
   sincronizarRecuentoPendienteConCatalogo,
 } from '@/lib/stock-propuesta-neon';
@@ -60,12 +60,19 @@ export async function POST(
     let propuestaActualizada = false;
     let lineasPropuesta = 0;
     if (borrador) {
-      const lineas = await getLineasPropuesta(borrador.id);
-      const transitoUnidadesByCn = await loadCantidadTransitoByCn(lineas.map((l) => l.cn));
-      const stockTransitoByCn = buildStockTransitoCajasByCn(
-        transitoUnidadesByCn,
-        lineas.map((l) => ({ cn: l.cn, unidadesPorCaja: l.unidadesPorCaja }))
-      );
+      const filasRecuento = await getRecuentoConStockParaPropuesta(recuentoId, session.area);
+      let stockTransitoByCn: Record<string, number> = {};
+      if (filasRecuento.length > 0) {
+        try {
+          const transitoUnidadesByCn = await loadCantidadTransitoByCn(filasRecuento.map((r) => r.cn));
+          stockTransitoByCn = buildStockTransitoCajasByCn(
+            transitoUnidadesByCn,
+            filasRecuento.map((r) => ({ cn: r.cn, unidadesPorCaja: Number(r.unidades_por_caja) }))
+          );
+        } catch {
+          stockTransitoByCn = {};
+        }
+      }
       lineasPropuesta = await reemplazarLineasPropuestaDesdeRecuento(
         borrador.id,
         recuentoId,

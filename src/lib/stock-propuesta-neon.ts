@@ -1,6 +1,14 @@
 import { neon } from '@neondatabase/serverless';
 import { calcularCajasPropuestas } from '@/lib/propuesta';
-import { ORIGEN_PEDIDO_ALMACEN } from '@/lib/almacen';
+import { ORIGEN_PEDIDO_ALMACEN, isAlmacenArea } from '@/lib/almacen';
+import { roundCajas } from '@/lib/utils';
+
+const NUTRICION_AREA = 'nutricion';
+
+function normalizeCajasSnap(area: string, value: number): number {
+  if (area === NUTRICION_AREA) return roundCajas(value);
+  return Math.round(value);
+}
 
 function getDb() {
   const url = process.env.REALIZAR_PEDIDOS_DATABASE_URL ?? process.env.DATABASE_URL;
@@ -27,6 +35,72 @@ async function ensurePropuestasLineasSchema(): Promise<void> {
     })();
   }
   await ensurePropuestasLineasSchemaPromise;
+}
+
+let ensureNutricionDecimalSchemaPromise: Promise<void> | null = null;
+
+/** Cajas con un decimal en Nutrición: columnas de propuesta y recuento deben aceptar NUMERIC. */
+export async function ensureNutricionDecimalSchema(area: string): Promise<void> {
+  if (area !== NUTRICION_AREA) return;
+  if (!ensureNutricionDecimalSchemaPromise) {
+    const sql = getDb();
+    ensureNutricionDecimalSchemaPromise = (async () => {
+      await sql`
+        ALTER TABLE propuestas_lineas
+          ALTER COLUMN stock_actual TYPE NUMERIC(12,1)
+          USING round(stock_actual::numeric, 1);
+      `;
+      await sql`
+        ALTER TABLE propuestas_lineas
+          ALTER COLUMN stock_minimo_snap TYPE NUMERIC(12,1)
+          USING round(stock_minimo_snap::numeric, 1);
+      `;
+      await sql`
+        ALTER TABLE propuestas_lineas
+          ALTER COLUMN punto_pedido_snap TYPE NUMERIC(12,1)
+          USING round(punto_pedido_snap::numeric, 1);
+      `;
+      await sql`
+        ALTER TABLE propuestas_lineas
+          ALTER COLUMN stock_maximo_snap TYPE NUMERIC(12,1)
+          USING round(stock_maximo_snap::numeric, 1);
+      `;
+      await sql`
+        ALTER TABLE propuestas_lineas
+          ALTER COLUMN stock_objetivo_snap TYPE NUMERIC(12,1)
+          USING round(stock_objetivo_snap::numeric, 1);
+      `;
+      await sql`
+        ALTER TABLE propuestas_lineas
+          ALTER COLUMN cajas_propuestas TYPE NUMERIC(12,1)
+          USING round(cajas_propuestas::numeric, 1);
+      `;
+      await sql`
+        ALTER TABLE propuestas_lineas
+          ALTER COLUMN cajas_validadas TYPE NUMERIC(12,1)
+          USING round(cajas_validadas::numeric, 1);
+      `;
+      await sql`
+        ALTER TABLE propuestas_lineas
+          ALTER COLUMN stock_transito_snap TYPE NUMERIC(12,1)
+          USING round(stock_transito_snap::numeric, 1);
+      `;
+      await sql`
+        ALTER TABLE stock_registros
+          ALTER COLUMN stock_cajas TYPE NUMERIC(12,1)
+          USING round(stock_cajas::numeric, 1);
+      `;
+      await sql`
+        ALTER TABLE stock_registros
+          ALTER COLUMN stock_unidades TYPE NUMERIC(12,2)
+          USING round(stock_unidades::numeric, 2);
+      `;
+    })().catch((err) => {
+      ensureNutricionDecimalSchemaPromise = null;
+      throw err;
+    });
+  }
+  await ensureNutricionDecimalSchemaPromise;
 }
 
 // ---------------------------------------------------------------------------
@@ -87,6 +161,11 @@ export type PropuestaLinea = {
   ajustado: boolean;
 };
 
+export type PropuestaLineaUI = PropuestaLinea & {
+  activo: boolean;
+  editable: boolean;
+};
+
 // ---------------------------------------------------------------------------
 // RECUENTOS
 // ---------------------------------------------------------------------------
@@ -111,9 +190,13 @@ export async function getRecuentosByArea(area: string): Promise<{
     totalLineas: num(r.total_lineas), propuestaId: r.propuesta_id ? num(r.propuesta_id) : null,
   }));
 
+  const pendiente = isAlmacenArea(area)
+    ? await getPedidoAlmacenPendiente(area)
+    : await getPendienteRecuento(area);
+
   return {
-    pendiente: mapped.find((r) => r.estado === 'pendiente') ?? null,
-    historico: mapped.filter((r) => r.estado !== 'pendiente'),
+    pendiente,
+    historico: mapped.filter((r) => !pendiente || r.id !== pendiente.id),
   };
 }
 
@@ -379,6 +462,7 @@ export async function sincronizarRecuentoPendienteConCatalogo(
   importacionId: number,
   area: string
 ): Promise<{ updated: number; cnsSinCatalogo: string[] }> {
+  await ensureNutricionDecimalSchema(area);
   const sql = getDb();
   const recuento = (await sql`
     SELECT id
@@ -661,6 +745,7 @@ export async function getLineasPropuesta(propuestaId: number): Promise<Propuesta
 }
 
 export async function getRecuentoConStockParaPropuesta(importacionId: number, area: string) {
+  await ensureNutricionDecimalSchema(area);
   const sql = getDb();
   return (await sql`
     SELECT
@@ -670,7 +755,8 @@ export async function getRecuentoConStockParaPropuesta(importacionId: number, ar
     FROM stock_registros sr
     INNER JOIN medicamentos m ON m.cn = sr.cn AND m.area = ${area} AND m.activo = true
     LEFT JOIN stock_objetivo so ON so.cn = sr.cn
-    WHERE sr.importacion_id = ${importacionId};
+    WHERE sr.importacion_id = ${importacionId}
+    ORDER BY m.principio_activo ASC NULLS LAST, m.nombre ASC;
   `) as Array<{
     cn: string; stock_cajas: string;
     nombre: string; unidades_por_caja: number;
@@ -678,22 +764,104 @@ export async function getRecuentoConStockParaPropuesta(importacionId: number, ar
   }>;
 }
 
+export async function getRecuentoInactivosParaVisualizacion(importacionId: number, area: string) {
+  await ensureNutricionDecimalSchema(area);
+  const sql = getDb();
+  return (await sql`
+    SELECT
+      sr.cn, sr.stock_cajas,
+      m.nombre, m.principio_activo, m.unidades_por_caja,
+      so.stock_minimo, so.punto_pedido, so.stock_maximo
+    FROM stock_registros sr
+    INNER JOIN medicamentos m ON m.cn = sr.cn AND m.area = ${area} AND m.activo = false
+    LEFT JOIN stock_objetivo so ON so.cn = sr.cn
+    WHERE sr.importacion_id = ${importacionId}
+    ORDER BY m.principio_activo ASC NULLS LAST, m.nombre ASC;
+  `) as Array<{
+    cn: string; stock_cajas: string;
+    nombre: string; principio_activo: string | null; unidades_por_caja: number;
+    stock_minimo: number | null; punto_pedido: number | null; stock_maximo: number | null;
+  }>;
+}
+
+function sortLineasPropuestaUI(a: PropuestaLineaUI, b: PropuestaLineaUI): number {
+  const nameA = (a.principioActivo ?? a.nombreMedicamento ?? a.cn).trim();
+  const nameB = (b.principioActivo ?? b.nombreMedicamento ?? b.cn).trim();
+  return nameA.localeCompare(nameB, 'es', { sensitivity: 'base' });
+}
+
+export async function buildLineasPropuestaParaUi(
+  propuestaId: number,
+  importacionId: number,
+  area: string,
+  propuestaEstado: string,
+  stockTransitoByCn: Record<string, number>
+): Promise<PropuestaLineaUI[]> {
+  const activas = await getLineasPropuesta(propuestaId);
+  const inactivas = await getRecuentoInactivosParaVisualizacion(importacionId, area);
+
+  const activasUi: PropuestaLineaUI[] = activas.map((linea) => ({
+    ...linea,
+    stockTransito: Number(stockTransitoByCn[linea.cn] ?? linea.stockTransito ?? 0),
+    activo: true,
+    editable: propuestaEstado === 'borrador',
+  }));
+
+  const inactivasUi: PropuestaLineaUI[] = inactivas.map((r, idx) => {
+    const stockActual = normalizeCajasSnap(area, Number(r.stock_cajas));
+    const stockMinimo = normalizeCajasSnap(area, Number(r.stock_minimo ?? 0));
+    const puntoPedido = normalizeCajasSnap(area, Number(r.punto_pedido ?? 0));
+    const stockMaximo = normalizeCajasSnap(area, Number(r.stock_maximo ?? r.stock_minimo ?? 0));
+    return {
+      id: -(idx + 1),
+      cn: r.cn,
+      principioActivo: r.principio_activo,
+      nombreMedicamento: r.nombre,
+      unidadesPorCaja: num(r.unidades_por_caja) > 0 ? num(r.unidades_por_caja) : 1,
+      stockActual,
+      stockTransito: 0,
+      stockMinimoSnap: stockMinimo,
+      puntoPedidoSnap: puntoPedido,
+      stockMaximoSnap: stockMaximo,
+      cajasPropuestas: 0,
+      cajasValidadas: null,
+      motivoAjuste: null,
+      motivoAjusteOtro: null,
+      ajustado: false,
+      activo: false,
+      editable: false,
+    };
+  });
+
+  return [...activasUi, ...inactivasUi].sort(sortLineasPropuestaUI);
+}
+
 export async function insertarLineasPropuesta(
   propuestaId: number,
+  area: string,
   rows: Array<{
     cn: string; nombre: string; unidadesPorCaja: number; stockCajas: number;
     stockMinimo: number; puntoPedido: number; stockMaximo: number; stockTransito: number;
   }>
 ): Promise<void> {
   await ensurePropuestasLineasSchema();
+  await ensureNutricionDecimalSchema(area);
   const sql = getDb();
   for (const r of rows) {
-    const cajasPropuestas = calcularCajasPropuestas(
-      r.stockCajas,
-      r.puntoPedido,
-      r.stockMaximo,
-      r.stockTransito,
-      r.unidadesPorCaja
+    const stockCajas = normalizeCajasSnap(area, r.stockCajas);
+    const stockMinimo = normalizeCajasSnap(area, r.stockMinimo);
+    const puntoPedido = normalizeCajasSnap(area, r.puntoPedido);
+    const stockMaximo = normalizeCajasSnap(area, r.stockMaximo);
+    const stockTransito = normalizeCajasSnap(area, r.stockTransito);
+    const cajasPropuestas = normalizeCajasSnap(
+      area,
+      calcularCajasPropuestas(
+        stockCajas,
+        puntoPedido,
+        stockMaximo,
+        stockTransito,
+        r.unidadesPorCaja
+      )
     );
     await sql`
       INSERT INTO propuestas_lineas (
@@ -702,7 +870,7 @@ export async function insertarLineasPropuesta(
         cajas_propuestas, cajas_validadas, ajustado
       ) VALUES (
         ${propuestaId}, ${r.cn}, ${r.nombre}, ${r.unidadesPorCaja},
-        ${r.stockCajas}, ${r.stockTransito}, ${r.stockMinimo}, ${r.puntoPedido}, ${r.stockMaximo}, ${r.stockMaximo},
+        ${stockCajas}, ${stockTransito}, ${stockMinimo}, ${puntoPedido}, ${stockMaximo}, ${stockMaximo},
         ${cajasPropuestas}, ${cajasPropuestas}, false
       );
     `;
@@ -716,6 +884,7 @@ export async function reemplazarLineasPropuestaDesdeRecuento(
   stockTransitoByCn: Record<string, number>
 ): Promise<number> {
   await ensurePropuestasLineasSchema();
+  await ensureNutricionDecimalSchema(area);
   const sql = getDb();
   const filas = await getRecuentoConStockParaPropuesta(importacionId, area);
 
@@ -724,17 +893,20 @@ export async function reemplazarLineasPropuestaDesdeRecuento(
 
   for (const r of filas) {
     const unidadesPorCaja = Number(r.unidades_por_caja);
-    const stockTransito = Number(stockTransitoByCn[r.cn] ?? 0);
-    const stockMinimo = Number(r.stock_minimo ?? 0);
-    const puntoPedido = Number(r.punto_pedido ?? 0);
-    const stockMaximo = Number(r.stock_maximo ?? r.stock_minimo ?? 0);
-    const stockActual = Number(r.stock_cajas);
-    const cajasPropuestas = calcularCajasPropuestas(
-      stockActual,
-      puntoPedido,
-      stockMaximo,
-      stockTransito,
-      unidadesPorCaja
+    const stockTransito = normalizeCajasSnap(area, Number(stockTransitoByCn[r.cn] ?? 0));
+    const stockMinimo = normalizeCajasSnap(area, Number(r.stock_minimo ?? 0));
+    const puntoPedido = normalizeCajasSnap(area, Number(r.punto_pedido ?? 0));
+    const stockMaximo = normalizeCajasSnap(area, Number(r.stock_maximo ?? r.stock_minimo ?? 0));
+    const stockActual = normalizeCajasSnap(area, Number(r.stock_cajas));
+    const cajasPropuestas = normalizeCajasSnap(
+      area,
+      calcularCajasPropuestas(
+        stockActual,
+        puntoPedido,
+        stockMaximo,
+        stockTransito,
+        unidadesPorCaja
+      )
     );
 
     await sql`
@@ -798,14 +970,21 @@ export async function getLineaConPropuesta(lineaId: number): Promise<{
 }
 
 export async function actualizarLineaPropuesta(
-  lineaId: number, propuestaId: number,
-  cajasValidadas: number, unidadesFinal: number,
-  motivoAjuste: string | null, motivoAjusteOtro: string | null, ajustado: boolean
+  lineaId: number,
+  propuestaId: number,
+  area: string,
+  cajasValidadas: number,
+  unidadesFinal: number,
+  motivoAjuste: string | null,
+  motivoAjusteOtro: string | null,
+  ajustado: boolean
 ): Promise<void> {
+  await ensureNutricionDecimalSchema(area);
   const sql = getDb();
+  const cajas = normalizeCajasSnap(area, cajasValidadas);
   await sql`
     UPDATE propuestas_lineas
-    SET cajas_validadas = ${cajasValidadas},
+    SET cajas_validadas = ${cajas},
         motivo_ajuste = ${motivoAjuste},
         motivo_ajuste_otro = ${motivoAjusteOtro},
         ajustado = ${ajustado},
@@ -818,17 +997,20 @@ export async function actualizarCalculoAutomaticoLineaPropuesta(
   lineaId: number,
   propuestaId: number,
   cajasPropuestas: number,
-  unidadesPorCaja: number
+  unidadesPorCaja: number,
+  area: string
 ): Promise<void> {
+  await ensureNutricionDecimalSchema(area);
   const sql = getDb();
+  const cajas = normalizeCajasSnap(area, cajasPropuestas);
   await sql`
     UPDATE propuestas_lineas
-    SET cajas_propuestas = ${cajasPropuestas},
-        cajas_validadas = ${cajasPropuestas},
+    SET cajas_propuestas = ${cajas},
+        cajas_validadas = ${cajas},
         ajustado = false,
         motivo_ajuste = NULL,
         motivo_ajuste_otro = NULL,
-        unidades_final = ${Math.round(cajasPropuestas * unidadesPorCaja)}
+        unidades_final = ${Math.round(cajas * unidadesPorCaja)}
     WHERE id = ${lineaId} AND propuesta_id = ${propuestaId};
   `;
 }

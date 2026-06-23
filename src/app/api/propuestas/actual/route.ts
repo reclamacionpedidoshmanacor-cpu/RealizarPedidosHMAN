@@ -4,6 +4,8 @@ import { isAlmacenArea } from '@/lib/almacen';
 import {
   actualizarStockTransitoSnapshot,
   actualizarCalculoAutomaticoLineaPropuesta,
+  ensureNutricionDecimalSchema,
+  buildLineasPropuestaParaUi,
   getBorradorPropuesta,
   crearPropuesta,
   getLineasPropuesta,
@@ -11,6 +13,7 @@ import {
   getPendienteRecuento,
   getRecuentoConStockParaPropuesta,
   insertarLineasPropuesta,
+  reemplazarLineasPropuestaDesdeRecuento,
 } from '@/lib/stock-propuesta-neon';
 import { loadCantidadTransitoByCn } from '@/lib/pedidos-pendientes';
 import { calcularCajasPropuestas } from '@/lib/propuesta';
@@ -37,6 +40,18 @@ function buildStockTransitoCajasByCn(
     byCn[row.cn] = cajasTransito > 0 ? roundThreeDecimals(cajasTransito) : 0;
   }
   return byCn;
+}
+
+async function loadStockTransitoCajasSafely(
+  rows: Array<{ cn: string; unidadesPorCaja: number }>
+): Promise<Record<string, number>> {
+  if (rows.length === 0) return {};
+  try {
+    const transitoUnidadesByCn = await loadCantidadTransitoByCn(rows.map((row) => row.cn));
+    return buildStockTransitoCajasByCn(transitoUnidadesByCn, rows);
+  } catch {
+    return {};
+  }
 }
 
 export async function GET(req: NextRequest) {
@@ -83,6 +98,8 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    await ensureNutricionDecimalSchema(session.area);
+
     let propuesta = await getBorradorPropuesta(session.area, recuento.id);
     let stockTransitoByCn: Record<string, number> = {};
 
@@ -91,14 +108,13 @@ export async function GET(req: NextRequest) {
 
       const filas = await getRecuentoConStockParaPropuesta(recuento.id, session.area);
       if (filas.length > 0) {
-        const transitoUnidadesByCn = await loadCantidadTransitoByCn(filas.map((r) => r.cn));
-        stockTransitoByCn = buildStockTransitoCajasByCn(
-          transitoUnidadesByCn,
+        stockTransitoByCn = await loadStockTransitoCajasSafely(
           filas.map((r) => ({ cn: r.cn, unidadesPorCaja: Number(r.unidades_por_caja) }))
         );
 
         await insertarLineasPropuesta(
           propuesta.id,
+          session.area,
           filas.map((r) => ({
             cn: r.cn,
             nombre: r.nombre,
@@ -114,10 +130,27 @@ export async function GET(req: NextRequest) {
     }
 
     let lineas = await getLineasPropuesta(propuesta.id);
+
+    // Si el borrador quedó vacío (p. ej. se abrió Propuesta antes de completar el recuento manual),
+    // regenerar líneas desde el recuento pendiente actual.
+    if (lineas.length === 0 && propuesta.estado === 'borrador') {
+      const filasRecuento = await getRecuentoConStockParaPropuesta(recuento.id, session.area);
+      if (filasRecuento.length > 0) {
+        stockTransitoByCn = await loadStockTransitoCajasSafely(
+          filasRecuento.map((r) => ({ cn: r.cn, unidadesPorCaja: Number(r.unidades_por_caja) }))
+        );
+        await reemplazarLineasPropuestaDesdeRecuento(
+          propuesta.id,
+          recuento.id,
+          session.area,
+          stockTransitoByCn
+        );
+        lineas = await getLineasPropuesta(propuesta.id);
+      }
+    }
+
     if (lineas.length > 0 && Object.keys(stockTransitoByCn).length === 0) {
-      const transitoUnidadesByCn = await loadCantidadTransitoByCn(lineas.map((linea) => linea.cn));
-      stockTransitoByCn = buildStockTransitoCajasByCn(
-        transitoUnidadesByCn,
+      stockTransitoByCn = await loadStockTransitoCajasSafely(
         lineas.map((linea) => ({ cn: linea.cn, unidadesPorCaja: linea.unidadesPorCaja }))
       );
     }
@@ -156,7 +189,8 @@ export async function GET(req: NextRequest) {
             item.lineaId,
             propuesta.id,
             item.cajasPropuestas,
-            item.unidadesPorCaja
+            item.unidadesPorCaja,
+            session.area
           )
         )
       );
@@ -166,12 +200,15 @@ export async function GET(req: NextRequest) {
     // Persistimos snapshot de stock en tránsito para auditoría/historial.
     await actualizarStockTransitoSnapshot(propuesta.id, stockTransitoByCn);
 
-    const lineasConTransito = lineas.map((linea) => ({
-      ...linea,
-      stockTransito: Number(stockTransitoByCn[linea.cn] ?? 0),
-    }));
+    const lineasParaUi = await buildLineasPropuestaParaUi(
+      propuesta.id,
+      recuento.id,
+      session.area,
+      propuesta.estado,
+      stockTransitoByCn
+    );
 
-    return NextResponse.json({ recuento, propuesta, lineas: lineasConTransito });
+    return NextResponse.json({ recuento, propuesta, lineas: lineasParaUi });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Error inesperado';
     return NextResponse.json({ error: msg }, { status: 500 });
