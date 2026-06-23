@@ -17,6 +17,7 @@ type MedicamentoManual = {
   unidadesPorCaja: number;
   cajas?: number;
   unidadesSueltas?: number;
+  registradoEnRecuento?: boolean;
   cajasPedidas?: number;
   stockMinimo?: number | null;
   puntoPedido?: number | null;
@@ -74,6 +75,17 @@ function formatDate(v: string | null | undefined): string {
   return Number.isNaN(d.getTime()) ? v : d.toLocaleDateString('es-ES');
 }
 
+function recuentoLineaCambiada(
+  med: MedicamentoManual,
+  cur: DraftLinea,
+  base: DraftLinea,
+  editado: boolean,
+): boolean {
+  const valorCambiado = cur.cajas !== base.cajas || cur.unidadesSueltas !== base.unidadesSueltas;
+  const registroExplicito = editado && !med.registradoEnRecuento;
+  return valorCambiado || registroExplicito;
+}
+
 /* ══════════════════════════════════════════════════════════ */
 export default function RecuentoManualPage() {
   /* ── estado común ── */
@@ -89,6 +101,7 @@ export default function RecuentoManualPage() {
   /* ── estado recuento manual ── */
   const [draft, setDraft] = useState<Record<string, DraftLinea>>({});
   const [baseline, setBaseline] = useState<Record<string, DraftLinea>>({});
+  const [editadosCn, setEditadosCn] = useState<Record<string, boolean>>({});
   const [almacenDraft, setAlmacenDraft] = useState<Record<string, AlmacenDraftLinea>>({});
   const [almacenBaseline, setAlmacenBaseline] = useState<Record<string, AlmacenDraftLinea>>({});
 
@@ -139,6 +152,7 @@ export default function RecuentoManualPage() {
       }
       setDraft(nextDraft);
       setBaseline(nextBaseline);
+      setEditadosCn({});
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
@@ -164,6 +178,7 @@ export default function RecuentoManualPage() {
       setLetra(null);
       setDraft({});
       setBaseline({});
+      setEditadosCn({});
       setAlmacenDraft({});
       setAlmacenBaseline({});
       setRepoBorrador(null);
@@ -203,6 +218,7 @@ export default function RecuentoManualPage() {
   };
 
   const setLinea = (cn: string, patch: Partial<DraftLinea>) => {
+    setEditadosCn((prev) => ({ ...prev, [cn]: true }));
     setDraft((prev) => ({
       ...prev,
       [cn]: { cajas: prev[cn]?.cajas ?? 0, unidadesSueltas: prev[cn]?.unidadesSueltas ?? 0, ...patch },
@@ -212,11 +228,11 @@ export default function RecuentoManualPage() {
   const hasChanges = useMemo(() => {
     if (!data) return false;
     return data.medicamentos.some((med) => {
-      const cur = draft[med.cn];
+      const cur = draft[med.cn] ?? { cajas: 0, unidadesSueltas: 0 };
       const base = baseline[med.cn] ?? { cajas: 0, unidadesSueltas: 0 };
-      return cur && (cur.cajas !== base.cajas || cur.unidadesSueltas !== base.unidadesSueltas);
+      return recuentoLineaCambiada(med, cur, base, Boolean(editadosCn[med.cn]));
     });
-  }, [data, draft, baseline]);
+  }, [data, draft, baseline, editadosCn]);
 
   const handleIncorporarFaltantes = async (alcance: 'ubicacion' | 'area') => {
     if (!data?.pendiente) {
@@ -305,8 +321,12 @@ export default function RecuentoManualPage() {
       .map((med) => {
         const cur = draft[med.cn] ?? { cajas: 0, unidadesSueltas: 0 };
         const base = baseline[med.cn] ?? { cajas: 0, unidadesSueltas: 0 };
-        return { cn: med.cn, cajas: cur.cajas, unidadesSueltas: cur.unidadesSueltas,
-          changed: cur.cajas !== base.cajas || cur.unidadesSueltas !== base.unidadesSueltas };
+        return {
+          cn: med.cn,
+          cajas: cur.cajas,
+          unidadesSueltas: cur.unidadesSueltas,
+          changed: recuentoLineaCambiada(med, cur, base, Boolean(editadosCn[med.cn])),
+        };
       })
       .filter((l) => l.changed)
       .map(({ changed, ...l }) => l);
@@ -812,7 +832,7 @@ export default function RecuentoManualPage() {
               {medicamentos.map((med, idx) => {
                 const val = draft[med.cn] ?? { cajas: 0, unidadesSueltas: 0 };
                 const base = baseline[med.cn] ?? { cajas: 0, unidadesSueltas: 0 };
-                const changed = val.cajas !== base.cajas || val.unidadesSueltas !== base.unidadesSueltas;
+                const changed = recuentoLineaCambiada(med, val, base, Boolean(editadosCn[med.cn]));
                 return (
                   <MedCard key={med.cn} med={med} val={val} changed={changed}
                     index={idx + 1} total={medicamentos.length}
@@ -1002,7 +1022,7 @@ function MedCard({
         <div className="space-y-1">
           <label className="block text-sm font-bold text-slate-600 uppercase tracking-wider">📦 Cajas</label>
           <input type="number" inputMode="numeric" min={0} step={1}
-            value={val.cajas === 0 ? '' : val.cajas} placeholder="0"
+            value={val.cajas}
             onChange={(e) => onChange({ cajas: toIntInput(e.target.value) })}
             className="w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-3xl font-bold text-center text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200" />
         </div>
@@ -1012,14 +1032,14 @@ function MedCard({
           <div className="space-y-1">
             <label className="block text-sm font-bold text-slate-600 uppercase tracking-wider">📦 Cajas</label>
             <input type="number" inputMode="numeric" min={0} step={1}
-              value={val.cajas === 0 ? '' : val.cajas} placeholder="0"
+              value={val.cajas}
               onChange={(e) => onChange({ cajas: toIntInput(e.target.value) })}
               className="w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-3xl font-bold text-center text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200" />
           </div>
           <div className="space-y-1">
             <label className="block text-sm font-bold text-slate-600 uppercase tracking-wider">💊 Uds. sueltas</label>
             <input type="number" inputMode="numeric" min={0} step={1}
-              value={val.unidadesSueltas === 0 ? '' : val.unidadesSueltas} placeholder="0"
+              value={val.unidadesSueltas}
               onChange={(e) => onChange({ unidadesSueltas: toIntInput(e.target.value) })}
               className="w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-3xl font-bold text-center text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200" />
             <p className="text-sm text-slate-400 text-center">(1 caja = {med.unidadesPorCaja} udes)</p>

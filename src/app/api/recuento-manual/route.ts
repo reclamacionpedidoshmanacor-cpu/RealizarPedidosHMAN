@@ -199,6 +199,7 @@ export async function GET(req: NextRequest) {
               unidadesPorCaja,
               cajas,
               unidadesSueltas,
+              registradoEnRecuento: Boolean(linea),
               stockMaximo: med.stockMaximo ?? null,
             };
           })
