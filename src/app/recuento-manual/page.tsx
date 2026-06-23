@@ -54,6 +54,14 @@ type Step = 'area' | 'ubicacion' | 'letra-almacen' | 'recuento' | 'pedido-almace
 type DraftLinea = { cajas: number; unidadesSueltas: number };
 type AlmacenDraftLinea = { cajasPedidas: number };
 
+type CimaPreview = {
+  cn: string;
+  nombre: string;
+  principioActivo: string;
+  presentacion: string;
+  unidadesPorCajaInferidas: number | null;
+};
+
 /* ─── configuración de áreas ─── */
 const AREAS: { id: AreaId; label: string; emoji: string; color: string; bg: string; border: string }[] = [
   { id: 'oncologia', label: 'Oncología',       emoji: '🏥', color: 'text-violet-700', bg: 'bg-violet-50',  border: 'border-violet-300' },
@@ -144,6 +152,9 @@ export default function RecuentoManualPage() {
   const [editadosCn, setEditadosCn] = useState<Record<string, boolean>>({});
   const [almacenDraft, setAlmacenDraft] = useState<Record<string, AlmacenDraftLinea>>({});
   const [almacenBaseline, setAlmacenBaseline] = useState<Record<string, AlmacenDraftLinea>>({});
+  const [extrasAlmacen, setExtrasAlmacen] = useState<MedicamentoManual[]>([]);
+  const [sustitucionCnViejo, setSustitucionCnViejo] = useState<string | null>(null);
+  const [sustituyendo, setSustituyendo] = useState(false);
 
   /* ── estado reposición (solo UPE) ── */
   const [repoBorrador, setRepoBorrador] = useState<ReposicionBorrador>(null);
@@ -221,6 +232,8 @@ export default function RecuentoManualPage() {
       setEditadosCn({});
       setAlmacenDraft({});
       setAlmacenBaseline({});
+      setExtrasAlmacen([]);
+      setSustitucionCnViejo(null);
       setRepoBorrador(null);
       setRepoUbicacionesUsadas([]);
       setRepoDraft({});
@@ -236,6 +249,8 @@ export default function RecuentoManualPage() {
 
   const seleccionarUbicacion = async (ub: string) => {
     setUbicacion(ub);
+    setExtrasAlmacen([]);
+    setSustitucionCnViejo(null);
     if (area === 'almacen') {
       setLetra(null);
       const res = await fetch(`/api/recuento-manual?ubicacion=${encodeURIComponent(ub)}`, { cache: 'no-store' });
@@ -308,18 +323,69 @@ export default function RecuentoManualPage() {
     }
   };
 
+  const medicamentosAlmacenVisibles = useMemo(() => {
+    const base = data?.medicamentos ?? [];
+    const extras = extrasAlmacen.filter((e) => !base.some((b) => b.cn === e.cn));
+    return [...extras, ...base];
+  }, [data?.medicamentos, extrasAlmacen]);
+
   const almacenHasChanges = useMemo(() => {
     if (!data || data.modo !== 'pedido-almacen') return false;
-    return data.medicamentos.some((med) => {
+    return medicamentosAlmacenVisibles.some((med) => {
       const cur = almacenDraft[med.cn];
       const base = almacenBaseline[med.cn] ?? { cajasPedidas: 0 };
       return cur && cur.cajasPedidas !== base.cajasPedidas;
     });
-  }, [data, almacenDraft, almacenBaseline]);
+  }, [data, almacenDraft, almacenBaseline, medicamentosAlmacenVisibles]);
+
+  const handleConfirmarSustitucion = async (
+    cnViejo: string,
+    cnNuevo: string,
+    cajasPedidas: number,
+  ) => {
+    if (!ubicacion) return;
+    setSustituyendo(true);
+    try {
+      const res = await fetch('/api/pedido-almacen/sustituir', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ cnViejo, cnNuevo, ubicacion, cajasPedidas }),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo sustituir.');
+
+      const nuevo = payload.medicamento as MedicamentoManual;
+      const cajas = Number(nuevo.cajasPedidas ?? cajasPedidas);
+
+      setExtrasAlmacen((prev) => {
+        const filtrados = prev.filter((m) => m.cn !== cnViejo && m.cn !== nuevo.cn);
+        const yaEnLetra = (data?.medicamentos ?? []).some((m) => m.cn === nuevo.cn);
+        if (yaEnLetra) return filtrados;
+        return [{ ...nuevo, activo: true }, ...filtrados];
+      });
+
+      const draftVal = { cajasPedidas: cajas };
+      setAlmacenDraft((prev) => ({ ...prev, [nuevo.cn]: draftVal }));
+      if (cajas > 0) {
+        setAlmacenBaseline((prev) => ({ ...prev, [nuevo.cn]: draftVal }));
+      }
+
+      setSustitucionCnViejo(null);
+      toast.success(
+        `Sustituido CN ${cnViejo} → ${nuevo.cn}${cajas > 0 ? ` · ${cajas} caja(s) en pedido` : ''}`
+      );
+      if (letra) await cargarUbicacion(ubicacion, letra);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setSustituyendo(false);
+    }
+  };
 
   const handleGuardarAlmacen = async () => {
     if (!data || !ubicacion) return;
-    const cambios = data.medicamentos
+    const cambios = medicamentosAlmacenVisibles
       .map((med) => {
         const cur = almacenDraft[med.cn] ?? { cajasPedidas: 0 };
         const base = almacenBaseline[med.cn] ?? { cajasPedidas: 0 };
@@ -749,7 +815,7 @@ export default function RecuentoManualPage() {
 
   /* ── PASO ALMACÉN: Pedido por letra ── */
   if (step === 'pedido-almacen') {
-    const medicamentos = data?.medicamentos ?? [];
+    const medicamentos = medicamentosAlmacenVisibles;
     const almacenHasAnyQty = medicamentos.some((med) => (almacenDraft[med.cn]?.cajasPedidas ?? 0) > 0);
 
     return (
@@ -783,16 +849,32 @@ export default function RecuentoManualPage() {
               const qty = almacenDraft[med.cn]?.cajasPedidas ?? 0;
               const base = almacenBaseline[med.cn]?.cajasPedidas ?? 0;
               const changed = qty !== base;
+              const esExtra = extrasAlmacen.some((e) => e.cn === med.cn);
               return (
-                <AlmacenMedCard
-                  key={med.cn}
-                  med={med}
-                  cantidadCajas={qty}
-                  changed={changed}
-                  index={idx + 1}
-                  total={medicamentos.length}
-                  onChange={(v) => setAlmacenDraft((prev) => ({ ...prev, [med.cn]: { cajasPedidas: v } }))}
-                />
+                <div key={med.cn} className="space-y-2">
+                  {esExtra && (
+                    <p className="text-xs font-semibold text-violet-700 px-1">✨ Nuevo sustituto (añadido ahora)</p>
+                  )}
+                  <AlmacenMedCard
+                    med={med}
+                    cantidadCajas={qty}
+                    changed={changed}
+                    index={idx + 1}
+                    total={medicamentos.length}
+                    onChange={(v) => setAlmacenDraft((prev) => ({ ...prev, [med.cn]: { cajasPedidas: v } }))}
+                    onSustituir={() => setSustitucionCnViejo((cur) => (cur === med.cn ? null : med.cn))}
+                    sustitucionAbierta={sustitucionCnViejo === med.cn}
+                  />
+                  {sustitucionCnViejo === med.cn && (
+                    <SustituirPorPanel
+                      cnViejo={med.cn}
+                      nombreViejo={med.principioActivo ?? med.nombre}
+                      busy={sustituyendo}
+                      onCancelar={() => setSustitucionCnViejo(null)}
+                      onConfirmar={(cnNuevo, cajas) => void handleConfirmarSustitucion(med.cn, cnNuevo, cajas)}
+                    />
+                  )}
+                </div>
               );
             })
           )}
@@ -1094,12 +1176,137 @@ function MedCard({
   );
 }
 
+/* ════════════════ Panel sustituir por — solo almacén ════════════════ */
+function SustituirPorPanel({
+  cnViejo,
+  nombreViejo,
+  busy,
+  onCancelar,
+  onConfirmar,
+}: {
+  cnViejo: string;
+  nombreViejo: string;
+  busy: boolean;
+  onCancelar: () => void;
+  onConfirmar: (cnNuevo: string, cajasPedidas: number) => void;
+}) {
+  const [cnNuevo, setCnNuevo] = useState('');
+  const [cajas, setCajas] = useState(0);
+  const [cima, setCima] = useState<CimaPreview | null>(null);
+  const [buscandoCima, setBuscandoCima] = useState(false);
+
+  const consultarCima = async (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      toast.error('Introduce el CN nuevo.');
+      return;
+    }
+    setBuscandoCima(true);
+    setCima(null);
+    try {
+      const res = await fetch(`/api/catalogo/cima?cn=${encodeURIComponent(trimmed)}`, {
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? 'CN no encontrado en CIMA');
+        return;
+      }
+      setCnNuevo(data.cn ?? trimmed);
+      setCima({
+        cn: data.cn,
+        nombre: data.nombre,
+        principioActivo: data.principioActivo,
+        presentacion: data.presentacion,
+        unidadesPorCajaInferidas: data.unidadesPorCajaInferidas,
+      });
+    } catch {
+      toast.error('Error al consultar CIMA');
+    } finally {
+      setBuscandoCima(false);
+    }
+  };
+
+  return (
+    <div className="rounded-2xl border-2 border-violet-300 bg-violet-50 px-5 py-4 space-y-4">
+      <div>
+        <p className="text-sm font-bold text-violet-800 uppercase tracking-wide">↪ Sustituir por</p>
+        <p className="text-sm text-violet-700 mt-1">
+          CN {cnViejo} · {nombreViejo} — se dará de baja y se creará/activará el CN nuevo en esta ubicación.
+        </p>
+      </div>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          inputMode="numeric"
+          placeholder="CN nuevo o código SAP"
+          value={cnNuevo}
+          onChange={(e) => { setCnNuevo(e.target.value.trim()); setCima(null); }}
+          onBlur={() => { if (cnNuevo.trim()) void consultarCima(cnNuevo); }}
+          className="flex-1 rounded-xl border-2 border-violet-200 px-4 py-3 text-lg font-mono focus:border-violet-500 focus:outline-none"
+        />
+        <button
+          type="button"
+          onClick={() => void consultarCima(cnNuevo)}
+          disabled={buscandoCima || !cnNuevo.trim()}
+          className="shrink-0 rounded-xl border-2 border-violet-400 bg-white px-4 py-3 text-sm font-bold text-violet-800 disabled:opacity-50"
+        >
+          {buscandoCima ? '…' : 'CIMA'}
+        </button>
+      </div>
+      {cima && (
+        <div className="rounded-xl bg-white border border-violet-200 px-4 py-3 text-sm space-y-1">
+          <p className="font-bold text-slate-800">{cima.principioActivo || cima.nombre}</p>
+          <p className="text-slate-500 italic">{cima.nombre}</p>
+          {cima.presentacion && <p className="text-slate-600">{cima.presentacion}</p>}
+          <p className="font-mono text-violet-700">CN {cima.cn}</p>
+          {cima.unidadesPorCajaInferidas != null && (
+            <p className="text-slate-500">Uds/caja: {cima.unidadesPorCajaInferidas}</p>
+          )}
+        </div>
+      )}
+      <div className="space-y-1">
+        <label className="block text-sm font-bold text-violet-800">📦 Cajas a pedir del nuevo CN</label>
+        <input
+          type="number"
+          inputMode="numeric"
+          min={0}
+          value={cajas === 0 ? '' : cajas}
+          placeholder="0"
+          onChange={(e) => setCajas(toIntInput(e.target.value))}
+          className="w-full rounded-xl border-2 border-violet-200 px-4 py-3 text-2xl font-bold text-center"
+        />
+      </div>
+      <div className="flex flex-wrap gap-2 justify-end">
+        <button
+          type="button"
+          onClick={onCancelar}
+          disabled={busy}
+          className="rounded-xl border-2 border-slate-300 bg-white px-5 py-3 text-sm font-bold text-slate-600"
+        >
+          Cancelar
+        </button>
+        <button
+          type="button"
+          onClick={() => onConfirmar(cnNuevo, cajas)}
+          disabled={busy || !cima || !cnNuevo.trim()}
+          className="rounded-xl bg-violet-700 px-6 py-3 text-sm font-bold text-white disabled:opacity-50"
+        >
+          {busy ? 'Sustituyendo…' : 'Confirmar sustitución'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ════════════════ Tarjeta de medicamento — pedido almacén ════════════════ */
 function AlmacenMedCard({
-  med, cantidadCajas, changed, index, total, onChange,
+  med, cantidadCajas, changed, index, total, onChange, onSustituir, sustitucionAbierta,
 }: {
   med: MedicamentoManual; cantidadCajas: number; changed: boolean;
   index: number; total: number; onChange: (v: number) => void;
+  onSustituir?: () => void;
+  sustitucionAbierta?: boolean;
 }) {
   const hints: string[] = [];
   if (med.stockMinimo != null) hints.push(`mín ${med.stockMinimo}`);
@@ -1149,6 +1356,19 @@ function AlmacenMedCard({
         )}
       </div>
       {changed && <p className="mt-3 text-sm font-semibold text-amber-600">✏ Modificado</p>}
+      {onSustituir && (
+        <button
+          type="button"
+          onClick={onSustituir}
+          className={`mt-4 w-full rounded-xl border-2 px-4 py-3 text-sm font-bold transition-colors ${
+            sustitucionAbierta
+              ? 'border-violet-500 bg-violet-100 text-violet-800'
+              : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-violet-300 hover:text-violet-700'
+          }`}
+        >
+          ↪ Sustituir por otro CN
+        </button>
+      )}
     </div>
   );
 }

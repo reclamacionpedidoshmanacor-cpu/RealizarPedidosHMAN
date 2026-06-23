@@ -20,6 +20,19 @@ interface Medicamento {
 type SortKey = 'principioActivo' | 'nombre' | 'cn' | 'ubicacion' | 'puntoPedido';
 type SortDir = 'asc' | 'desc';
 
+type RevisionPendiente = {
+  id: number;
+  cn: string;
+  cnAnterior: string | null;
+  origen: string;
+  ubicacion: string | null;
+  nombreCima: string | null;
+  principioActivoCima: string | null;
+  presentacionCima: string | null;
+  unidadesPorCaja: number | null;
+  creadoEn: string;
+};
+
 type EditForm = Omit<Partial<Medicamento>, 'stockMinimo' | 'puntoPedido' | 'stockMaximo'> & {
   stockMinimo?: number | '' | null;
   puntoPedido?: number | '' | null;
@@ -83,6 +96,9 @@ export default function CatalogoPage() {
   const [nuevoData, setNuevoData] = useState({ ...NUEVO_EMPTY });
   const [savingNuevo, setSavingNuevo] = useState(false);
   const [cimaBuscando, setCimaBuscando] = useState(false);
+  const [revisionPendiente, setRevisionPendiente] = useState<RevisionPendiente[]>([]);
+  const [revisionLoading, setRevisionLoading] = useState(false);
+  const [marcandoRevisionId, setMarcandoRevisionId] = useState<number | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const getArea = () => {
@@ -120,7 +136,51 @@ export default function CatalogoPage() {
     }
   }, []);
 
-  useEffect(() => { fetchMeds(); }, [fetchMeds]);
+  const loadRevisionPendiente = useCallback(async () => {
+    if (getArea() !== 'almacen') {
+      setRevisionPendiente([]);
+      return;
+    }
+    setRevisionLoading(true);
+    try {
+      const res = await fetch('/api/catalogo/revision-pendiente', { cache: 'no-store' });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo cargar revisiones pendientes.');
+      setRevisionPendiente(Array.isArray(payload.items) ? payload.items : []);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setRevisionLoading(false);
+    }
+  }, []);
+
+  const marcarRevisionRevisada = async (id: number) => {
+    setMarcandoRevisionId(id);
+    try {
+      const res = await fetch('/api/catalogo/revision-pendiente', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo marcar como revisado.');
+      toast.success('Sustitución revisada y confirmada en catálogo.');
+      setRevisionPendiente((prev) => prev.filter((it) => it.id !== id));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setMarcandoRevisionId(null);
+    }
+  };
+
+  const localizarCnEnCatalogo = (cn: string) => {
+    setSearch(cn);
+    setFilterActivo('');
+    setFilterUbicacion('');
+    toast.message(`Filtrado por CN ${cn}. Comprueba los datos en la tabla.`);
+  };
+
+  useEffect(() => { void fetchMeds(); void loadRevisionPendiente(); }, [fetchMeds, loadRevisionPendiente]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -516,6 +576,118 @@ export default function CatalogoPage() {
           <button onClick={() => setCimaResultado(null)} className="text-violet-400 hover:text-violet-700">✕</button>
         </div>
       )}
+
+      {esAlmacen ? (
+        <section className="mb-6 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-lg font-bold text-slate-800">Pendiente de revisar</h2>
+              <p className="text-xs text-slate-500">
+                Sustituciones hechas en el pasillo con datos de CIMA. Comprueba que el catálogo coincide y marca como revisado.
+              </p>
+            </div>
+            {revisionPendiente.length > 0 ? (
+              <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800">
+                {revisionPendiente.length} pendiente{revisionPendiente.length === 1 ? '' : 's'}
+              </span>
+            ) : null}
+          </div>
+
+          <div className="rounded-xl border border-amber-200 bg-white overflow-x-auto shadow-sm">
+            {revisionLoading ? (
+              <p className="px-4 py-6 text-sm text-slate-500">Cargando revisiones pendientes…</p>
+            ) : revisionPendiente.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-slate-500 text-center">
+                No hay sustituciones pendientes de revisar.
+              </p>
+            ) : (
+              <table className="min-w-full text-sm">
+                <thead className="bg-amber-50 text-xs uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Fecha</th>
+                    <th className="px-3 py-2 text-left">CN nuevo</th>
+                    <th className="px-3 py-2 text-left">Sustituye a</th>
+                    <th className="px-3 py-2 text-left">Ubicación</th>
+                    <th className="px-3 py-2 text-left">Datos CIMA</th>
+                    <th className="px-3 py-2 text-left">En catálogo</th>
+                    <th className="px-3 py-2 text-right">Uds/caja</th>
+                    <th className="px-3 py-2 text-right">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {revisionPendiente.map((it) => {
+                    const enCatalogo = meds.find((m) => m.cn === it.cn);
+                    return (
+                      <tr key={it.id} className="border-t border-slate-100 hover:bg-slate-50 align-top">
+                        <td className="px-3 py-2 text-slate-600 whitespace-nowrap">
+                          {new Date(it.creadoEn).toLocaleString('es-ES', {
+                            day: '2-digit',
+                            month: '2-digit',
+                            year: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </td>
+                        <td className="px-3 py-2 font-mono font-semibold text-slate-800">{it.cn}</td>
+                        <td className="px-3 py-2 font-mono text-slate-600">{it.cnAnterior ?? '—'}</td>
+                        <td className="px-3 py-2 text-slate-700">{it.ubicacion ?? '—'}</td>
+                        <td className="px-3 py-2 text-slate-700 max-w-xs">
+                          <p className="font-medium">{it.nombreCima ?? '—'}</p>
+                          {it.principioActivoCima ? (
+                            <p className="text-xs text-slate-500">{it.principioActivoCima}</p>
+                          ) : null}
+                          {it.presentacionCima ? (
+                            <p className="text-xs text-slate-500">{it.presentacionCima}</p>
+                          ) : null}
+                        </td>
+                        <td className="px-3 py-2 text-slate-700 max-w-xs">
+                          {enCatalogo ? (
+                            <>
+                              <p className="font-medium">{enCatalogo.nombre}</p>
+                              <p className="text-xs text-slate-500">{enCatalogo.principioActivo ?? '—'}</p>
+                              <p className="text-xs text-slate-500">{enCatalogo.presentacion ?? '—'}</p>
+                              {!enCatalogo.activo ? (
+                                <p className="text-xs font-semibold text-red-600 mt-1">CN inactivo en catálogo</p>
+                              ) : null}
+                            </>
+                          ) : (
+                            <p className="text-xs font-semibold text-red-600">No encontrado en catálogo</p>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-right text-slate-700">
+                          {it.unidadesPorCaja ?? '—'}
+                          {enCatalogo && it.unidadesPorCaja != null && enCatalogo.unidadesPorCaja !== it.unidadesPorCaja ? (
+                            <p className="text-xs text-amber-700">Cat.: {enCatalogo.unidadesPorCaja}</p>
+                          ) : null}
+                        </td>
+                        <td className="px-3 py-2 text-right whitespace-nowrap">
+                          <div className="inline-flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => localizarCnEnCatalogo(it.cn)}
+                              className="rounded-lg border border-teal-300 px-2 py-1 text-xs font-semibold text-teal-700 hover:bg-teal-50"
+                            >
+                              Localizar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => marcarRevisionRevisada(it.id)}
+                              disabled={marcandoRevisionId === it.id}
+                              className="rounded-lg border border-emerald-300 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                            >
+                              {marcandoRevisionId === it.id ? 'Guardando…' : 'Marcar revisado'}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </section>
+      ) : null}
 
       {/* Filtros */}
       <div className="flex flex-wrap gap-3 mb-4">
