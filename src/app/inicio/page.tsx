@@ -694,6 +694,8 @@ export default function InicioPage() {
   }, [cargarOperativo, cargarMovimientos]);
 
   const gruposMovActuales = movTab === 'suben' ? (movimientos?.suben ?? []) : (movimientos?.bajan ?? []);
+  const totalSuben = movimientos?.resumen?.totalSuben ?? 0;
+  const totalBajan = movimientos?.resumen?.totalBajan ?? 0;
 
   const toggleBajoMinimo = () => {
     const nextOpen = !bajoMinimoOpen;
@@ -943,7 +945,7 @@ export default function InicioPage() {
                   : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
               }`}
             >
-              ↑ Suben / Nuevos ({movimientos.resumen.totalSuben})
+              ↑ Suben / Nuevos ({totalSuben})
             </button>
             <button
               type="button"
@@ -954,7 +956,7 @@ export default function InicioPage() {
                   : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
               }`}
             >
-              ↓ Bajan / Parados ({movimientos.resumen.totalBajan})
+              ↓ Bajan / Parados ({totalBajan})
             </button>
           </div>
         )}

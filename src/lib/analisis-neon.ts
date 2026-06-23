@@ -1,4 +1,5 @@
 import { neon } from '@neondatabase/serverless';
+import 'server-only';
 import {
   classifyDiagnostico,
   type DiagnosticoGrupo,

@@ -16,9 +16,11 @@ import type {
   AnalisisDatos, GrupoCard, TopMed, TopProtocolo,
   GrupoDetalle, DiagnosticoDetalle, IndicacionDetalle, GastoAnualServicio,
   AbcItem, CostePacienteCiclo, OutlierItem, TemporalMesStacked,
-  ModoComparativa,
 } from '@/lib/analisis-neon';
-import { MODO_COMPARATIVA_LABELS } from '@/lib/analisis-neon';
+import {
+  type ModoComparativa,
+  MODO_COMPARATIVA_LABELS,
+} from '@/lib/analisis-comparativa';
 
 // Alcance de visualización: total del área o un servicio concreto
 type ServicioSel = Servicio | 'total';
