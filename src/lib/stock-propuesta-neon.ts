@@ -790,6 +790,7 @@ function sortLineasPropuestaUI(a: PropuestaLineaUI, b: PropuestaLineaUI): number
   return nameA.localeCompare(nameB, 'es', { sensitivity: 'base' });
 }
 
+/** Todas las áreas: líneas activas pedibles + inactivas del recuento en solo lectura. */
 export async function buildLineasPropuestaParaUi(
   propuestaId: number,
   importacionId: number,

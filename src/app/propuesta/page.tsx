@@ -841,35 +841,66 @@ export default function PropuestaPage() {
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {detalleByPropuesta[p.id].lineas.map((linea, lineIdx) => (
-                                    <tr key={linea.id} className={lineIdx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
-                                      <td className="px-3 py-2 font-mono text-[11px] text-slate-600">{linea.cn}</td>
+                                  {detalleByPropuesta[p.id].lineas.map((linea, lineIdx) => {
+                                    const inactiva = esLineaInactiva(linea);
+                                    return (
+                                    <tr
+                                      key={inactiva ? `hist-inactivo-${linea.cn}` : linea.id}
+                                      className={
+                                        inactiva
+                                          ? 'bg-slate-100/90 text-slate-400 italic'
+                                          : lineIdx % 2 === 0
+                                            ? 'bg-white'
+                                            : 'bg-slate-50/50'
+                                      }
+                                    >
+                                      <td className="px-3 py-2 font-mono text-[11px] not-italic">{linea.cn}</td>
                                       <td className="px-3 py-2">
-                                        <p className="font-semibold text-slate-700">{linea.principioActivo ?? linea.nombreMedicamento ?? '—'}</p>
+                                        <div className="flex flex-wrap items-center gap-1">
+                                          {inactiva && (
+                                            <span className="rounded-full bg-slate-200 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-slate-500 not-italic">
+                                              Inactivo
+                                            </span>
+                                          )}
+                                        </div>
+                                        <p className={`not-italic ${inactiva ? 'font-medium text-slate-500' : 'font-semibold text-slate-700'}`}>
+                                          {linea.principioActivo ?? linea.nombreMedicamento ?? '—'}
+                                        </p>
                                         {linea.principioActivo && linea.nombreMedicamento && (
                                           <p className="text-[11px] italic text-slate-400">{linea.nombreMedicamento}</p>
                                         )}
                                       </td>
-                                      <td className="px-3 py-2 text-center tabular-nums text-slate-700">
+                                      <td className="px-3 py-2 text-center tabular-nums not-italic">
                                         {fmtUnidades(Number(linea.stockActual) * Number(linea.unidadesPorCaja))}
                                       </td>
-                                      <td className="px-3 py-2 text-center tabular-nums text-slate-600">{Number(linea.stockActual).toFixed(1)}</td>
-                                      <td className="px-3 py-2 text-center tabular-nums text-violet-700">{Number(linea.stockTransito ?? 0).toFixed(1)}</td>
-                                      <td className="px-3 py-2 text-center tabular-nums text-slate-600">{linea.cajasPropuestas}</td>
-                                      <td className="px-3 py-2 text-center tabular-nums text-slate-500">
-                                        {fmtUnidades(cajasAUnidades(linea.cajasPropuestas, linea.unidadesPorCaja))}
+                                      <td className="px-3 py-2 text-center tabular-nums not-italic">{Number(linea.stockActual).toFixed(1)}</td>
+                                      <td className="px-3 py-2 text-center tabular-nums not-italic">
+                                        {inactiva ? '—' : Number(linea.stockTransito ?? 0).toFixed(1)}
                                       </td>
-                                      <td className="px-3 py-2 text-center tabular-nums text-slate-700 font-semibold">{linea.cajasValidadas ?? linea.cajasPropuestas}</td>
-                                      <td className="px-3 py-2 text-center tabular-nums text-slate-600">
-                                        {fmtUnidades(cajasAUnidades(linea.cajasValidadas ?? linea.cajasPropuestas, linea.unidadesPorCaja))}
+                                      <td className="px-3 py-2 text-center tabular-nums not-italic">
+                                        {inactiva ? '—' : linea.cajasPropuestas}
                                       </td>
-                                      <td className="px-3 py-2 text-slate-500">
-                                        {linea.motivoAjuste === 'Otro'
-                                          ? linea.motivoAjusteOtro ?? 'Otro'
-                                          : linea.motivoAjuste ?? '—'}
+                                      <td className="px-3 py-2 text-center tabular-nums not-italic">
+                                        {inactiva ? '—' : fmtUnidades(cajasAUnidades(linea.cajasPropuestas, linea.unidadesPorCaja))}
+                                      </td>
+                                      <td className="px-3 py-2 text-center tabular-nums font-semibold not-italic">
+                                        {inactiva ? '—' : (linea.cajasValidadas ?? linea.cajasPropuestas)}
+                                      </td>
+                                      <td className="px-3 py-2 text-center tabular-nums not-italic">
+                                        {inactiva
+                                          ? '—'
+                                          : fmtUnidades(cajasAUnidades(linea.cajasValidadas ?? linea.cajasPropuestas, linea.unidadesPorCaja))}
+                                      </td>
+                                      <td className="px-3 py-2 not-italic">
+                                        {inactiva
+                                          ? '—'
+                                          : linea.motivoAjuste === 'Otro'
+                                            ? linea.motivoAjusteOtro ?? 'Otro'
+                                            : linea.motivoAjuste ?? '—'}
                                       </td>
                                     </tr>
-                                  ))}
+                                    );
+                                  })}
                                 </tbody>
                               </table>
                             </div>

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
-import { getLineasPropuesta, getPropuestaById } from '@/lib/stock-propuesta-neon';
+import { buildLineasPropuestaParaUi, getLineasPropuesta, getPropuestaById } from '@/lib/stock-propuesta-neon';
 
 export const runtime = 'nodejs';
 
@@ -23,7 +23,20 @@ export async function GET(
       return NextResponse.json({ error: 'Propuesta no encontrada.' }, { status: 404 });
     }
 
-    const lineas = await getLineasPropuesta(propuestaId);
+    const lineas = propuesta.importacionStockId
+      ? await buildLineasPropuestaParaUi(
+          propuestaId,
+          propuesta.importacionStockId,
+          propuesta.area,
+          propuesta.estado,
+          {}
+        )
+      : (await getLineasPropuesta(propuestaId)).map((linea) => ({
+          ...linea,
+          activo: true,
+          editable: false,
+        }));
+
     return NextResponse.json({ propuesta, lineas });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Error inesperado';

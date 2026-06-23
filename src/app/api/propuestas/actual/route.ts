@@ -73,8 +73,18 @@ export async function GET(req: NextRequest) {
         propuesta = await crearPropuesta(session.area, pedido.id);
       }
 
-      const lineas = (await getLineasPropuesta(propuesta.id)).filter(
-        (linea) => (linea.cajasValidadas ?? linea.cajasPropuestas) > 0
+      const lineasParaUi = (
+        await buildLineasPropuestaParaUi(
+          propuesta.id,
+          pedido.id,
+          session.area,
+          propuesta.estado,
+          {}
+        )
+      ).filter(
+        (linea) =>
+          linea.activo === false ||
+          (linea.cajasValidadas ?? linea.cajasPropuestas) > 0
       );
 
       return NextResponse.json({
@@ -85,7 +95,7 @@ export async function GET(req: NextRequest) {
           estado: pedido.estado,
         },
         propuesta,
-        lineas: lineas.map((linea) => ({ ...linea, stockTransito: 0 })),
+        lineas: lineasParaUi,
         modo: 'pedido-almacen',
       });
     }
