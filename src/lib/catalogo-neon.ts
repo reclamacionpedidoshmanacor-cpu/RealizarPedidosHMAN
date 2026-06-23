@@ -62,6 +62,34 @@ function numOrNull(value: unknown): number | null {
 }
 
 let ensureMedicamentosSchemaPromise: Promise<void> | null = null;
+let ensureStockObjetivoDecimalPromise: Promise<void> | null = null;
+
+async function ensureStockObjetivoDecimalCajas(): Promise<void> {
+  if (!ensureStockObjetivoDecimalPromise) {
+    const sql = getCatalogoClient();
+    ensureStockObjetivoDecimalPromise = (async () => {
+      await sql`
+        ALTER TABLE public.stock_objetivo
+          ALTER COLUMN stock_minimo TYPE NUMERIC(12,1)
+          USING round(stock_minimo::numeric, 1);
+      `;
+      await sql`
+        ALTER TABLE public.stock_objetivo
+          ALTER COLUMN punto_pedido TYPE NUMERIC(12,1)
+          USING round(punto_pedido::numeric, 1);
+      `;
+      await sql`
+        ALTER TABLE public.stock_objetivo
+          ALTER COLUMN stock_maximo TYPE NUMERIC(12,1)
+          USING round(stock_maximo::numeric, 1);
+      `;
+    })().catch((err) => {
+      ensureStockObjetivoDecimalPromise = null;
+      throw err;
+    });
+  }
+  await ensureStockObjetivoDecimalPromise;
+}
 
 export async function ensureMedicamentosSchema(): Promise<void> {
   if (!ensureMedicamentosSchemaPromise) {
@@ -260,6 +288,7 @@ export async function updateMedicamento(row: MedicamentoBase) {
 }
 
 export async function upsertStockObjetivo(cn: string, stockMinimo: number, puntoPedido: number, stockMaximo: number | null) {
+  await ensureStockObjetivoDecimalCajas();
   const sql = getCatalogoClient();
   await sql`
     INSERT INTO public.stock_objetivo (cn, stock_minimo, punto_pedido, stock_maximo, actualizado_en)

@@ -14,6 +14,29 @@ export function formatNumber(value: number | null | undefined, decimals = 2): st
   return new Intl.NumberFormat('es-ES', { maximumFractionDigits: decimals }).format(value);
 }
 
+/** Cajas con un decimal (p. ej. 2,5) — catálogo Nutrición. */
+export function formatCajas(value: number | null | undefined, decimals = 1): string {
+  if (value == null) return '—';
+  return new Intl.NumberFormat('es-ES', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  }).format(value);
+}
+
+export function roundCajas(value: number, decimals = 1): number {
+  if (!Number.isFinite(value)) return 0;
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+}
+
+export function parseCajasInput(value: string): number | null {
+  const raw = String(value ?? '').trim().replace(',', '.');
+  if (!raw) return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return roundCajas(n);
+}
+
 export function cnFromSapMaterial(material: string): string {
   const trimmed = String(material ?? '').trim();
   if (!trimmed) return '';

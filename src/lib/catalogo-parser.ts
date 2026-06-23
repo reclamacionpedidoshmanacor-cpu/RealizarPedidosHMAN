@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
-import { cnFromSapMaterial, isMSE } from './utils';
+import { cnFromSapMaterial, isMSE, roundCajas } from './utils';
+import type { AreaId } from './areas';
 
 export interface CatalogoRow {
   cn: string;
@@ -27,13 +28,20 @@ const UBIC_MAP: Record<string, string> = {
   'NEVERA':  'Nevera NEA',
 };
 
+const NUTRICION_UBIC_DEFAULT = 'Nutrición';
+
 function mapUbicacion(raw: string): string {
   const upper = raw.trim().toUpperCase();
   return UBIC_MAP[upper] ?? raw.trim();
 }
 
-function normalize(s: string) {
-  return s.toLowerCase().trim().replace(/\s+/g, ' ');
+function normalize(s: string): string {
+  return s
+    .toLowerCase()
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ');
 }
 
 function parseBool(val: unknown): boolean {
@@ -41,34 +49,70 @@ function parseBool(val: unknown): boolean {
   return s === 'SI' || s === 'S' || s === 'TRUE' || s === '1';
 }
 
+function findCol(headerNorm: string[], candidates: string[]): number {
+  for (const candidate of candidates) {
+    const norm = normalize(candidate);
+    const exact = headerNorm.findIndex((h) => h === norm);
+    if (exact !== -1) return exact;
+  }
+  for (const candidate of candidates) {
+    const norm = normalize(candidate);
+    const partial = headerNorm.findIndex((h) => h.includes(norm) || norm.includes(h));
+    if (partial !== -1) return partial;
+  }
+  return -1;
+}
+
+function toIntOrNull(val: unknown): number | null {
+  const raw = String(val ?? '').trim();
+  if (!raw) return null;
+  const n = Number(raw.replace(',', '.'));
+  if (!Number.isFinite(n)) return null;
+  return Math.max(0, Math.round(n));
+}
+
+function toCajasOrNull(val: unknown): number | null {
+  const raw = String(val ?? '').trim();
+  if (!raw) return null;
+  const n = Number(raw.replace(',', '.'));
+  if (!Number.isFinite(n)) return null;
+  return roundCajas(Math.max(0, n));
+}
+
+function cajasDesdeUdes(udes: number, unidadesPorCaja: number): number {
+  if (unidadesPorCaja <= 0) return 0;
+  return roundCajas(udes / unidadesPorCaja);
+}
+
+function readWorkbookRows(buffer: Buffer): { raw: unknown[][]; errors: string[] } {
+  try {
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as unknown[][];
+    if (raw.length < 2) {
+      return { raw: [], errors: ['El archivo no contiene datos.'] };
+    }
+    return { raw, errors: [] };
+  } catch {
+    return { raw: [], errors: ['No se pudo leer el archivo Excel.'] };
+  }
+}
+
 export function parseCatalogoExcel(buffer: Buffer): CatalogoParseResult {
   const errors: string[] = [];
   const rows: CatalogoRow[] = [];
 
-  let workbook: XLSX.WorkBook;
-  try {
-    workbook = XLSX.read(buffer, { type: 'buffer' });
-  } catch {
-    return { rows, errors: ['No se pudo leer el archivo Excel.'], via: 'OTRO' };
-  }
+  const { raw, errors: readErrors } = readWorkbookRows(buffer);
+  if (readErrors.length) return { rows, errors: readErrors, via: 'OTRO' };
 
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const raw: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as unknown[][];
-
-  if (raw.length < 2) {
-    return { rows, errors: ['El archivo no contiene datos.'], via: 'OTRO' };
-  }
-
-  const headers = (raw[0] as string[]).map(h => String(h));
+  const headers = (raw[0] as string[]).map((h) => String(h));
   const headerNorm = headers.map(normalize);
 
-  // Detectar vía por la primera columna (Title = IV, CODIGO SAP = ORAL)
   const firstColNorm = headerNorm[0];
   const via: 'IV' | 'ORAL' =
     firstColNorm === 'title' ? 'IV' :
     firstColNorm === 'codigo sap' ? 'ORAL' : 'IV';
 
-  // Índices de columnas
   const idx = {
     sap:       headerNorm.findIndex(h => h === 'title' || h === 'codigo sap'),
     ppio:      headerNorm.findIndex(h => h === 'ppio activo'),
@@ -76,9 +120,9 @@ export function parseCatalogoExcel(buffer: Buffer): CatalogoParseResult {
     activo:    headerNorm.findIndex(h => h === 'activo'),
     ubic:      headerNorm.findIndex(h => h === 'ubic' || h === 'ubicacion'),
     multiplo:  headerNorm.findIndex(h => h === 'multiplopedido' || h === 'multiplo pedido'),
-    minimo:    headerNorm.findIndex(h => h === 'stock minimo' || h === 'stock mínimo'),
-    pedido:    headerNorm.findIndex(h => h === 'puntopedido' || h === 'punto pedido' || h === 'puntopedido'),
-    maximo:    headerNorm.findIndex(h => h === 'stock maximo' || h === 'stock máximo'),
+    minimo:    headerNorm.findIndex(h => h === 'stock minimo'),
+    pedido:    headerNorm.findIndex(h => h === 'puntopedido' || h === 'punto pedido'),
+    maximo:    headerNorm.findIndex(h => h === 'stock maximo'),
   };
 
   const missing = (Object.entries(idx) as [string, number][])
@@ -122,4 +166,138 @@ export function parseCatalogoExcel(buffer: Buffer): CatalogoParseResult {
   }
 
   return { rows, errors, via };
+}
+
+function parseViaCatalogo(raw: string): 'IV' | 'ORAL' | 'OTRO' {
+  const v = normalize(raw);
+  if (!v) return 'OTRO';
+  if (v === 'iv' || v.includes('parenteral') || v === 'npt' || v === 'np') return 'IV';
+  if (v === 'oral' || v.includes('enteral') || v === 'ne' || v === 'vo') return 'ORAL';
+  if (v === 'otro' || v === 'otros') return 'OTRO';
+  const upper = raw.trim().toUpperCase();
+  if (upper === 'IV' || upper === 'ORAL' || upper === 'OTRO') return upper;
+  return 'OTRO';
+}
+
+/** Formato Nutrición: Código SAP, Producto, uds/caja y stocks en cajas y/o udes. */
+export function parseCatalogoExcelNutricion(buffer: Buffer): CatalogoParseResult {
+  const errors: string[] = [];
+  const rows: CatalogoRow[] = [];
+
+  const { raw, errors: readErrors } = readWorkbookRows(buffer);
+  if (readErrors.length) return { rows, errors: readErrors, via: 'OTRO' };
+
+  const headers = (raw[0] as string[]).map((h) => String(h));
+  const headerNorm = headers.map(normalize);
+
+  const idx = {
+    sap: findCol(headerNorm, ['codigo sap', 'codigo material', 'material', 'title', 'sap']),
+    producto: findCol(headerNorm, ['producto', 'medicamento', 'marca', 'nombre', 'descripcion']),
+    udesCaja: findCol(headerNorm, [
+      'udes/caja', 'uds/caja', 'ud/caja', 'unidades/caja', 'unidades por caja', 'unidades x caja',
+    ]),
+    minCajas: findCol(headerNorm, [
+      'stock minimo cajas', 'stock min cajas', 'minimo cajas', 'min cajas',
+      'stock minimo (cajas)', 'stock minimo en cajas', 'stock minimo nº cajas', 'stock minimo no cajas',
+    ]),
+    maxCajas: findCol(headerNorm, [
+      'stock maximo cajas', 'stock max cajas', 'maximo cajas', 'max cajas',
+      'stock maximo (cajas)', 'stock maximo en cajas', 'stock maximo nº cajas', 'stock maximo no cajas',
+    ]),
+    minUdes: findCol(headerNorm, [
+      'stock minimo udes', 'stock minimo unidades', 'stock min udes', 'minimo udes', 'min udes',
+      'stock minimo (udes)', 'stock minimo (unidades)', 'stock minimo en udes', 'stock minimo en unidades',
+    ]),
+    maxUdes: findCol(headerNorm, [
+      'stock maximo udes', 'stock maximo unidades', 'stock max udes', 'maximo udes', 'max udes',
+      'stock maximo (udes)', 'stock maximo (unidades)', 'stock maximo en udes', 'stock maximo en unidades',
+    ]),
+    activo: findCol(headerNorm, ['activo']),
+    ubic: findCol(headerNorm, ['ubic', 'ubicacion']),
+    via: findCol(headerNorm, ['via', 'administracion', 'ruta', 'ruta de administracion']),
+  };
+
+  const requiredMissing: string[] = [];
+  if (idx.sap === -1) requiredMissing.push('Código SAP');
+  if (idx.producto === -1) requiredMissing.push('Producto');
+  if (idx.udesCaja === -1) requiredMissing.push('Uds/caja');
+  if (requiredMissing.length) {
+    return {
+      rows,
+      errors: [
+        `Columnas obligatorias no encontradas: ${requiredMissing.join(', ')}.`,
+        'Esperado: Código SAP, Producto, Vía (opc.), Uds/caja y stock mín/máx en cajas y/o udes.',
+      ],
+      via: 'OTRO',
+    };
+  }
+
+  const hasStockCols =
+    idx.minCajas !== -1 || idx.maxCajas !== -1 || idx.minUdes !== -1 || idx.maxUdes !== -1;
+  if (!hasStockCols) {
+    return {
+      rows,
+      errors: [
+        'No se encontraron columnas de stock objetivo (mín/máx en cajas o en udes).',
+      ],
+      via: 'OTRO',
+    };
+  }
+
+  for (let i = 1; i < raw.length; i++) {
+    const row = raw[i] as unknown[];
+    const sapRaw = String(row[idx.sap] ?? '').trim();
+    if (!sapRaw) continue;
+
+    const producto = String(row[idx.producto] ?? '').trim();
+    if (!producto) {
+      errors.push(`Fila ${i + 1}: Producto vacío (SAP ${sapRaw}).`);
+      continue;
+    }
+
+    const unidadesPorCaja = toIntOrNull(row[idx.udesCaja]);
+    if (unidadesPorCaja == null || unidadesPorCaja <= 0) {
+      errors.push(`Fila ${i + 1}: Uds/caja inválidas ("${row[idx.udesCaja]}").`);
+      continue;
+    }
+
+    const minCajas = idx.minCajas !== -1 ? toCajasOrNull(row[idx.minCajas]) : null;
+    const maxCajas = idx.maxCajas !== -1 ? toCajasOrNull(row[idx.maxCajas]) : null;
+    const minUdes = idx.minUdes !== -1 ? toIntOrNull(row[idx.minUdes]) : null;
+    const maxUdes = idx.maxUdes !== -1 ? toIntOrNull(row[idx.maxUdes]) : null;
+
+    const stockMinimo =
+      minCajas ??
+      (minUdes != null ? cajasDesdeUdes(minUdes, unidadesPorCaja) : 0);
+    const stockMaximo =
+      maxCajas ??
+      (maxUdes != null ? cajasDesdeUdes(maxUdes, unidadesPorCaja) : null);
+
+    const ubicRaw = idx.ubic !== -1 ? String(row[idx.ubic] ?? '').trim() : '';
+    const viaRaw = idx.via !== -1 ? String(row[idx.via] ?? '').trim() : '';
+    const activo = idx.activo !== -1 ? parseBool(row[idx.activo]) : true;
+    const cn = cnFromSapMaterial(sapRaw);
+
+    rows.push({
+      cn,
+      sapCode: sapRaw,
+      principioActivo: producto,
+      nombre: producto,
+      via: parseViaCatalogo(viaRaw),
+      ubicacion: ubicRaw ? mapUbicacion(ubicRaw) : NUTRICION_UBIC_DEFAULT,
+      unidadesPorCaja,
+      activo,
+      mse: isMSE(cn),
+      stockMinimo,
+      puntoPedido: stockMinimo,
+      stockMaximo,
+    });
+  }
+
+  return { rows, errors, via: 'OTRO' };
+}
+
+export function parseCatalogoByArea(buffer: Buffer, area: AreaId): CatalogoParseResult {
+  if (area === 'nutricion') return parseCatalogoExcelNutricion(buffer);
+  return parseCatalogoExcel(buffer);
 }

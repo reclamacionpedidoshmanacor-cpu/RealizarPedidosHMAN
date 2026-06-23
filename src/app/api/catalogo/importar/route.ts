@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { parseCatalogoExcel } from '@/lib/catalogo-parser';
+import { parseCatalogoByArea } from '@/lib/catalogo-parser';
 import { isValidArea } from '@/lib/areas';
 import { requireApiSession } from '@/lib/api-auth';
 import { isMSE } from '@/lib/utils';
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const { rows, errors, via } = parseCatalogoExcel(buffer);
+    const { rows, errors, via } = parseCatalogoByArea(buffer, area);
 
     if (rows.length === 0) {
       return NextResponse.json({ error: 'No se encontraron filas válidas.', errors }, { status: 400 });

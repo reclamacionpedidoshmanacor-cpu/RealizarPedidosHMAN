@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isValidArea } from '@/lib/areas';
 import { requireApiSession } from '@/lib/api-auth';
-import { isMSE } from '@/lib/utils';
+import { isMSE, roundCajas } from '@/lib/utils';
 import {
   deleteMedicamentoByCn,
   deleteStockObjetivo,
@@ -83,11 +83,18 @@ export async function PATCH(
     await deleteStockObjetivo(cn);
   } else if (Object.keys(objUpdate).length > 0) {
     const current = await getStockObjetivoByCn(cn);
+    const roundStock = (value: number) =>
+      existing.area === 'nutricion' ? roundCajas(value) : Math.round(value);
+    const roundStockNullable = (value: number | null) =>
+      value == null ? null : roundStock(value);
+
     await upsertStockObjetivo(
       cn,
-      Number((objUpdate.stockMinimo as number | undefined) ?? current?.stockMinimo ?? 0),
-      Number((objUpdate.puntoPedido as number | undefined) ?? current?.puntoPedido ?? 0),
-      (objUpdate.stockMaximo as number | null | undefined) ?? current?.stockMaximo ?? null
+      roundStock(Number((objUpdate.stockMinimo as number | undefined) ?? current?.stockMinimo ?? 0)),
+      roundStock(Number((objUpdate.puntoPedido as number | undefined) ?? current?.puntoPedido ?? 0)),
+      roundStockNullable(
+        (objUpdate.stockMaximo as number | null | undefined) ?? current?.stockMaximo ?? null
+      )
     );
   }
 

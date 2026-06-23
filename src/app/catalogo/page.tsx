@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
-import { cn, formatEuro, formatMseLabel, isMSE } from '@/lib/utils';
+import { cn, formatCajas, formatEuro, formatMseLabel, isMSE, parseCajasInput, roundCajas } from '@/lib/utils';
 import { toSapCode } from '@/lib/propuesta';
 import { ALMACEN_UBICACIONES } from '@/lib/almacen';
 
@@ -91,6 +91,24 @@ export default function CatalogoPage() {
   };
 
   const esAlmacen = getArea() === 'almacen';
+  const esNutricion = getArea() === 'nutricion';
+
+  const formatStockCell = (value: number | null | undefined) => {
+    if (value == null) return '—';
+    return esNutricion ? formatCajas(value) : String(value);
+  };
+
+  const parseStockField = (value: string): number | '' => {
+    if (value === '') return '';
+    if (esNutricion) return parseCajasInput(value) ?? '';
+    const n = Number(value);
+    return Number.isFinite(n) && n >= 0 ? Math.round(n) : '';
+  };
+
+  const normalizeStockNumber = (value: number | '' | null | undefined): number | null => {
+    if (value === '' || value == null) return null;
+    return esNutricion ? roundCajas(Number(value)) : Math.round(Number(value));
+  };
 
   const fetchMeds = useCallback(async () => {
     setLoading(true);
@@ -350,6 +368,16 @@ export default function CatalogoPage() {
         if (payload.puntoPedido === '') payload.puntoPedido = 0;
         if (payload.stockMaximo === '') payload.stockMaximo = null;
       }
+    } else if (esNutricion) {
+      if (payload.stockMinimo !== '' && payload.stockMinimo != null) {
+        payload.stockMinimo = normalizeStockNumber(payload.stockMinimo as number);
+      }
+      if (payload.puntoPedido !== '' && payload.puntoPedido != null) {
+        payload.puntoPedido = normalizeStockNumber(payload.puntoPedido as number);
+      }
+      if (payload.stockMaximo !== '' && payload.stockMaximo != null) {
+        payload.stockMaximo = normalizeStockNumber(payload.stockMaximo as number);
+      }
     }
     const res = await fetch(`/api/medicamentos/${editingCn}`, {
       method: 'PATCH',
@@ -363,9 +391,9 @@ export default function CatalogoPage() {
   const buildStockPayload = (data: typeof nuevoData) => {
     if (!esAlmacen) {
       return {
-        stockMinimo: data.stockMinimo === '' ? 0 : Number(data.stockMinimo),
-        puntoPedido: data.puntoPedido === '' ? 0 : Number(data.puntoPedido),
-        stockMaximo: data.stockMaximo === '' ? null : Number(data.stockMaximo),
+        stockMinimo: data.stockMinimo === '' ? 0 : (normalizeStockNumber(data.stockMinimo) ?? 0),
+        puntoPedido: data.puntoPedido === '' ? 0 : (normalizeStockNumber(data.puntoPedido) ?? 0),
+        stockMaximo: data.stockMaximo === '' ? null : normalizeStockNumber(data.stockMaximo),
       };
     }
     const tieneAlguno =
@@ -428,6 +456,7 @@ export default function CatalogoPage() {
           <p className="text-sm text-slate-500">
             {meds.length} medicamentos · {activos} activos · {mseCount} MSE
             {esAlmacen && ' · Stocks opcionales (orientativos en pedido)'}
+            {esNutricion && ' · Importación: SAP, Producto, Vía, Uds/caja, stock mín/máx (cajas o udes) · visualización en cajas con 1 decimal'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -577,13 +606,13 @@ export default function CatalogoPage() {
                       </td>
                     )}
                     <td className="px-4 py-2 text-center">
-                      <input type="number" className="w-14 rounded border border-slate-300 px-2 py-1 text-xs text-center" placeholder={esAlmacen ? '—' : undefined} value={editData.stockMinimo === '' ? '' : (editData.stockMinimo ?? '')} onChange={e => setEditData(p => ({ ...p, stockMinimo: e.target.value === '' ? '' : Number(e.target.value) }))} />
+                      <input type="number" step={esNutricion ? 0.1 : 1} min={0} className="w-16 rounded border border-slate-300 px-2 py-1 text-xs text-center" placeholder={esAlmacen ? '—' : undefined} value={editData.stockMinimo === '' ? '' : (editData.stockMinimo ?? '')} onChange={e => setEditData(p => ({ ...p, stockMinimo: parseStockField(e.target.value) }))} />
                     </td>
                     <td className="px-4 py-2 text-center">
-                      <input type="number" className="w-14 rounded border border-slate-300 px-2 py-1 text-xs text-center" placeholder={esAlmacen ? '—' : undefined} value={editData.puntoPedido === '' ? '' : (editData.puntoPedido ?? '')} onChange={e => setEditData(p => ({ ...p, puntoPedido: e.target.value === '' ? '' : Number(e.target.value) }))} />
+                      <input type="number" step={esNutricion ? 0.1 : 1} min={0} className="w-14 rounded border border-slate-300 px-2 py-1 text-xs text-center" placeholder={esAlmacen ? '—' : undefined} value={editData.puntoPedido === '' ? '' : (editData.puntoPedido ?? '')} onChange={e => setEditData(p => ({ ...p, puntoPedido: parseStockField(e.target.value) }))} />
                     </td>
                     <td className="px-4 py-2 text-center">
-                      <input type="number" className="w-14 rounded border border-slate-300 px-2 py-1 text-xs text-center" placeholder={esAlmacen ? '—' : undefined} value={editData.stockMaximo === '' ? '' : (editData.stockMaximo ?? '')} onChange={e => setEditData(p => ({ ...p, stockMaximo: e.target.value === '' ? '' : Number(e.target.value) }))} />
+                      <input type="number" step={esNutricion ? 0.1 : 1} min={0} className="w-14 rounded border border-slate-300 px-2 py-1 text-xs text-center" placeholder={esAlmacen ? '—' : undefined} value={editData.stockMaximo === '' ? '' : (editData.stockMaximo ?? '')} onChange={e => setEditData(p => ({ ...p, stockMaximo: parseStockField(e.target.value) }))} />
                     </td>
                     <td className="px-4 py-2 text-center text-xs text-slate-400">{formatEuro(med.precioCaja)}</td>
                     <td className="px-4 py-2 text-center text-xs text-slate-400">{med.activo ? 'Sí' : 'No'}</td>
@@ -631,9 +660,9 @@ export default function CatalogoPage() {
                         {med.presentacion ?? '—'}
                       </td>
                     )}
-                    <td className="px-4 py-3 text-center text-sm font-mono text-slate-600">{med.stockMinimo ?? '—'}</td>
-                    <td className="px-4 py-3 text-center text-sm font-mono text-amber-700 font-semibold">{med.puntoPedido ?? '—'}</td>
-                    <td className="px-4 py-3 text-center text-sm font-mono text-slate-600">{med.stockMaximo ?? '—'}</td>
+                    <td className="px-4 py-3 text-center text-sm font-mono text-slate-600">{formatStockCell(med.stockMinimo)}</td>
+                    <td className="px-4 py-3 text-center text-sm font-mono text-amber-700 font-semibold">{formatStockCell(med.puntoPedido)}</td>
+                    <td className="px-4 py-3 text-center text-sm font-mono text-slate-600">{formatStockCell(med.stockMaximo)}</td>
                     <td className="px-4 py-3 text-center text-xs text-slate-500">{formatEuro(med.precioCaja)}</td>
                     <td className="px-4 py-3 text-center">
                       <button
@@ -827,14 +856,14 @@ export default function CatalogoPage() {
                 <Field label="Uds/caja">
                   <input type="number" min={1} className="field-input text-center" value={nuevoData.unidadesPorCaja} onChange={e => setNuevoData(p => ({ ...p, unidadesPorCaja: Number(e.target.value) }))} />
                 </Field>
-                <Field label={esAlmacen ? 'Stock mín. (opt.)' : 'Stock mín.'}>
-                  <input type="number" min={0} className="field-input text-center" placeholder={esAlmacen ? '—' : undefined} value={nuevoData.stockMinimo} onChange={e => setNuevoData(p => ({ ...p, stockMinimo: e.target.value === '' ? '' : Number(e.target.value) }))} />
+                <Field label={esAlmacen ? 'Stock mín. (opt.)' : esNutricion ? 'Stock mín. (cajas)' : 'Stock mín.'}>
+                  <input type="number" min={0} step={esNutricion ? 0.1 : 1} className="field-input text-center" placeholder={esAlmacen ? '—' : undefined} value={nuevoData.stockMinimo} onChange={e => setNuevoData(p => ({ ...p, stockMinimo: parseStockField(e.target.value) }))} />
                 </Field>
-                <Field label={esAlmacen ? 'Pto. pedido (opt.)' : 'Pto. pedido'}>
-                  <input type="number" min={0} className="field-input text-center" placeholder={esAlmacen ? '—' : undefined} value={nuevoData.puntoPedido} onChange={e => setNuevoData(p => ({ ...p, puntoPedido: e.target.value === '' ? '' : Number(e.target.value) }))} />
+                <Field label={esAlmacen ? 'Pto. pedido (opt.)' : esNutricion ? 'Pto. pedido (cajas)' : 'Pto. pedido'}>
+                  <input type="number" min={0} step={esNutricion ? 0.1 : 1} className="field-input text-center" placeholder={esAlmacen ? '—' : undefined} value={nuevoData.puntoPedido} onChange={e => setNuevoData(p => ({ ...p, puntoPedido: parseStockField(e.target.value) }))} />
                 </Field>
-                <Field label={esAlmacen ? 'Stock máx. (opt.)' : 'Stock máx.'}>
-                  <input type="number" min={0} className="field-input text-center" placeholder={esAlmacen ? '—' : undefined} value={nuevoData.stockMaximo} onChange={e => setNuevoData(p => ({ ...p, stockMaximo: e.target.value === '' ? '' : Number(e.target.value) }))} />
+                <Field label={esAlmacen ? 'Stock máx. (opt.)' : esNutricion ? 'Stock máx. (cajas)' : 'Stock máx.'}>
+                  <input type="number" min={0} step={esNutricion ? 0.1 : 1} className="field-input text-center" placeholder={esAlmacen ? '—' : undefined} value={nuevoData.stockMaximo} onChange={e => setNuevoData(p => ({ ...p, stockMaximo: parseStockField(e.target.value) }))} />
                 </Field>
               </div>
               {esAlmacen && (
