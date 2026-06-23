@@ -92,6 +92,8 @@ export default function CatalogoPage() {
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [showNuevo, setShowNuevo] = useState(false);
   const [omitidos, setOmitidos] = useState<Array<{ cn: string; nombre: string; areaExistente: string }>>([]);
+  const [importErrores, setImportErrores] = useState<string[]>([]);
+  const importingRef = useRef(false);
   const [movingCn, setMovingCn] = useState<string | null>(null);
   const [nuevoData, setNuevoData] = useState({ ...NUEVO_EMPTY });
   const [savingNuevo, setSavingNuevo] = useState(false);
@@ -235,9 +237,25 @@ export default function CatalogoPage() {
     }
   };
 
+  const cerrarInformeImportacion = () => {
+    setOmitidos([]);
+    setImportErrores([]);
+  };
+
+  const copiarErroresImportacion = async () => {
+    if (importErrores.length === 0) return;
+    try {
+      await navigator.clipboard.writeText(importErrores.join('\n'));
+      toast.success('Errores copiados al portapapeles.');
+    } catch {
+      toast.error('No se pudieron copiar los errores.');
+    }
+  };
+
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || importingRef.current) return;
+    importingRef.current = true;
     setImporting(true);
     try {
       const fd = new FormData();
@@ -245,13 +263,31 @@ export default function CatalogoPage() {
       fd.append('area', getArea());
       const res = await fetch('/api/catalogo/importar', { method: 'POST', body: fd });
       const data = await res.json();
-      if (!res.ok) { toast.error(data.error ?? 'Error al importar'); return; }
+      if (!res.ok) {
+        toast.error(data.error ?? 'Error al importar');
+        if (Array.isArray(data.errores) && data.errores.length > 0) {
+          setImportErrores(data.errores.map((msg: unknown) => String(msg)));
+        }
+        return;
+      }
+      const errores = Array.isArray(data.errores) ? data.errores.map((msg: unknown) => String(msg)) : [];
+      const omitidosImport = Array.isArray(data.omitidos) ? data.omitidos : [];
+      setImportErrores(errores);
+      setOmitidos(omitidosImport);
       toast.success(`Importado: ${data.insertados} nuevos, ${data.actualizados} actualizados (${data.via})`);
-      if (data.errores?.length) toast.warning(`${data.errores.length} advertencias de formato — revisa la consola`);
-      setOmitidos(data.omitidos ?? []);
-      fetchMeds();
+      if (errores.length > 0) {
+        toast.warning(`${errores.length} fila(s) no importadas — revisa el informe debajo del encabezado.`);
+      }
+      if (omitidosImport.length > 0) {
+        toast.message(`${omitidosImport.length} CN en otra área — resuélvelos en el panel de conflictos.`);
+      }
+      await fetchMeds();
     } catch { toast.error('Error de conexión'); }
-    finally { setImporting(false); if (fileRef.current) fileRef.current.value = ''; }
+    finally {
+      importingRef.current = false;
+      setImporting(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
   };
 
   const moverConflictoAAreaActual = async (item: { cn: string; nombre: string; areaExistente: string }) => {
@@ -271,7 +307,9 @@ export default function CatalogoPage() {
       if (!res.ok) throw new Error(data?.error ?? 'No se pudo mover el CN.');
 
       setOmitidos((prev) => prev.filter((o) => o.cn !== item.cn));
-      toast.success(`CN ${item.cn} movido de ${item.areaExistente} a ${getArea()}.`);
+      toast.success(
+        `CN ${item.cn} movido de ${item.areaExistente} a ${getArea()}. Vuelve a importar el Excel para actualizar sus datos en esta área.`
+      );
       await fetchMeds();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
@@ -565,6 +603,94 @@ export default function CatalogoPage() {
         </div>
       </div>
 
+      {(importErrores.length > 0 || omitidos.length > 0) && (
+        <div className="mb-4 space-y-3 rounded-xl border border-amber-300 bg-amber-50 p-4 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-amber-900">Informe de la última importación</p>
+              <p className="text-xs text-amber-700 mt-0.5">
+                Permanece visible hasta que pulses «Cerrar informe». Puedes tramitar los conflictos de área desde aquí.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={cerrarInformeImportacion}
+              className="shrink-0 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100"
+            >
+              Cerrar informe
+            </button>
+          </div>
+
+          {importErrores.length > 0 && (
+            <div className="rounded-lg border border-amber-200 bg-white p-3">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-semibold text-amber-800">
+                  Filas no importadas ({importErrores.length})
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void copiarErroresImportacion()}
+                  className="rounded border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100"
+                >
+                  Copiar listado
+                </button>
+              </div>
+              <textarea
+                readOnly
+                value={importErrores.join('\n')}
+                className="h-40 w-full rounded border border-amber-200 bg-amber-50/50 p-2 text-xs text-slate-700 font-mono"
+              />
+            </div>
+          )}
+
+          {omitidos.length > 0 && (
+            <div className="rounded-lg border border-amber-200 bg-white p-3">
+              <p className="text-sm font-semibold text-amber-800 mb-2">
+                {omitidos.length} medicamento{omitidos.length > 1 ? 's' : ''} en otra área
+              </p>
+              <ul className="space-y-2 max-h-72 overflow-y-auto">
+                {omitidos.map((o) => (
+                  <li key={o.cn} className="text-xs text-amber-900 bg-amber-50 rounded px-3 py-2 border border-amber-100">
+                    <div className="font-mono">
+                      <span className="font-semibold">{o.cn}</span>
+                      {' — '}
+                      <span>{o.nombre}</span>
+                      <span className="ml-2 text-amber-700">(área: {o.areaExistente})</span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={(ev) => {
+                          ev.preventDefault();
+                          ev.stopPropagation();
+                          void moverConflictoAAreaActual(o);
+                        }}
+                        disabled={movingCn === o.cn}
+                        className="rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-semibold text-teal-700 hover:bg-teal-50 disabled:opacity-50"
+                      >
+                        {movingCn === o.cn ? 'Moviendo…' : 'Mover a esta área'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(ev) => {
+                          ev.preventDefault();
+                          ev.stopPropagation();
+                          setOmitidos((prev) => prev.filter((x) => x.cn !== o.cn));
+                        }}
+                        disabled={movingCn === o.cn}
+                        className="rounded border border-amber-300 bg-white px-2 py-1 text-[11px] font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-50"
+                      >
+                        Dejar en área actual
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Resultado CIMA */}
       {cimaResultado && (
         <div className="mb-4 rounded-lg border border-violet-200 bg-violet-50 px-4 py-2 text-sm text-violet-800 flex items-center justify-between gap-4">
@@ -826,7 +952,9 @@ export default function CatalogoPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-xs text-slate-500">{med.ubicacion ?? '—'}</td>
-                    <td className="px-4 py-3 text-center text-sm font-mono">{med.unidadesPorCaja}</td>
+                    <td className="px-4 py-3 text-center text-sm font-mono">
+                      {esAlmacen && med.unidadesPorCaja <= 0 ? '—' : med.unidadesPorCaja}
+                    </td>
                     {esAlmacen && (
                       <td className="px-4 py-3 text-xs text-slate-500 max-w-[180px] truncate" title={med.presentacion ?? ''}>
                         {med.presentacion ?? '—'}
@@ -885,59 +1013,6 @@ export default function CatalogoPage() {
         <p className="mt-3 text-xs text-slate-400 text-right">
           Mostrando {filtered.length} de {meds.length} medicamentos
         </p>
-      )}
-
-      {/* Panel de medicamentos omitidos — cierre manual */}
-      {omitidos.length > 0 && (
-        <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4">
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex items-start gap-3">
-              <svg className="h-5 w-5 mt-0.5 text-amber-500 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
-              </svg>
-              <div>
-                <p className="text-sm font-semibold text-amber-800 mb-1">
-                  {omitidos.length} medicamento{omitidos.length > 1 ? 's' : ''} no importado{omitidos.length > 1 ? 's' : ''} — CN ya existe en otra área
-                </p>
-                <p className="text-xs text-amber-700 mb-2">Toma nota antes de cerrar este aviso.</p>
-                <ul className="space-y-2">
-                  {omitidos.map(o => (
-                    <li key={o.cn} className="text-xs text-amber-900 bg-amber-100 rounded px-2 py-2">
-                      <div className="font-mono">
-                        <span className="font-semibold">{o.cn}</span>
-                        {' — '}
-                        <span>{o.nombre}</span>
-                        <span className="ml-2 text-amber-700">(registrado en: {o.areaExistente})</span>
-                      </div>
-                      <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <button
-                          onClick={() => void moverConflictoAAreaActual(o)}
-                          disabled={movingCn === o.cn}
-                          className="rounded border border-teal-300 bg-white px-2 py-1 text-[11px] font-semibold text-teal-700 hover:bg-teal-50 disabled:opacity-50"
-                        >
-                          {movingCn === o.cn ? 'Moviendo…' : 'Mover a esta área'}
-                        </button>
-                        <button
-                          onClick={() => setOmitidos((prev) => prev.filter((x) => x.cn !== o.cn))}
-                          disabled={movingCn === o.cn}
-                          className="rounded border border-amber-300 bg-white px-2 py-1 text-[11px] font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-50"
-                        >
-                          Mantener en área actual
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-            <button
-              onClick={() => setOmitidos([])}
-              className="shrink-0 rounded-lg border border-amber-300 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100 transition-colors"
-            >
-              Cerrar aviso
-            </button>
-          </div>
-        </div>
       )}
 
       {/* Modal Nuevo medicamento */}

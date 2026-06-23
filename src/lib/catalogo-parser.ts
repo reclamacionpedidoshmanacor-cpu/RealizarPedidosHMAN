@@ -342,13 +342,12 @@ export function parseCatalogoExcelAlmacen(buffer: Buffer): CatalogoParseResult {
     requiredMissing.push('Código SAP o CN_CIMA');
   }
   if (idx.ubic === -1) requiredMissing.push('ubicacion');
-  if (idx.udesCaja === -1) requiredMissing.push('udes/caja');
   if (requiredMissing.length) {
     return {
       rows,
       errors: [
         `Columnas obligatorias no encontradas: ${requiredMissing.join(', ')}.`,
-        'Esperado: Código SAP, Pr. Activo, Denominación, ubicacion, CN_CIMA, Principio Activo_CIMA, Marca Comercial_CIMA, Presentacion, udes/caja.',
+        'Esperado: Código SAP, Pr. Activo, Denominación, ubicacion, CN_CIMA, Principio Activo_CIMA, Marca Comercial_CIMA, Presentacion, udes/caja (opcional).',
       ],
       via: 'OTRO',
     };
@@ -378,10 +377,17 @@ export function parseCatalogoExcelAlmacen(buffer: Buffer): CatalogoParseResult {
       continue;
     }
 
-    const unidadesPorCaja = toIntOrNull(row[idx.udesCaja]);
-    if (unidadesPorCaja == null || unidadesPorCaja <= 0) {
-      errors.push(`Fila ${i + 1}: udes/caja inválidas ("${row[idx.udesCaja]}") para CN ${cn}.`);
-      continue;
+    let unidadesPorCaja = 0;
+    if (idx.udesCaja !== -1) {
+      const udesRaw = String(row[idx.udesCaja] ?? '').trim();
+      if (udesRaw) {
+        const parsed = toIntOrNull(row[idx.udesCaja]);
+        if (parsed == null || parsed <= 0) {
+          errors.push(`Fila ${i + 1}: udes/caja inválidas ("${udesRaw}") para CN ${cn}.`);
+          continue;
+        }
+        unidadesPorCaja = parsed;
+      }
     }
 
     const principioActivo = firstNonEmpty(ppioCima, prActivo, denominacion);
