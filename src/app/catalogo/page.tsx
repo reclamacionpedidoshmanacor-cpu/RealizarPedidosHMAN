@@ -4,9 +4,11 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
 import { cn, formatEuro, formatMseLabel, isMSE } from '@/lib/utils';
 import { toSapCode } from '@/lib/propuesta';
+import { ALMACEN_UBICACIONES } from '@/lib/almacen';
 
 interface Medicamento {
   cn: string; nombre: string; principioActivo: string | null;
+  presentacion?: string | null;
   via: string | null; area: string; ubicacion: string | null;
   unidadesPorCaja: number; activo: boolean; comprable: boolean;
   mse: boolean; tipoMse: string | null;
@@ -18,6 +20,13 @@ interface Medicamento {
 type SortKey = 'principioActivo' | 'nombre' | 'cn' | 'ubicacion' | 'puntoPedido';
 type SortDir = 'asc' | 'desc';
 
+type EditForm = Omit<Partial<Medicamento>, 'stockMinimo' | 'puntoPedido' | 'stockMaximo'> & {
+  stockMinimo?: number | '' | null;
+  puntoPedido?: number | '' | null;
+  stockMaximo?: number | '' | null;
+  clearStockObjetivo?: boolean;
+};
+
 const VIA_BADGE: Record<string, string> = {
   IV:   'bg-blue-100 text-blue-700',
   ORAL: 'bg-teal-100 text-teal-700',
@@ -25,9 +34,17 @@ const VIA_BADGE: Record<string, string> = {
 };
 
 const NUEVO_EMPTY = {
-  cn: '', nombre: '', principioActivo: '', via: 'IV' as string,
+  cn: '', nombre: '', principioActivo: '', presentacion: '', via: 'IV' as string,
   ubicacion: '', unidadesPorCaja: 1, comprable: true,
-  stockMinimo: 0, puntoPedido: 0, stockMaximo: '' as number | '',
+  stockMinimo: '' as number | '', puntoPedido: '' as number | '', stockMaximo: '' as number | '',
+};
+
+const NUEVO_ALMACEN_EMPTY = {
+  ...NUEVO_EMPTY,
+  via: 'OTRO',
+  stockMinimo: '' as number | '',
+  puntoPedido: '' as number | '',
+  stockMaximo: '' as number | '',
 };
 
 function SortIcon({ dir }: { dir: SortDir | null }) {
@@ -57,7 +74,7 @@ export default function CatalogoPage() {
   const [cimaEnriqueciendo, setCimaEnriqueciendo] = useState(false);
   const [cimaResultado, setCimaResultado] = useState<{ actualizados: number; fallidos: number; total: number } | null>(null);
   const [editingCn, setEditingCn] = useState<string | null>(null);
-  const [editData, setEditData] = useState<Partial<Medicamento>>({});
+  const [editData, setEditData] = useState<EditForm>({});
   const [sortKey, setSortKey] = useState<SortKey>('principioActivo');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [showNuevo, setShowNuevo] = useState(false);
@@ -65,12 +82,15 @@ export default function CatalogoPage() {
   const [movingCn, setMovingCn] = useState<string | null>(null);
   const [nuevoData, setNuevoData] = useState({ ...NUEVO_EMPTY });
   const [savingNuevo, setSavingNuevo] = useState(false);
+  const [cimaBuscando, setCimaBuscando] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const getArea = () => {
     if (typeof document === 'undefined') return 'oncologia';
     return document.cookie.split(';').find(c => c.trim().startsWith('area_session='))?.split('=')[1] ?? 'oncologia';
   };
+
+  const esAlmacen = getArea() === 'almacen';
 
   const fetchMeds = useCallback(async () => {
     setLoading(true);
@@ -91,10 +111,37 @@ export default function CatalogoPage() {
     if (q) setSearch(q);
   }, []);
 
-  const ubicacionesUnicas = useMemo(() =>
-    Array.from(new Set(meds.map(m => m.ubicacion).filter(Boolean) as string[])).sort(),
-    [meds]
-  );
+  const ubicacionesUnicas = useMemo(() => {
+    if (esAlmacen) return [...ALMACEN_UBICACIONES];
+    return Array.from(new Set(meds.map(m => m.ubicacion).filter(Boolean) as string[])).sort();
+  }, [meds, esAlmacen]);
+
+  const buscarCimaPorCn = async (cn: string) => {
+    const trimmed = cn.trim();
+    if (trimmed.length < 6) return;
+    setCimaBuscando(true);
+    try {
+      const res = await fetch(`/api/catalogo/cima?cn=${encodeURIComponent(trimmed)}`);
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? 'CN no encontrado en CIMA');
+        return;
+      }
+      setNuevoData((prev) => ({
+        ...prev,
+        cn: trimmed,
+        nombre: data.nombre || prev.nombre,
+        principioActivo: data.principioActivo || prev.principioActivo,
+        presentacion: data.presentacion || prev.presentacion,
+        unidadesPorCaja: data.unidadesPorCajaInferidas ?? prev.unidadesPorCaja,
+      }));
+      toast.success('Datos cargados desde CIMA (AEMPS)');
+    } catch {
+      toast.error('Error al consultar CIMA');
+    } finally {
+      setCimaBuscando(false);
+    }
+  };
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -257,13 +304,15 @@ export default function CatalogoPage() {
     setEditData({
       nombre: med.nombre,
       principioActivo: med.principioActivo ?? '',
+      presentacion: med.presentacion ?? '',
       ubicacion: med.ubicacion ?? '',
       unidadesPorCaja: med.unidadesPorCaja,
       comprable: med.comprable,
       tipoMse: med.tipoMse ?? '',
-      stockMinimo: med.stockMinimo ?? 0,
-      puntoPedido: med.puntoPedido ?? 0,
-      stockMaximo: med.stockMaximo ?? undefined,
+      stockMinimo: med.stockMinimo ?? (esAlmacen ? '' : 0),
+      puntoPedido: med.puntoPedido ?? (esAlmacen ? '' : 0),
+      stockMaximo: med.stockMaximo != null ? med.stockMaximo : (esAlmacen ? '' : undefined),
+      clearStockObjetivo: false,
     });
   };
 
@@ -280,13 +329,48 @@ export default function CatalogoPage() {
 
   const saveEdit = async () => {
     if (!editingCn) return;
+    const payload: Record<string, unknown> = { ...editData };
+    if (esAlmacen) {
+      const sinStock =
+        (payload.stockMinimo === '' || payload.stockMinimo == null) &&
+        (payload.puntoPedido === '' || payload.puntoPedido == null) &&
+        (payload.stockMaximo === '' || payload.stockMaximo == null);
+      if (sinStock) {
+        payload.clearStockObjetivo = true;
+        delete payload.stockMinimo;
+        delete payload.puntoPedido;
+        delete payload.stockMaximo;
+      } else {
+        if (payload.stockMinimo === '') payload.stockMinimo = 0;
+        if (payload.puntoPedido === '') payload.puntoPedido = 0;
+        if (payload.stockMaximo === '') payload.stockMaximo = null;
+      }
+    }
     const res = await fetch(`/api/medicamentos/${editingCn}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(editData),
+      body: JSON.stringify(payload),
     });
     if (res.ok) { toast.success('Guardado'); setEditingCn(null); fetchMeds(); }
     else { toast.error('Error al guardar'); }
+  };
+
+  const buildStockPayload = (data: typeof nuevoData) => {
+    if (!esAlmacen) {
+      return {
+        stockMinimo: data.stockMinimo === '' ? 0 : Number(data.stockMinimo),
+        puntoPedido: data.puntoPedido === '' ? 0 : Number(data.puntoPedido),
+        stockMaximo: data.stockMaximo === '' ? null : Number(data.stockMaximo),
+      };
+    }
+    const tieneAlguno =
+      data.stockMinimo !== '' || data.puntoPedido !== '' || data.stockMaximo !== '';
+    if (!tieneAlguno) return {};
+    return {
+      stockMinimo: data.stockMinimo === '' ? 0 : Number(data.stockMinimo),
+      puntoPedido: data.puntoPedido === '' ? 0 : Number(data.puntoPedido),
+      stockMaximo: data.stockMaximo === '' ? null : Number(data.stockMaximo),
+    };
   };
 
   const handleNuevoSubmit = async () => {
@@ -302,14 +386,14 @@ export default function CatalogoPage() {
         body: JSON.stringify({
           ...nuevoData,
           area: getArea(),
-          stockMaximo: nuevoData.stockMaximo === '' ? null : nuevoData.stockMaximo,
+          ...buildStockPayload(nuevoData),
         }),
       });
       const data = await res.json();
       if (!res.ok) { toast.error(data.error ?? 'Error al crear medicamento'); return; }
       toast.success('Medicamento creado correctamente.');
       setShowNuevo(false);
-      setNuevoData({ ...NUEVO_EMPTY });
+      setNuevoData(esAlmacen ? { ...NUEVO_ALMACEN_EMPTY } : { ...NUEVO_EMPTY });
       fetchMeds();
     } catch { toast.error('Error de conexión'); }
     finally { setSavingNuevo(false); }
@@ -338,6 +422,7 @@ export default function CatalogoPage() {
           <h1 className="text-2xl font-bold text-slate-800 mb-1">Catálogo de medicamentos</h1>
           <p className="text-sm text-slate-500">
             {meds.length} medicamentos · {activos} activos · {mseCount} MSE
+            {esAlmacen && ' · Stocks opcionales (orientativos en pedido)'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -365,7 +450,7 @@ export default function CatalogoPage() {
             {cimaEnriqueciendo ? 'Consultando CIMA…' : 'Enriquecer desde CIMA'}
           </button>
           <button
-            onClick={() => setShowNuevo(true)}
+            onClick={() => { setNuevoData(esAlmacen ? { ...NUEVO_ALMACEN_EMPTY } : { ...NUEVO_EMPTY }); setShowNuevo(true); }}
             className="flex items-center gap-2 rounded-lg border border-teal-600 px-4 py-2 text-sm font-medium text-teal-700 hover:bg-teal-50 transition-colors"
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
@@ -444,9 +529,16 @@ export default function CatalogoPage() {
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Vía</th>
                 {thSort('ubicacion', 'Ubicación')}
                 <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">Uds/caja</th>
-                <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">Mín</th>
-                {thSort('puntoPedido', 'Pto.Ped', 'center')}
-                <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">Máx</th>
+                {esAlmacen && (
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Presentación</th>
+                )}
+                <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                  Mín{esAlmacen ? ' (opt.)' : ''}
+                </th>
+                {thSort('puntoPedido', esAlmacen ? 'Pto.Ped (opt.)' : 'Pto.Ped', 'center')}
+                <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                  Máx{esAlmacen ? ' (opt.)' : ''}
+                </th>
                 <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">Precio/caja</th>
                 <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">Activo</th>
                 <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">Acciones</th>
@@ -474,14 +566,19 @@ export default function CatalogoPage() {
                     <td className="px-4 py-2 text-center">
                       <input type="number" className="w-16 rounded border border-slate-300 px-2 py-1 text-xs text-center" value={editData.unidadesPorCaja ?? ''} onChange={e => setEditData(p => ({ ...p, unidadesPorCaja: Number(e.target.value) }))} />
                     </td>
+                    {esAlmacen && (
+                      <td className="px-4 py-2">
+                        <input className="w-full rounded border border-slate-300 px-2 py-1 text-xs" value={String(editData.presentacion ?? '')} onChange={e => setEditData(p => ({ ...p, presentacion: e.target.value }))} />
+                      </td>
+                    )}
                     <td className="px-4 py-2 text-center">
-                      <input type="number" className="w-14 rounded border border-slate-300 px-2 py-1 text-xs text-center" value={editData.stockMinimo ?? ''} onChange={e => setEditData(p => ({ ...p, stockMinimo: Number(e.target.value) }))} />
+                      <input type="number" className="w-14 rounded border border-slate-300 px-2 py-1 text-xs text-center" placeholder={esAlmacen ? '—' : undefined} value={editData.stockMinimo === '' ? '' : (editData.stockMinimo ?? '')} onChange={e => setEditData(p => ({ ...p, stockMinimo: e.target.value === '' ? '' : Number(e.target.value) }))} />
                     </td>
                     <td className="px-4 py-2 text-center">
-                      <input type="number" className="w-14 rounded border border-slate-300 px-2 py-1 text-xs text-center" value={editData.puntoPedido ?? ''} onChange={e => setEditData(p => ({ ...p, puntoPedido: Number(e.target.value) }))} />
+                      <input type="number" className="w-14 rounded border border-slate-300 px-2 py-1 text-xs text-center" placeholder={esAlmacen ? '—' : undefined} value={editData.puntoPedido === '' ? '' : (editData.puntoPedido ?? '')} onChange={e => setEditData(p => ({ ...p, puntoPedido: e.target.value === '' ? '' : Number(e.target.value) }))} />
                     </td>
                     <td className="px-4 py-2 text-center">
-                      <input type="number" className="w-14 rounded border border-slate-300 px-2 py-1 text-xs text-center" value={editData.stockMaximo ?? ''} onChange={e => setEditData(p => ({ ...p, stockMaximo: Number(e.target.value) }))} />
+                      <input type="number" className="w-14 rounded border border-slate-300 px-2 py-1 text-xs text-center" placeholder={esAlmacen ? '—' : undefined} value={editData.stockMaximo === '' ? '' : (editData.stockMaximo ?? '')} onChange={e => setEditData(p => ({ ...p, stockMaximo: e.target.value === '' ? '' : Number(e.target.value) }))} />
                     </td>
                     <td className="px-4 py-2 text-center text-xs text-slate-400">{formatEuro(med.precioCaja)}</td>
                     <td className="px-4 py-2 text-center text-xs text-slate-400">{med.activo ? 'Sí' : 'No'}</td>
@@ -524,6 +621,11 @@ export default function CatalogoPage() {
                     </td>
                     <td className="px-4 py-3 text-xs text-slate-500">{med.ubicacion ?? '—'}</td>
                     <td className="px-4 py-3 text-center text-sm font-mono">{med.unidadesPorCaja}</td>
+                    {esAlmacen && (
+                      <td className="px-4 py-3 text-xs text-slate-500 max-w-[180px] truncate" title={med.presentacion ?? ''}>
+                        {med.presentacion ?? '—'}
+                      </td>
+                    )}
                     <td className="px-4 py-3 text-center text-sm font-mono text-slate-600">{med.stockMinimo ?? '—'}</td>
                     <td className="px-4 py-3 text-center text-sm font-mono text-amber-700 font-semibold">{med.puntoPedido ?? '—'}</td>
                     <td className="px-4 py-3 text-center text-sm font-mono text-slate-600">{med.stockMaximo ?? '—'}</td>
@@ -647,12 +749,24 @@ export default function CatalogoPage() {
             <div className="px-6 py-4 space-y-3">
               <div className="grid grid-cols-2 gap-3">
                 <Field label="CN *">
-                  <input
-                    className="field-input"
-                    placeholder="Código Nacional"
-                    value={nuevoData.cn}
-                    onChange={e => setNuevoData(p => ({ ...p, cn: e.target.value.trim() }))}
-                  />
+                  <div className="flex gap-2">
+                    <input
+                      className="field-input flex-1"
+                      placeholder="Código Nacional"
+                      value={nuevoData.cn}
+                      onChange={e => setNuevoData(p => ({ ...p, cn: e.target.value.trim() }))}
+                      onBlur={() => { if (esAlmacen && nuevoData.cn.trim()) void buscarCimaPorCn(nuevoData.cn); }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void buscarCimaPorCn(nuevoData.cn)}
+                      disabled={cimaBuscando || !nuevoData.cn.trim()}
+                      className="shrink-0 rounded-lg border border-violet-300 px-3 text-xs font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-50"
+                      title="Consultar CIMA (AEMPS)"
+                    >
+                      {cimaBuscando ? '…' : 'CIMA'}
+                    </button>
+                  </div>
                 </Field>
                 <Field label="Vía">
                   <select
@@ -666,6 +780,11 @@ export default function CatalogoPage() {
                   </select>
                 </Field>
               </div>
+              {esAlmacen && (
+                <p className="text-xs text-violet-600 -mt-1">
+                  Al salir del campo CN se consulta CIMA para nombre, principio activo y presentación.
+                </p>
+              )}
               <Field label="Nombre / Marca *">
                 <input
                   className="field-input"
@@ -682,6 +801,16 @@ export default function CatalogoPage() {
                   onChange={e => setNuevoData(p => ({ ...p, principioActivo: e.target.value }))}
                 />
               </Field>
+              {esAlmacen && (
+                <Field label="Presentación (CIMA)">
+                  <input
+                    className="field-input text-sm"
+                    placeholder="Presentación del envase"
+                    value={nuevoData.presentacion}
+                    onChange={e => setNuevoData(p => ({ ...p, presentacion: e.target.value }))}
+                  />
+                </Field>
+              )}
               <Field label="Ubicación">
                 <UbicacionSelect
                   value={nuevoData.ubicacion}
@@ -693,16 +822,21 @@ export default function CatalogoPage() {
                 <Field label="Uds/caja">
                   <input type="number" min={1} className="field-input text-center" value={nuevoData.unidadesPorCaja} onChange={e => setNuevoData(p => ({ ...p, unidadesPorCaja: Number(e.target.value) }))} />
                 </Field>
-                <Field label="Stock mín.">
-                  <input type="number" min={0} className="field-input text-center" value={nuevoData.stockMinimo} onChange={e => setNuevoData(p => ({ ...p, stockMinimo: Number(e.target.value) }))} />
+                <Field label={esAlmacen ? 'Stock mín. (opt.)' : 'Stock mín.'}>
+                  <input type="number" min={0} className="field-input text-center" placeholder={esAlmacen ? '—' : undefined} value={nuevoData.stockMinimo} onChange={e => setNuevoData(p => ({ ...p, stockMinimo: e.target.value === '' ? '' : Number(e.target.value) }))} />
                 </Field>
-                <Field label="Pto. pedido">
-                  <input type="number" min={0} className="field-input text-center" value={nuevoData.puntoPedido} onChange={e => setNuevoData(p => ({ ...p, puntoPedido: Number(e.target.value) }))} />
+                <Field label={esAlmacen ? 'Pto. pedido (opt.)' : 'Pto. pedido'}>
+                  <input type="number" min={0} className="field-input text-center" placeholder={esAlmacen ? '—' : undefined} value={nuevoData.puntoPedido} onChange={e => setNuevoData(p => ({ ...p, puntoPedido: e.target.value === '' ? '' : Number(e.target.value) }))} />
                 </Field>
-                <Field label="Stock máx.">
-                  <input type="number" min={0} className="field-input text-center" value={nuevoData.stockMaximo} onChange={e => setNuevoData(p => ({ ...p, stockMaximo: e.target.value === '' ? '' : Number(e.target.value) }))} />
+                <Field label={esAlmacen ? 'Stock máx. (opt.)' : 'Stock máx.'}>
+                  <input type="number" min={0} className="field-input text-center" placeholder={esAlmacen ? '—' : undefined} value={nuevoData.stockMaximo} onChange={e => setNuevoData(p => ({ ...p, stockMaximo: e.target.value === '' ? '' : Number(e.target.value) }))} />
                 </Field>
               </div>
+              {esAlmacen && (
+                <p className="text-xs text-slate-500">
+                  Si defines stocks, aparecerán como referencia orientativa al hacer el pedido por pasillo.
+                </p>
+              )}
             </div>
             <div className="flex justify-end gap-2 px-6 py-4 border-t border-slate-100">
               <button

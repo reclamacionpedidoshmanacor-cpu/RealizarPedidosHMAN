@@ -12,18 +12,28 @@ type MedicamentoManual = {
   cn: string;
   principioActivo: string | null;
   nombre: string;
+  presentacion?: string | null;
   activo: boolean;
   unidadesPorCaja: number;
-  cajas: number;
-  unidadesSueltas: number;
-  stockMaximo: number | null;
+  cajas?: number;
+  unidadesSueltas?: number;
+  cajasPedidas?: number;
+  stockMinimo?: number | null;
+  puntoPedido?: number | null;
+  stockMaximo?: number | null;
+  tieneStockOrientativo?: boolean;
 };
 
 type ApiResponse = {
   area: AreaId;
-  pendiente: RecuentoPendiente;
+  modo?: 'recuento' | 'pedido-almacen';
+  pendiente?: RecuentoPendiente;
+  pedidoPendiente?: RecuentoPendiente;
   ubicaciones: string[];
   ubicacionSeleccionada: string | null;
+  letraSeleccionada?: string | null;
+  letrasDisponibles?: string[];
+  totalUbicacion?: number;
   medicamentos: MedicamentoManual[];
   faltantesActivosArea?: number;
   faltantesActivosUbicacion?: number;
@@ -38,9 +48,10 @@ type ReposicionDetalleResponse = {
   lineas: ReposicionDetalleLinea[];
 };
 
-type Step = 'area' | 'ubicacion' | 'recuento' | 'reposicion-ubicacion' | 'reposicion-recuento';
+type Step = 'area' | 'ubicacion' | 'letra-almacen' | 'recuento' | 'pedido-almacen' | 'reposicion-ubicacion' | 'reposicion-recuento';
 
 type DraftLinea = { cajas: number; unidadesSueltas: number };
+type AlmacenDraftLinea = { cajasPedidas: number };
 
 /* ─── configuración de áreas ─── */
 const AREAS: { id: AreaId; label: string; emoji: string; color: string; bg: string; border: string }[] = [
@@ -69,6 +80,7 @@ export default function RecuentoManualPage() {
   const [step, setStep] = useState<Step>('area');
   const [area, setArea] = useState<AreaId | null>(null);
   const [ubicacion, setUbicacion] = useState<string | null>(null);
+  const [letra, setLetra] = useState<string | null>(null);
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -77,6 +89,8 @@ export default function RecuentoManualPage() {
   /* ── estado recuento manual ── */
   const [draft, setDraft] = useState<Record<string, DraftLinea>>({});
   const [baseline, setBaseline] = useState<Record<string, DraftLinea>>({});
+  const [almacenDraft, setAlmacenDraft] = useState<Record<string, AlmacenDraftLinea>>({});
+  const [almacenBaseline, setAlmacenBaseline] = useState<Record<string, AlmacenDraftLinea>>({});
 
   /* ── estado reposición (solo UPE) ── */
   const [repoBorrador, setRepoBorrador] = useState<ReposicionBorrador>(null);
@@ -92,19 +106,34 @@ export default function RecuentoManualPage() {
 
   /* ════════ RECUENTO MANUAL ════════ */
 
-  const cargarUbicacion = async (ub: string) => {
+  const cargarUbicacion = async (ub: string, letraFiltro?: string | null) => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/recuento-manual?ubicacion=${encodeURIComponent(ub)}`, { cache: 'no-store' });
+      const params = new URLSearchParams({ ubicacion: ub });
+      if (letraFiltro) params.set('letra', letraFiltro);
+      const res = await fetch(`/api/recuento-manual?${params.toString()}`, { cache: 'no-store' });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'Error al cargar medicamentos.');
       const typed = payload as ApiResponse;
       setData(typed);
 
+      if (typed.modo === 'pedido-almacen') {
+        const nextDraft: Record<string, AlmacenDraftLinea> = {};
+        const nextBaseline: Record<string, AlmacenDraftLinea> = {};
+        for (const med of typed.medicamentos) {
+          const vals = { cajasPedidas: med.cajasPedidas ?? 0 };
+          nextDraft[med.cn] = { ...vals };
+          nextBaseline[med.cn] = { ...vals };
+        }
+        setAlmacenDraft(nextDraft);
+        setAlmacenBaseline(nextBaseline);
+        return;
+      }
+
       const nextDraft: Record<string, DraftLinea> = {};
       const nextBaseline: Record<string, DraftLinea> = {};
       for (const med of typed.medicamentos) {
-        const vals = { cajas: med.cajas, unidadesSueltas: med.unidadesSueltas };
+        const vals = { cajas: med.cajas ?? 0, unidadesSueltas: med.unidadesSueltas ?? 0 };
         nextDraft[med.cn] = { ...vals };
         nextBaseline[med.cn] = { ...vals };
       }
@@ -132,8 +161,11 @@ export default function RecuentoManualPage() {
       setArea(id);
       setData(data2);
       setUbicacion(null);
+      setLetra(null);
       setDraft({});
       setBaseline({});
+      setAlmacenDraft({});
+      setAlmacenBaseline({});
       setRepoBorrador(null);
       setRepoUbicacionesUsadas([]);
       setRepoDraft({});
@@ -149,8 +181,24 @@ export default function RecuentoManualPage() {
 
   const seleccionarUbicacion = async (ub: string) => {
     setUbicacion(ub);
+    if (area === 'almacen') {
+      setLetra(null);
+      const res = await fetch(`/api/recuento-manual?ubicacion=${encodeURIComponent(ub)}`, { cache: 'no-store' });
+      const payload = (await res.json()) as ApiResponse;
+      setData(payload);
+      setStep('letra-almacen');
+      return;
+    }
     await cargarUbicacion(ub);
     setStep('recuento');
+    setTimeout(() => tableRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+  };
+
+  const seleccionarLetraAlmacen = async (ltr: string) => {
+    if (!ubicacion) return;
+    setLetra(ltr);
+    await cargarUbicacion(ubicacion, ltr);
+    setStep('pedido-almacen');
     setTimeout(() => tableRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
   };
 
@@ -201,6 +249,53 @@ export default function RecuentoManualPage() {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
       setIncorporando(false);
+    }
+  };
+
+  const almacenHasChanges = useMemo(() => {
+    if (!data || data.modo !== 'pedido-almacen') return false;
+    return data.medicamentos.some((med) => {
+      const cur = almacenDraft[med.cn];
+      const base = almacenBaseline[med.cn] ?? { cajasPedidas: 0 };
+      return cur && cur.cajasPedidas !== base.cajasPedidas;
+    });
+  }, [data, almacenDraft, almacenBaseline]);
+
+  const handleGuardarAlmacen = async () => {
+    if (!data || !ubicacion) return;
+    const cambios = data.medicamentos
+      .map((med) => {
+        const cur = almacenDraft[med.cn] ?? { cajasPedidas: 0 };
+        const base = almacenBaseline[med.cn] ?? { cajasPedidas: 0 };
+        return {
+          cn: med.cn,
+          cajasPedidas: cur.cajasPedidas,
+          changed: cur.cajasPedidas !== base.cajasPedidas,
+        };
+      })
+      .filter((l) => l.changed)
+      .map(({ changed, ...l }) => l);
+
+    if (cambios.length === 0) {
+      toast.info('No hay cambios que guardar.');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const res = await fetch('/api/pedido-almacen', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ubicacion, lineas: cambios }),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo guardar el pedido.');
+      toast.success(`✅ Pedido guardado (${payload.upserted} línea(s))`);
+      if (letra) await cargarUbicacion(ubicacion, letra);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -472,7 +567,21 @@ export default function RecuentoManualPage() {
           </div>
         </div>
 
-        {data?.pendiente ? (
+        {area === 'almacen' ? (
+          data?.pedidoPendiente ? (
+            <div className="rounded-2xl border-2 border-amber-200 bg-amber-50 px-6 py-4">
+              <p className="text-lg font-semibold text-amber-800">📦 Pedido en curso #{data.pedidoPendiente.id}</p>
+              <p className="text-base text-amber-700">
+                {data.pedidoPendiente.totalLineas} línea(s) · {formatDate(data.pedidoPendiente.fechaRecuento)}
+              </p>
+              <p className="text-sm text-amber-600 mt-1">Revisa en Propuesta para descargar el Excel cuando termines.</p>
+            </div>
+          ) : (
+            <div className="rounded-2xl border-2 border-amber-200 bg-amber-50 px-6 py-4">
+              <p className="text-lg font-semibold text-amber-700">ℹ️ Nuevo pedido — se creará al guardar la primera línea</p>
+            </div>
+          )
+        ) : data?.pendiente ? (
           <div className="rounded-2xl border-2 border-teal-200 bg-teal-50 px-6 py-4 space-y-3">
             <div>
               <p className="text-lg font-semibold text-teal-700">📂 Recuento en curso: #{data.pendiente.id}</p>
@@ -498,7 +607,9 @@ export default function RecuentoManualPage() {
         )}
 
         <div className="space-y-3">
-          <h3 className="text-2xl font-bold text-slate-700">¿Qué ubicación vas a contar?</h3>
+          <h3 className="text-2xl font-bold text-slate-700">
+            {area === 'almacen' ? '¿Qué ubicación vas a pedir?' : '¿Qué ubicación vas a contar?'}
+          </h3>
           {loading ? (
             <p className="text-xl text-slate-500 animate-pulse">Cargando ubicaciones…</p>
           ) : ubicaciones.length === 0 ? (
@@ -529,6 +640,122 @@ export default function RecuentoManualPage() {
                 <p className="text-base text-orange-600">Solicitar reposición de medicamentos</p>
               </div>
             </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  /* ── PASO ALMACÉN: Letra ── */
+  if (step === 'letra-almacen') {
+    const letras = data?.letrasDisponibles ?? [];
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-amber-50 to-orange-50 flex flex-col p-6 gap-6">
+        <div className="flex items-center gap-4">
+          <button onClick={() => setStep('ubicacion')}
+            className="rounded-xl border-2 border-slate-300 bg-white px-5 py-3 text-xl font-bold text-slate-600 shadow-sm hover:bg-slate-50 active:scale-95">
+            ← Volver
+          </button>
+          <div>
+            <p className="text-base text-amber-600 font-semibold">Pedido Almacén</p>
+            <h2 className="text-3xl font-extrabold text-amber-800 truncate">📍 {ubicacion}</h2>
+            <p className="text-base text-slate-500">{data?.totalUbicacion ?? 0} medicamentos en esta ubicación</p>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <h3 className="text-2xl font-bold text-slate-700">¿Por qué letra empiezas?</h3>
+          <p className="text-base text-slate-500">El catálogo está ordenado alfabéticamente por principio activo.</p>
+          {loading ? (
+            <p className="text-xl text-slate-500 animate-pulse">Cargando letras…</p>
+          ) : letras.length === 0 ? (
+            <p className="text-xl text-amber-700 rounded-2xl border-2 border-amber-200 bg-amber-50 px-6 py-5">
+              No hay medicamentos activos en esta ubicación.
+            </p>
+          ) : (
+            <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-3">
+              {letras.map((ltr) => (
+                <button key={ltr} onClick={() => void seleccionarLetraAlmacen(ltr)}
+                  className="rounded-2xl border-2 border-amber-300 bg-white px-4 py-5 text-2xl font-extrabold text-amber-800 shadow-sm hover:bg-amber-100 active:scale-95 transition-all">
+                  {ltr}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  /* ── PASO ALMACÉN: Pedido por letra ── */
+  if (step === 'pedido-almacen') {
+    const medicamentos = data?.medicamentos ?? [];
+    const almacenHasAnyQty = medicamentos.some((med) => (almacenDraft[med.cn]?.cajasPedidas ?? 0) > 0);
+
+    return (
+      <div className="min-h-screen bg-amber-50 flex flex-col pb-40" ref={tableRef}>
+        <div className="sticky top-0 z-20 bg-white border-b-2 border-amber-200 shadow-sm px-4 py-3 flex items-center gap-3 flex-wrap">
+          <button onClick={() => setStep('letra-almacen')}
+            className="rounded-xl border-2 border-slate-300 bg-white px-4 py-2 text-lg font-bold text-slate-600 hover:bg-slate-50 active:scale-95">
+            ← Letra
+          </button>
+          <div className="flex-1 min-w-0">
+            <p className="text-lg font-extrabold text-amber-800 truncate">📦 Pedido Almacén</p>
+            <p className="text-base text-slate-500 truncate">📍 {ubicacion} · Letra {letra}</p>
+          </div>
+          {data?.pedidoPendiente && (
+            <span className="rounded-full bg-amber-100 px-3 py-1 text-sm font-semibold text-amber-800">
+              Pedido #{data.pedidoPendiente.id}
+            </span>
+          )}
+        </div>
+
+        <div className="flex-1 px-4 pt-4 space-y-3">
+          <p className="text-base text-slate-500 font-semibold">
+            {medicamentos.length} medicamento{medicamentos.length !== 1 ? 's' : ''} — indica cajas a pedir
+          </p>
+          {loading ? (
+            <p className="text-2xl text-slate-500 animate-pulse text-center py-20">Cargando…</p>
+          ) : medicamentos.length === 0 ? (
+            <p className="text-2xl font-bold text-amber-700 text-center py-10">No hay medicamentos para esta letra.</p>
+          ) : (
+            medicamentos.map((med, idx) => {
+              const qty = almacenDraft[med.cn]?.cajasPedidas ?? 0;
+              const base = almacenBaseline[med.cn]?.cajasPedidas ?? 0;
+              const changed = qty !== base;
+              return (
+                <AlmacenMedCard
+                  key={med.cn}
+                  med={med}
+                  cantidadCajas={qty}
+                  changed={changed}
+                  index={idx + 1}
+                  total={medicamentos.length}
+                  onChange={(v) => setAlmacenDraft((prev) => ({ ...prev, [med.cn]: { cajasPedidas: v } }))}
+                />
+              );
+            })
+          )}
+        </div>
+
+        {!loading && (
+          <div className="fixed bottom-0 left-0 right-0 z-30 bg-white border-t-2 border-amber-200 shadow-lg px-4 py-4">
+            <div className="max-w-2xl mx-auto flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+              <div className="flex-1 text-sm text-slate-500">
+                {almacenHasChanges ? (
+                  <span className="font-semibold text-amber-700">⚠ Cambios sin guardar</span>
+                ) : (
+                  <span className="text-slate-400">Sin cambios pendientes</span>
+                )}
+              </div>
+              <button
+                onClick={() => void handleGuardarAlmacen()}
+                disabled={saving || !almacenHasChanges || !almacenHasAnyQty}
+                className="rounded-2xl bg-amber-600 px-8 py-4 text-xl font-extrabold text-white shadow-lg hover:bg-amber-700 active:scale-95 transition-all disabled:opacity-40"
+              >
+                {saving ? 'Guardando…' : '💾 Guardar pedido'}
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -799,6 +1026,65 @@ function MedCard({
           </div>
         </div>
       )}
+      {changed && <p className="mt-3 text-sm font-semibold text-amber-600">✏ Modificado</p>}
+    </div>
+  );
+}
+
+/* ════════════════ Tarjeta de medicamento — pedido almacén ════════════════ */
+function AlmacenMedCard({
+  med, cantidadCajas, changed, index, total, onChange,
+}: {
+  med: MedicamentoManual; cantidadCajas: number; changed: boolean;
+  index: number; total: number; onChange: (v: number) => void;
+}) {
+  const hints: string[] = [];
+  if (med.stockMinimo != null) hints.push(`mín ${med.stockMinimo}`);
+  if (med.puntoPedido != null) hints.push(`pto ${med.puntoPedido}`);
+  if (med.stockMaximo != null) hints.push(`máx ${med.stockMaximo}`);
+
+  return (
+    <div className={`rounded-2xl border-2 bg-white px-5 py-4 shadow-sm transition-all ${
+      changed ? 'border-amber-400 bg-amber-50' : 'border-slate-200'
+    }`}>
+      <div className="flex items-start justify-between gap-2 mb-3">
+        <div className="flex-1 min-w-0">
+          <p className="text-2xl font-extrabold text-slate-800 leading-tight">{med.principioActivo ?? med.nombre}</p>
+          {med.principioActivo && (
+            <p className="text-lg italic text-slate-400 leading-tight mt-0.5 truncate">{med.nombre}</p>
+          )}
+          {med.presentacion && (
+            <p className="text-sm text-slate-500 mt-1 line-clamp-2">{med.presentacion}</p>
+          )}
+        </div>
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          <span className="font-mono text-base bg-slate-100 text-slate-500 rounded-lg px-2 py-1">CN {med.cn}</span>
+          <span className="text-sm text-slate-400">{index}/{total}</span>
+        </div>
+      </div>
+
+      {hints.length > 0 && (
+        <p className="text-sm text-teal-700 bg-teal-50 border border-teal-100 rounded-lg px-3 py-2 mb-3">
+          📊 Referencia de stock (cajas): {hints.join(' · ')}
+        </p>
+      )}
+
+      <div className="space-y-1">
+        <label className="block text-sm font-bold text-amber-700 uppercase tracking-wider">📦 Cajas a pedir</label>
+        <input
+          type="number"
+          inputMode="numeric"
+          min={0}
+          step={1}
+          value={cantidadCajas === 0 ? '' : cantidadCajas}
+          placeholder="0"
+          onChange={(e) => onChange(toIntInput(e.target.value))}
+          className="w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-3xl font-bold text-center text-slate-800 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-200"
+        />
+        {med.unidadesPorCaja > 1 && (
+          <p className="text-sm text-slate-400 text-center">1 caja = {med.unidadesPorCaja} uds</p>
+        )}
+      </div>
       {changed && <p className="mt-3 text-sm font-semibold text-amber-600">✏ Modificado</p>}
     </div>
   );

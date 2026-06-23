@@ -1,9 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isValidArea, type AreaId } from '@/lib/areas';
+import {
+  filtrarPorLetra,
+  isAlmacenArea,
+  letrasDisponibles,
+  mergeUbicacionesAlmacen,
+  normalizeAlmacenText,
+} from '@/lib/almacen';
 import { listMedicamentosByArea } from '@/lib/catalogo-neon';
 import {
   crearRecuento,
+  getBorradorPropuesta,
+  getCantidadesPedidoAlmacen,
   getLineasRecuento,
+  getPedidoAlmacenPendiente,
   getPendienteRecuento,
   incorporarFaltantesRecuento,
   recalcularTotalLineasRecuento,
@@ -20,12 +30,7 @@ type BodyLinea = {
 };
 
 function normalizeText(value: string | null | undefined): string {
-  return String(value ?? '')
-    .trim()
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/\s+/g, ' ');
+  return normalizeAlmacenText(value);
 }
 
 function todayIsoDate(): string {
@@ -78,18 +83,86 @@ export async function GET(req: NextRequest) {
     const area = isValidArea(areaQuery) ? areaQuery : getAreaFromCookie(req);
 
     const catalogo = await listMedicamentosByArea(area);
-    const ubicacionesMap = buildUbicacionesMap(catalogo);
-    const ubicaciones = [...ubicacionesMap.values()].sort((a, b) =>
-      a.localeCompare(b, 'es', { sensitivity: 'base' })
-    );
+    const ubicacionesDesdeCatalogo = catalogo
+      .map((m) => m.ubicacion)
+      .filter((u): u is string => Boolean(u?.trim()));
+    const ubicaciones = isAlmacenArea(area)
+      ? mergeUbicacionesAlmacen(ubicacionesDesdeCatalogo)
+      : [...buildUbicacionesMap(catalogo).values()].sort((a, b) =>
+          a.localeCompare(b, 'es', { sensitivity: 'base' })
+        );
 
     const ubicacionParam = req.nextUrl.searchParams.get('ubicacion');
     const ubicacionParamKey = normalizeText(ubicacionParam);
     const selectedKey =
-      ubicacionParamKey && ubicacionesMap.has(ubicacionParamKey)
+      ubicacionParamKey && ubicaciones.some((u) => normalizeText(u) === ubicacionParamKey)
         ? ubicacionParamKey
         : normalizeText(ubicaciones[0] ?? '');
-    const ubicacionSeleccionada = ubicacionesMap.get(selectedKey) ?? null;
+    const ubicacionSeleccionada =
+      ubicaciones.find((u) => normalizeText(u) === selectedKey) ?? null;
+
+    const letraParam = req.nextUrl.searchParams.get('letra');
+
+    if (isAlmacenArea(area)) {
+      const pedidoPendiente = await getPedidoAlmacenPendiente(area);
+      let cantidadesPedido: Record<string, number> = {};
+      if (pedidoPendiente) {
+        const propuesta = await getBorradorPropuesta(area, pedidoPendiente.id);
+        if (propuesta) {
+          cantidadesPedido = await getCantidadesPedidoAlmacen(propuesta.id);
+        }
+      }
+
+      const medsUbicacion = catalogo
+        .filter((med) => med.activo && normalizeText(med.ubicacion) === selectedKey)
+        .sort((a, b) => {
+          const pa = (a.principioActivo ?? a.nombre).localeCompare(
+            b.principioActivo ?? b.nombre,
+            'es',
+            { sensitivity: 'base' }
+          );
+          if (pa !== 0) return pa;
+          return a.nombre.localeCompare(b.nombre, 'es', { sensitivity: 'base' });
+        });
+
+      const letras = letrasDisponibles(medsUbicacion);
+      const filtrados = filtrarPorLetra(medsUbicacion, letraParam);
+
+      const medicamentos = filtrados.map((med) => {
+        const unidadesPorCaja = Number(med.unidadesPorCaja) > 0 ? Number(med.unidadesPorCaja) : 1;
+        const tieneStockOrientativo =
+          med.stockMinimo != null || med.puntoPedido != null || med.stockMaximo != null;
+
+        return {
+          cn: med.cn,
+          principioActivo: med.principioActivo,
+          nombre: med.nombre,
+          presentacion: med.presentacion,
+          activo: med.activo,
+          unidadesPorCaja,
+          cajasPedidas: cantidadesPedido[med.cn] ?? 0,
+          stockMinimo: med.stockMinimo,
+          puntoPedido: med.puntoPedido,
+          stockMaximo: med.stockMaximo,
+          tieneStockOrientativo,
+        };
+      });
+
+      const res = NextResponse.json({
+        area,
+        modo: 'pedido-almacen',
+        pedidoPendiente,
+        ubicaciones,
+        ubicacionSeleccionada,
+        letraSeleccionada: letraParam?.trim().toLocaleUpperCase('es') || null,
+        letrasDisponibles: letras,
+        medicamentos,
+        totalUbicacion: medsUbicacion.length,
+      });
+      return withAreaCookie(res, area);
+    }
+
+    const ubicacionesMap = buildUbicacionesMap(catalogo);
 
     const pendiente = await getPendienteRecuento(area);
     const lineasPendiente = pendiente ? await getLineasRecuento(pendiente.id) : [];
@@ -133,6 +206,7 @@ export async function GET(req: NextRequest) {
 
     const res = NextResponse.json({
       area,
+      modo: 'recuento',
       pendiente,
       ubicaciones,
       ubicacionSeleccionada,
@@ -163,6 +237,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Area no valida.' }, { status: 400 });
     }
     const area = isValidArea(areaRaw) ? areaRaw : getAreaFromCookie(req);
+
+    if (isAlmacenArea(area)) {
+      return NextResponse.json(
+        { error: 'En Almacén use el flujo de pedido (/api/pedido-almacen), no recuento de stock.' },
+        { status: 400 }
+      );
+    }
 
     if (action === 'incorporar-faltantes') {
       const catalogo = await listMedicamentosByArea(area);

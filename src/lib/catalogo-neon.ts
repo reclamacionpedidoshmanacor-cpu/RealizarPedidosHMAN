@@ -5,6 +5,7 @@ export type CatalogoMedicamento = {
   cn: string;
   nombre: string;
   principioActivo: string | null;
+  presentacion: string | null;
   via: string | null;
   area: string;
   ubicacion: string | null;
@@ -26,6 +27,7 @@ export type MedicamentoBase = {
   cn: string;
   nombre: string;
   principioActivo: string | null;
+  presentacion?: string | null;
   via: string | null;
   area: string;
   ubicacion: string | null;
@@ -59,13 +61,29 @@ function numOrNull(value: unknown): number | null {
   return Number.isFinite(num) ? num : null;
 }
 
+let ensureMedicamentosSchemaPromise: Promise<void> | null = null;
+
+export async function ensureMedicamentosSchema(): Promise<void> {
+  if (!ensureMedicamentosSchemaPromise) {
+    const sql = getCatalogoClient();
+    ensureMedicamentosSchemaPromise = (async () => {
+      await sql`ALTER TABLE public.medicamentos ADD COLUMN IF NOT EXISTS presentacion TEXT;`;
+      await sql`ALTER TABLE public.medicamentos ADD COLUMN IF NOT EXISTS ppio_activo_cima TEXT;`;
+      await sql`ALTER TABLE public.medicamentos ADD COLUMN IF NOT EXISTS cima_consultado BOOLEAN DEFAULT FALSE;`;
+    })();
+  }
+  await ensureMedicamentosSchemaPromise;
+}
+
 export async function listMedicamentosByArea(area: string): Promise<CatalogoMedicamento[]> {
+  await ensureMedicamentosSchema();
   const sql = getCatalogoClient();
   const rows = (await sql`
     SELECT
       m.cn,
       m.nombre,
       m.principio_activo,
+      m.presentacion,
       m.via,
       m.area,
       m.ubicacion,
@@ -89,6 +107,7 @@ export async function listMedicamentosByArea(area: string): Promise<CatalogoMedi
     cn: string;
     nombre: string;
     principio_activo: string | null;
+    presentacion: string | null;
     via: string | null;
     area: string;
     ubicacion: string | null;
@@ -110,6 +129,7 @@ export async function listMedicamentosByArea(area: string): Promise<CatalogoMedi
     cn: row.cn,
     nombre: row.nombre,
     principioActivo: row.principio_activo,
+    presentacion: row.presentacion?.trim() || null,
     via: row.via,
     area: row.area,
     ubicacion: row.ubicacion,
@@ -129,10 +149,11 @@ export async function listMedicamentosByArea(area: string): Promise<CatalogoMedi
 }
 
 export async function getMedicamentoByCn(cn: string): Promise<MedicamentoBase | null> {
+  await ensureMedicamentosSchema();
   const sql = getCatalogoClient();
   const rows = (await sql`
     SELECT
-      cn, nombre, principio_activo, via, area, ubicacion,
+      cn, nombre, principio_activo, presentacion, via, area, ubicacion,
       unidades_por_caja, activo, comprable, mse, tipo_mse, precio_unidad, precio_caja
     FROM public.medicamentos
     WHERE cn = ${cn}
@@ -141,6 +162,7 @@ export async function getMedicamentoByCn(cn: string): Promise<MedicamentoBase | 
     cn: string;
     nombre: string;
     principio_activo: string | null;
+    presentacion: string | null;
     via: string | null;
     area: string;
     ubicacion: string | null;
@@ -159,6 +181,7 @@ export async function getMedicamentoByCn(cn: string): Promise<MedicamentoBase | 
     cn: row.cn,
     nombre: row.nombre,
     principioActivo: row.principio_activo,
+    presentacion: row.presentacion?.trim() || null,
     via: row.via,
     area: row.area,
     ubicacion: row.ubicacion,
@@ -197,20 +220,22 @@ export async function getStockObjetivoByCn(cn: string): Promise<StockObjetivo | 
 }
 
 export async function insertMedicamento(row: MedicamentoBase) {
+  await ensureMedicamentosSchema();
   const sql = getCatalogoClient();
   const mse = isMSE(row.cn);
   await sql`
     INSERT INTO public.medicamentos (
-      cn, nombre, principio_activo, via, area, ubicacion,
+      cn, nombre, principio_activo, presentacion, via, area, ubicacion,
       unidades_por_caja, activo, comprable, mse, tipo_mse, precio_unidad, precio_caja, actualizado_en
     ) VALUES (
-      ${row.cn}, ${row.nombre}, ${row.principioActivo}, ${row.via}, ${row.area}, ${row.ubicacion},
+      ${row.cn}, ${row.nombre}, ${row.principioActivo}, ${row.presentacion ?? null}, ${row.via}, ${row.area}, ${row.ubicacion},
       ${row.unidadesPorCaja}, ${row.activo}, ${row.comprable}, ${mse}, ${row.tipoMse}, ${row.precioUnidad}, ${row.precioCaja}, now()
     );
   `;
 }
 
 export async function updateMedicamento(row: MedicamentoBase) {
+  await ensureMedicamentosSchema();
   const sql = getCatalogoClient();
   const mse = isMSE(row.cn);
   await sql`
@@ -218,6 +243,7 @@ export async function updateMedicamento(row: MedicamentoBase) {
     SET
       nombre = ${row.nombre},
       principio_activo = ${row.principioActivo},
+      presentacion = ${row.presentacion ?? null},
       via = ${row.via},
       area = ${row.area},
       ubicacion = ${row.ubicacion},
@@ -245,6 +271,11 @@ export async function upsertStockObjetivo(cn: string, stockMinimo: number, punto
         stock_maximo = EXCLUDED.stock_maximo,
         actualizado_en = now();
   `;
+}
+
+export async function deleteStockObjetivo(cn: string): Promise<void> {
+  const sql = getCatalogoClient();
+  await sql`DELETE FROM public.stock_objetivo WHERE cn = ${cn};`;
 }
 
 export async function deleteMedicamentoByCn(cn: string) {

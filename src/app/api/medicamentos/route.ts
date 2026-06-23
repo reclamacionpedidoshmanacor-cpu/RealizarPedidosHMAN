@@ -8,6 +8,7 @@ import {
   listMedicamentosByArea,
   upsertStockObjetivo,
 } from '@/lib/catalogo-neon';
+import { isAlmacenArea } from '@/lib/almacen';
 
 export const runtime = 'nodejs';
 
@@ -64,10 +65,11 @@ export async function POST(req: NextRequest) {
     cn,
     nombre:          body.nombre,
     principioActivo: body.principioActivo ?? null,
+    presentacion:    body.presentacion ?? null,
     via:             body.via ?? null,
     area,
     ubicacion:       body.ubicacion ?? null,
-    unidadesPorCaja: Number(body.unidadesPorCaja),
+    unidadesPorCaja: Number(body.unidadesPorCaja) || 1,
     activo:          body.activo ?? true,
     comprable:       body.comprable ?? true,
     mse:             isMSE(cn),
@@ -76,13 +78,20 @@ export async function POST(req: NextRequest) {
     precioCaja:      body.precioCaja != null ? Number(body.precioCaja) : null,
   });
 
-  if (body.stockMinimo != null || body.puntoPedido != null) {
+  const tieneStockObjetivo =
+    body.stockMinimo != null ||
+    body.puntoPedido != null ||
+    body.stockMaximo != null;
+
+  if (tieneStockObjetivo) {
     await upsertStockObjetivo(
       cn,
       Number(body.stockMinimo ?? 0),
       Number(body.puntoPedido ?? 0),
-      body.stockMaximo != null ? Number(body.stockMaximo) : null
+      body.stockMaximo != null && body.stockMaximo !== '' ? Number(body.stockMaximo) : null
     );
+  } else if (!isAlmacenArea(area)) {
+    await upsertStockObjetivo(cn, 0, 0, null);
   }
 
   return NextResponse.json({ ok: true });

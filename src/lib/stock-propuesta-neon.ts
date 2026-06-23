@@ -1,5 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 import { calcularCajasPropuestas } from '@/lib/propuesta';
+import { ORIGEN_PEDIDO_ALMACEN } from '@/lib/almacen';
 
 function getDb() {
   const url = process.env.REALIZAR_PEDIDOS_DATABASE_URL ?? process.env.DATABASE_URL;
@@ -199,7 +200,7 @@ export async function getPendienteRecuento(area: string): Promise<RecuentoCabece
   const rows = (await sql`
     SELECT id, area, estado, origen, fecha_recuento::text, importado_en::text, total_lineas, propuesta_id
     FROM importaciones_stock
-    WHERE area = ${area} AND estado = 'pendiente'
+    WHERE area = ${area} AND estado = 'pendiente' AND origen <> ${ORIGEN_PEDIDO_ALMACEN}
     ORDER BY id DESC LIMIT 1;
   `) as Array<{
     id: number; area: string; estado: string; origen: string;
@@ -1136,4 +1137,165 @@ export async function getResumenOperativo(area: string): Promise<ResumenOperativ
     bajoMinimo:   num(alertas[0]?.bajo_minimo ?? 0),
     bajoOPunto:   num(alertas[0]?.bajo_o_punto ?? 0),
   };
+}
+
+// ---------------------------------------------------------------------------
+// PEDIDO ALMACÉN (propuesta directa sin recuento de stock)
+// ---------------------------------------------------------------------------
+export async function getPedidoAlmacenPendiente(area: string): Promise<RecuentoCabecera | null> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT id, area, estado, origen, fecha_recuento::text, importado_en::text, total_lineas, propuesta_id
+    FROM importaciones_stock
+    WHERE area = ${area} AND estado = 'pendiente' AND origen = ${ORIGEN_PEDIDO_ALMACEN}
+    ORDER BY id DESC LIMIT 1;
+  `) as Array<{
+    id: number; area: string; estado: string; origen: string;
+    fecha_recuento: string; importado_en: string; total_lineas: number; propuesta_id: number | null;
+  }>;
+
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    id: num(r.id), area: r.area, estado: r.estado, origen: r.origen,
+    fechaRecuento: r.fecha_recuento, importadoEn: r.importado_en,
+    totalLineas: num(r.total_lineas), propuestaId: r.propuesta_id != null ? num(r.propuesta_id) : null,
+  };
+}
+
+export async function ensureSesionPedidoAlmacen(area: string): Promise<{
+  importacionId: number;
+  propuestaId: number;
+}> {
+  const pendiente = await getPedidoAlmacenPendiente(area);
+  if (pendiente) {
+    let propuesta = await getBorradorPropuesta(area, pendiente.id);
+    if (!propuesta) {
+      propuesta = await crearPropuesta(area, pendiente.id);
+    }
+    return { importacionId: pendiente.id, propuestaId: propuesta.id };
+  }
+
+  const fechaRecuento = new Date().toISOString().slice(0, 10);
+  const importacionId = await crearRecuento({
+    area,
+    origen: ORIGEN_PEDIDO_ALMACEN,
+    fechaRecuento,
+    ficheroNombre: 'APP Pedido Almacén',
+    totalLineas: 0,
+  });
+  const propuesta = await crearPropuesta(area, importacionId);
+  return { importacionId, propuestaId: propuesta.id };
+}
+
+export async function getCantidadesPedidoAlmacen(propuestaId: number): Promise<Record<string, number>> {
+  await ensurePropuestasLineasSchema();
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT cn, COALESCE(cajas_validadas, cajas_propuestas) AS cajas
+    FROM propuestas_lineas
+    WHERE propuesta_id = ${propuestaId};
+  `) as Array<{ cn: string; cajas: string | number }>;
+
+  const map: Record<string, number> = {};
+  for (const row of rows) {
+    map[row.cn] = num(row.cajas);
+  }
+  return map;
+}
+
+export async function upsertLineasPedidoAlmacen(
+  propuestaId: number,
+  lineas: Array<{
+    cn: string;
+    nombre: string;
+    unidadesPorCaja: number;
+    cajasPedidas: number;
+    stockMinimo: number | null;
+    puntoPedido: number | null;
+    stockMaximo: number | null;
+  }>
+): Promise<{ upserted: number; eliminadas: number }> {
+  await ensurePropuestasLineasSchema();
+  const sql = getDb();
+  let upserted = 0;
+  let eliminadas = 0;
+
+  for (const linea of lineas) {
+    const existing = (await sql`
+      SELECT id FROM propuestas_lineas
+      WHERE propuesta_id = ${propuestaId} AND cn = ${linea.cn}
+      LIMIT 1;
+    `) as Array<{ id: number }>;
+
+    if (linea.cajasPedidas <= 0) {
+      if (existing[0]) {
+        await sql`DELETE FROM propuestas_lineas WHERE id = ${existing[0].id};`;
+        eliminadas += 1;
+      }
+      continue;
+    }
+
+    const stockMin = linea.stockMinimo ?? 0;
+    const punto = linea.puntoPedido ?? 0;
+    const stockMax = linea.stockMaximo ?? 0;
+    const unidadesFinal = linea.cajasPedidas * linea.unidadesPorCaja;
+
+    if (existing[0]) {
+      await sql`
+        UPDATE propuestas_lineas
+        SET
+          nombre_medicamento = ${linea.nombre},
+          unidades_por_caja = ${linea.unidadesPorCaja},
+          stock_actual = 0,
+          stock_transito_snap = 0,
+          stock_minimo_snap = ${stockMin},
+          punto_pedido_snap = ${punto},
+          stock_maximo_snap = ${stockMax},
+          stock_objetivo_snap = ${stockMax},
+          cajas_propuestas = ${linea.cajasPedidas},
+          cajas_validadas = ${linea.cajasPedidas},
+          unidades_final = ${unidadesFinal},
+          ajustado = true,
+          motivo_ajuste = NULL,
+          motivo_ajuste_otro = NULL
+        WHERE id = ${existing[0].id};
+      `;
+    } else {
+      await sql`
+        INSERT INTO propuestas_lineas (
+          propuesta_id, cn, nombre_medicamento, unidades_por_caja,
+          stock_actual, stock_transito_snap, stock_minimo_snap, punto_pedido_snap, stock_maximo_snap, stock_objetivo_snap,
+          cajas_propuestas, cajas_validadas, unidades_final, ajustado
+        ) VALUES (
+          ${propuestaId}, ${linea.cn}, ${linea.nombre}, ${linea.unidadesPorCaja},
+          0, 0, ${stockMin}, ${punto}, ${stockMax}, ${stockMax},
+          ${linea.cajasPedidas}, ${linea.cajasPedidas}, ${unidadesFinal}, true
+        );
+      `;
+    }
+    upserted += 1;
+  }
+
+  return { upserted, eliminadas };
+}
+
+export async function recalcularTotalLineasPedidoAlmacen(
+  importacionId: number,
+  propuestaId: number
+): Promise<number> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT COUNT(*)::int AS total
+    FROM propuestas_lineas
+    WHERE propuesta_id = ${propuestaId}
+      AND COALESCE(cajas_validadas, cajas_propuestas) > 0;
+  `) as Array<{ total: number }>;
+  const total = num(rows[0]?.total);
+  await sql`
+    UPDATE importaciones_stock
+    SET total_lineas = ${total}
+    WHERE id = ${importacionId};
+  `;
+  return total;
 }

@@ -4,11 +4,13 @@ import { requireApiSession } from '@/lib/api-auth';
 import { isMSE } from '@/lib/utils';
 import {
   deleteMedicamentoByCn,
+  deleteStockObjetivo,
   getMedicamentoByCn,
   getStockObjetivoByCn,
   updateMedicamento,
   upsertStockObjetivo,
 } from '@/lib/catalogo-neon';
+import { isAlmacenArea } from '@/lib/almacen';
 
 export const runtime = 'nodejs';
 
@@ -45,8 +47,9 @@ export async function PATCH(
   const medUpdate: Record<string, unknown> = { actualizadoEn: new Date().toISOString() };
   const objUpdate: Record<string, unknown> = {};
 
-  const medFields = ['nombre','principioActivo','via','area','ubicacion','unidadesPorCaja','activo','comprable','tipoMse'];
+  const medFields = ['nombre','principioActivo','presentacion','via','area','ubicacion','unidadesPorCaja','activo','comprable','tipoMse'];
   const objFields = ['stockMinimo','puntoPedido','stockMaximo'];
+  const clearStockObjetivo = body.clearStockObjetivo === true;
 
   for (const f of medFields) if (f in body) medUpdate[f] = body[f];
   for (const f of objFields) if (f in body) objUpdate[f] = body[f];
@@ -56,6 +59,7 @@ export async function PATCH(
       cn,
       nombre: (medUpdate.nombre as string | undefined) ?? existing.nombre,
       principioActivo: (medUpdate.principioActivo as string | null | undefined) ?? existing.principioActivo,
+      presentacion: (medUpdate.presentacion as string | null | undefined) ?? existing.presentacion ?? null,
       via: (medUpdate.via as string | null | undefined) ?? existing.via,
       area: existing.area,
       ubicacion: (medUpdate.ubicacion as string | null | undefined) ?? existing.ubicacion,
@@ -75,7 +79,9 @@ export async function PATCH(
     });
   }
 
-  if (Object.keys(objUpdate).length > 0) {
+  if (clearStockObjetivo && isAlmacenArea(existing.area)) {
+    await deleteStockObjetivo(cn);
+  } else if (Object.keys(objUpdate).length > 0) {
     const current = await getStockObjetivoByCn(cn);
     await upsertStockObjetivo(
       cn,

@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
+import { isAlmacenArea } from '@/lib/almacen';
 import {
   actualizarStockTransitoSnapshot,
   actualizarCalculoAutomaticoLineaPropuesta,
   getBorradorPropuesta,
   crearPropuesta,
   getLineasPropuesta,
+  getPedidoAlmacenPendiente,
   getPendienteRecuento,
   getRecuentoConStockParaPropuesta,
   insertarLineasPropuesta,
@@ -42,6 +44,37 @@ export async function GET(req: NextRequest) {
   if (!session.ok) return session.response;
 
   try {
+    if (isAlmacenArea(session.area)) {
+      const pedido = await getPedidoAlmacenPendiente(session.area);
+      if (!pedido) {
+        return NextResponse.json(
+          { error: 'No hay pedido de almacén en curso. Registra líneas desde Recuento Manual.' },
+          { status: 404 }
+        );
+      }
+
+      let propuesta = await getBorradorPropuesta(session.area, pedido.id);
+      if (!propuesta) {
+        propuesta = await crearPropuesta(session.area, pedido.id);
+      }
+
+      const lineas = (await getLineasPropuesta(propuesta.id)).filter(
+        (linea) => (linea.cajasValidadas ?? linea.cajasPropuestas) > 0
+      );
+
+      return NextResponse.json({
+        recuento: {
+          id: pedido.id,
+          fechaRecuento: pedido.fechaRecuento,
+          origen: pedido.origen,
+          estado: pedido.estado,
+        },
+        propuesta,
+        lineas: lineas.map((linea) => ({ ...linea, stockTransito: 0 })),
+        modo: 'pedido-almacen',
+      });
+    }
+
     const recuento = await getPendienteRecuento(session.area);
     if (!recuento) {
       return NextResponse.json(
