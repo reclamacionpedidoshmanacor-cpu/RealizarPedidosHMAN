@@ -69,6 +69,46 @@ function toIntInput(v: string): number {
   if (!Number.isFinite(n) || n < 0) return 0;
   return Math.trunc(n);
 }
+
+function RecuentoCantidadInput({
+  value,
+  onCommit,
+  className,
+}: {
+  value: number;
+  onCommit: (n: number) => void;
+  className: string;
+}) {
+  const [editing, setEditing] = useState<string | null>(null);
+  const valueOnFocusRef = useRef(value);
+
+  const handleFocus = (e: React.FocusEvent<HTMLInputElement>) => {
+    valueOnFocusRef.current = value;
+    setEditing('');
+    requestAnimationFrame(() => e.currentTarget.select());
+  };
+
+  const handleBlur = () => {
+    if (editing === null) return;
+    const next = editing === '' ? valueOnFocusRef.current : toIntInput(editing);
+    onCommit(next);
+    setEditing(null);
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      autoComplete="off"
+      placeholder="0"
+      value={editing !== null ? editing : String(value)}
+      onFocus={handleFocus}
+      onChange={(e) => setEditing(e.target.value.replace(/\D/g, ''))}
+      onBlur={handleBlur}
+      className={className}
+    />
+  );
+}
 function formatDate(v: string | null | undefined): string {
   if (!v) return '—';
   const d = new Date(v);
@@ -1021,27 +1061,30 @@ function MedCard({
         /* Múltiplo 1: solo cajas, a pantalla completa */
         <div className="space-y-1">
           <label className="block text-sm font-bold text-slate-600 uppercase tracking-wider">📦 Cajas</label>
-          <input type="number" inputMode="numeric" min={0} step={1}
+          <RecuentoCantidadInput
             value={val.cajas}
-            onChange={(e) => onChange({ cajas: toIntInput(e.target.value) })}
-            className="w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-3xl font-bold text-center text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200" />
+            onCommit={(cajas) => onChange({ cajas })}
+            className="w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-3xl font-bold text-center text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
+          />
         </div>
       ) : (
         /* Múltiplo > 1: cajas + unidades sueltas */
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-1">
             <label className="block text-sm font-bold text-slate-600 uppercase tracking-wider">📦 Cajas</label>
-            <input type="number" inputMode="numeric" min={0} step={1}
+            <RecuentoCantidadInput
               value={val.cajas}
-              onChange={(e) => onChange({ cajas: toIntInput(e.target.value) })}
-              className="w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-3xl font-bold text-center text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200" />
+              onCommit={(cajas) => onChange({ cajas })}
+              className="w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-3xl font-bold text-center text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
+            />
           </div>
           <div className="space-y-1">
             <label className="block text-sm font-bold text-slate-600 uppercase tracking-wider">💊 Uds. sueltas</label>
-            <input type="number" inputMode="numeric" min={0} step={1}
+            <RecuentoCantidadInput
               value={val.unidadesSueltas}
-              onChange={(e) => onChange({ unidadesSueltas: toIntInput(e.target.value) })}
-              className="w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-3xl font-bold text-center text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200" />
+              onCommit={(unidadesSueltas) => onChange({ unidadesSueltas })}
+              className="w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-3xl font-bold text-center text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
+            />
             <p className="text-sm text-slate-400 text-center">(1 caja = {med.unidadesPorCaja} udes)</p>
           </div>
         </div>
