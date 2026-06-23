@@ -1,4 +1,5 @@
 import { normalizarCnParaCima } from './utils';
+import { procesarPresentacionCima } from './cima-presentacion';
 
 const CIMA_REST = 'https://cima.aemps.es/cima/rest';
 
@@ -13,6 +14,7 @@ export interface CimaMedicamento {
   nombre: string;
   principioActivo: string;
   presentacion: string;
+  unidadesPorCaja: number | null;
   formaFarmaceutica: string;
   labTitular: string;
   autorizado: boolean;
@@ -70,16 +72,20 @@ function mapCimaResponse(cn: string, data: CimaApiResponse): CimaMedicamento {
 
   const principioActivo = formatPrincipioActivo(data.pactivos);
 
-  const presentacion = data.presentaciones?.find(p => cnCimaKey(p.cn) === cnKey)?.nombre
+  const presentacionRaw = data.presentaciones?.find(p => cnCimaKey(p.cn) === cnKey)?.nombre
     ?? data.presentaciones?.[0]?.nombre
     ?? '';
+
+  const nombre = String(data.nombre ?? '').trim();
+  const { presentacion, unidadesPorCaja } = procesarPresentacionCima(presentacionRaw, nombre);
 
   return {
     cn,
     nregistro: String(data.nregistro),
-    nombre: String(data.nombre ?? '').trim(),
+    nombre,
     principioActivo: principioActivo,
-    presentacion: presentacion.trim(),
+    presentacion,
+    unidadesPorCaja,
     formaFarmaceutica: data.formaFarmaceutica?.nombre ?? '',
     labTitular: data.labtitular ?? '',
     autorizado: data.estado?.aut === 1,

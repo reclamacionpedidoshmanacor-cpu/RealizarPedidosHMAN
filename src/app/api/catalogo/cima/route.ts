@@ -30,7 +30,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const unidadesInferidas = inferirUnidadesPorCaja(datos.presentacion);
+  const unidadesInferidas = datos.unidadesPorCaja ?? inferirUnidadesPorCaja(datos.presentacion);
 
   return NextResponse.json({
     cn: datos.cn,
