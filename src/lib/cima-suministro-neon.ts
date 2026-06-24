@@ -37,6 +37,19 @@ export async function ensureCimaSuministroSchema(): Promise<void> {
           ON public.cima_suministro_alertas (activo)
           WHERE activo = true;
       `;
+      await sql`
+        CREATE TABLE IF NOT EXISTS public.cima_suministro_cron_estado (
+          id SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+          ultimo_cn TEXT NOT NULL DEFAULT '',
+          ciclo_iniciado_en TIMESTAMPTZ,
+          actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+      `;
+      await sql`
+        INSERT INTO public.cima_suministro_cron_estado (id, ultimo_cn)
+        VALUES (1, '')
+        ON CONFLICT (id) DO NOTHING;
+      `;
     })().catch((err) => {
       ensureSchemaPromise = null;
       throw err;
@@ -57,6 +70,113 @@ export async function listCnsConPpioActivoCima(): Promise<string[]> {
     ORDER BY cn;
   `) as Array<{ cn: string }>;
   return rows.map((r) => r.cn);
+}
+
+export async function countCnsConPpioActivoCima(): Promise<number> {
+  await ensureCimaSuministroSchema();
+  const sql = getCatalogoClient();
+  const rows = (await sql`
+    SELECT COUNT(*)::int AS total
+    FROM public.medicamentos
+    WHERE activo = true
+      AND ppio_activo_cima = TRUE;
+  `) as Array<{ total: number }>;
+  return rows[0]?.total ?? 0;
+}
+
+async function countCnsPendientesDespuesDe(afterCn: string): Promise<number> {
+  await ensureCimaSuministroSchema();
+  const sql = getCatalogoClient();
+  if (!afterCn) return countCnsConPpioActivoCima();
+  const rows = (await sql`
+    SELECT COUNT(*)::int AS total
+    FROM public.medicamentos
+    WHERE activo = true
+      AND ppio_activo_cima = TRUE
+      AND cn > ${afterCn};
+  `) as Array<{ total: number }>;
+  return rows[0]?.total ?? 0;
+}
+
+async function listCnsConPpioActivoCimaLote(
+  afterCn: string,
+  limit: number,
+): Promise<string[]> {
+  await ensureCimaSuministroSchema();
+  const sql = getCatalogoClient();
+  const rows = (afterCn
+    ? await sql`
+        SELECT cn
+        FROM public.medicamentos
+        WHERE activo = true
+          AND ppio_activo_cima = TRUE
+          AND cn > ${afterCn}
+        ORDER BY cn
+        LIMIT ${limit};
+      `
+    : await sql`
+        SELECT cn
+        FROM public.medicamentos
+        WHERE activo = true
+          AND ppio_activo_cima = TRUE
+        ORDER BY cn
+        LIMIT ${limit};
+      `) as Array<{ cn: string }>;
+  return rows.map((r) => r.cn);
+}
+
+type CronEstado = {
+  ultimoCn: string;
+  cicloIniciadoEn: string | null;
+};
+
+async function leerCronEstado(): Promise<CronEstado> {
+  await ensureCimaSuministroSchema();
+  const sql = getCatalogoClient();
+  const rows = (await sql`
+    SELECT ultimo_cn, ciclo_iniciado_en::text AS ciclo_iniciado_en
+    FROM public.cima_suministro_cron_estado
+    WHERE id = 1;
+  `) as Array<{ ultimo_cn: string; ciclo_iniciado_en: string | null }>;
+  const row = rows[0];
+  return {
+    ultimoCn: row?.ultimo_cn ?? '',
+    cicloIniciadoEn: row?.ciclo_iniciado_en ?? null,
+  };
+}
+
+async function guardarCronEstado(
+  ultimoCn: string,
+  cicloIniciadoEn?: string | null,
+): Promise<void> {
+  await ensureCimaSuministroSchema();
+  const sql = getCatalogoClient();
+  if (cicloIniciadoEn === null) {
+    await sql`
+      UPDATE public.cima_suministro_cron_estado
+      SET ultimo_cn = ${ultimoCn}, ciclo_iniciado_en = NULL, actualizado_en = now()
+      WHERE id = 1;
+    `;
+    return;
+  }
+  await sql`
+    UPDATE public.cima_suministro_cron_estado
+    SET
+      ultimo_cn = ${ultimoCn},
+      ciclo_iniciado_en = COALESCE(${cicloIniciadoEn ?? null}, ciclo_iniciado_en, now()),
+      actualizado_en = now()
+    WHERE id = 1;
+  `;
+}
+
+export async function reiniciarCronCimaSuministro(): Promise<void> {
+  await ensureCimaSuministroSchema();
+  const sql = getCatalogoClient();
+  await sql`
+    UPDATE public.cima_suministro_cron_estado
+    SET ultimo_cn = '', ciclo_iniciado_en = NULL, actualizado_en = now()
+    WHERE id = 1;
+  `;
 }
 
 export async function upsertCimaSuministroActivo(data: {
@@ -128,21 +248,105 @@ export async function checkCimaSuministroParaCn(cn: string): Promise<boolean> {
 }
 
 const CIMA_DELAY_MS = 150;
+/** Margen de seguridad frente al límite de 300 s en Vercel. */
+const CIMA_LOTE_TIEMPO_MS = 270_000;
+/** Tope por ejecución aunque CIMA responda muy rápido. */
+const CIMA_LOTE_MAX_CN = 220;
+const CIMA_LOTE_FETCH = 40;
 
+export type ChequeoCimaSuministroLoteResult = {
+  comprobados: number;
+  problemasActivos: number;
+  totalUniverso: number;
+  pendientesTrasLote: number;
+  ultimoCn: string;
+  cicloCompleto: boolean;
+  continua: boolean;
+};
+
+export async function runChequeoCimaSuministroCatalogoLote(options?: {
+  reiniciar?: boolean;
+}): Promise<ChequeoCimaSuministroLoteResult> {
+  if (options?.reiniciar) {
+    await reiniciarCronCimaSuministro();
+  }
+
+  const totalUniverso = await countCnsConPpioActivoCima();
+  if (totalUniverso === 0) {
+    return {
+      comprobados: 0,
+      problemasActivos: 0,
+      totalUniverso: 0,
+      pendientesTrasLote: 0,
+      ultimoCn: '',
+      cicloCompleto: true,
+      continua: false,
+    };
+  }
+
+  const estadoInicial = await leerCronEstado();
+  let ultimoCn = estadoInicial.ultimoCn;
+  const cicloIniciadoEn = estadoInicial.cicloIniciadoEn ?? new Date().toISOString();
+  if (!estadoInicial.cicloIniciadoEn) {
+    await guardarCronEstado(ultimoCn, cicloIniciadoEn);
+  }
+
+  const deadline = Date.now() + CIMA_LOTE_TIEMPO_MS;
+  let comprobados = 0;
+  let problemasActivos = 0;
+  let cicloCompleto = false;
+
+  while (Date.now() < deadline && comprobados < CIMA_LOTE_MAX_CN) {
+    const lote = await listCnsConPpioActivoCimaLote(ultimoCn, CIMA_LOTE_FETCH);
+    if (lote.length === 0) {
+      cicloCompleto = true;
+      ultimoCn = '';
+      await guardarCronEstado('', null);
+      break;
+    }
+
+    for (const cn of lote) {
+      if (Date.now() >= deadline || comprobados >= CIMA_LOTE_MAX_CN) break;
+
+      const tieneProblema = await checkCimaSuministroParaCn(cn);
+      if (tieneProblema) problemasActivos += 1;
+      comprobados += 1;
+      ultimoCn = cn;
+      await guardarCronEstado(ultimoCn, cicloIniciadoEn);
+      await new Promise((r) => setTimeout(r, CIMA_DELAY_MS));
+    }
+
+    if (lote.length < CIMA_LOTE_FETCH) {
+      cicloCompleto = true;
+      ultimoCn = '';
+      await guardarCronEstado('', null);
+      break;
+    }
+  }
+
+  const pendientesTrasLote = cicloCompleto ? 0 : await countCnsPendientesDespuesDe(ultimoCn);
+
+  return {
+    comprobados,
+    problemasActivos,
+    totalUniverso,
+    pendientesTrasLote,
+    ultimoCn,
+    cicloCompleto,
+    continua: !cicloCompleto && pendientesTrasLote > 0,
+  };
+}
+
+/** @deprecated Usar runChequeoCimaSuministroCatalogoLote (catálogo grande). */
 export async function runChequeoCimaSuministroCatalogo(): Promise<{
   comprobados: number;
   problemasActivos: number;
 }> {
-  const cns = await listCnsConPpioActivoCima();
-  let problemasActivos = 0;
-
-  for (const cn of cns) {
-    const tieneProblema = await checkCimaSuministroParaCn(cn);
-    if (tieneProblema) problemasActivos += 1;
-    await new Promise((r) => setTimeout(r, CIMA_DELAY_MS));
-  }
-
-  return { comprobados: cns.length, problemasActivos };
+  const result = await runChequeoCimaSuministroCatalogoLote();
+  return {
+    comprobados: result.comprobados,
+    problemasActivos: result.problemasActivos,
+  };
 }
 
 export async function loadAlertasCimaPorCns(

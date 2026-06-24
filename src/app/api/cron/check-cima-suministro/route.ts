@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { runChequeoCimaSuministroCatalogo } from '@/lib/cima-suministro-neon';
+import { runChequeoCimaSuministroCatalogoLote } from '@/lib/cima-suministro-neon';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -11,9 +11,16 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const result = await runChequeoCimaSuministroCatalogo();
+    const reiniciar = request.nextUrl.searchParams.get('reset') === '1';
+    const result = await runChequeoCimaSuministroCatalogoLote({ reiniciar });
+    const avance = result.totalUniverso > 0
+      ? result.totalUniverso - result.pendientesTrasLote
+      : 0;
+
     return NextResponse.json({
-      message: `CIMA catálogo: ${result.problemasActivos} problemas activos de ${result.comprobados} CNs comprobados`,
+      message: result.cicloCompleto
+        ? `CIMA catálogo: ciclo completado (${result.comprobados} CNs en este lote, ${result.problemasActivos} problemas)`
+        : `CIMA catálogo: lote ${result.comprobados} CNs (${avance}/${result.totalUniverso}), quedan ${result.pendientesTrasLote}`,
       ...result,
     });
   } catch (error) {
