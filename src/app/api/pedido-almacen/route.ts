@@ -6,6 +6,7 @@ import { requireApiSessionOrArea } from '@/lib/api-auth';
 import {
   ensureSesionPedidoAlmacen,
   getCantidadesPedidoAlmacen,
+  getOrCreatePropuestaAlmacenGrupo,
   getPedidoAlmacenPendiente,
   recalcularTotalLineasPedidoAlmacen,
   upsertLineasPedidoAlmacen,
@@ -67,6 +68,7 @@ export async function POST(req: NextRequest) {
   const preparadas: Array<{
     cn: string;
     nombre: string;
+    principioActivo: string | null;
     unidadesPorCaja: number;
     cajasPedidas: number;
     stockMinimo: number | null;
@@ -99,6 +101,7 @@ export async function POST(req: NextRequest) {
     preparadas.push({
       cn,
       nombre: med.nombre,
+      principioActivo: med.principioActivo,
       unidadesPorCaja: Number(med.unidadesPorCaja) > 0 ? Number(med.unidadesPorCaja) : 1,
       cajasPedidas,
       stockMinimo: med.stockMinimo,
@@ -111,24 +114,58 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Hay líneas inválidas.', errores }, { status: 400 });
   }
 
-  const tieneCambios = preparadas.some((l) => l.cajasPedidas > 0);
-  if (!tieneCambios && preparadas.every((l) => l.cajasPedidas === 0)) {
-    // Permitir guardar ceros para limpiar líneas ya registradas
+  const { importacionId } = await ensureSesionPedidoAlmacen(area);
+
+  const buckets = new Map<
+    number,
+    Array<{
+      cn: string;
+      nombre: string;
+      unidadesPorCaja: number;
+      cajasPedidas: number;
+      stockMinimo: number | null;
+      puntoPedido: number | null;
+      stockMaximo: number | null;
+    }>
+  >();
+
+  for (const linea of preparadas) {
+    const propuestaId = await getOrCreatePropuestaAlmacenGrupo(
+      area,
+      importacionId,
+      ubicacion,
+      linea.principioActivo,
+      linea.nombre
+    );
+    const list = buckets.get(propuestaId) ?? [];
+    list.push(linea);
+    buckets.set(propuestaId, list);
   }
 
-  const { importacionId, propuestaId } = await ensureSesionPedidoAlmacen(area);
-  const { upserted, eliminadas } = await upsertLineasPedidoAlmacen(propuestaId, preparadas);
-  const totalLineas = await recalcularTotalLineasPedidoAlmacen(importacionId, propuestaId);
-  const cantidades = await getCantidadesPedidoAlmacen(propuestaId);
+  let upserted = 0;
+  let eliminadas = 0;
+  const propuestaIds: number[] = [];
+  for (const [propuestaId, lineas] of buckets) {
+    propuestaIds.push(propuestaId);
+    const result = await upsertLineasPedidoAlmacen(propuestaId, lineas);
+    upserted += result.upserted;
+    eliminadas += result.eliminadas;
+  }
+
+  const totalLineas = await recalcularTotalLineasPedidoAlmacen(importacionId);
+  const cantidadesPorPropuesta: Record<number, Record<string, number>> = {};
+  for (const propuestaId of propuestaIds) {
+    cantidadesPorPropuesta[propuestaId] = await getCantidadesPedidoAlmacen(propuestaId);
+  }
 
   return NextResponse.json({
     ok: true,
     importacionId,
-    propuestaId,
+    propuestaIds,
     ubicacion,
     upserted,
     eliminadas,
     totalLineas,
-    cantidades,
+    cantidadesPorPropuesta,
   });
 }

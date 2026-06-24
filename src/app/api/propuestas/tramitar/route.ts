@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'El recuento asociado ya no esta pendiente.' }, { status: 409 });
     }
 
-    await tramitarPropuesta(propuestaId, propuesta.importacionStockId);
+    await tramitarPropuesta(propuestaId, propuesta.importacionStockId, propuesta.area);
 
     return NextResponse.json({ ok: true, propuestaId });
   } catch (err) {

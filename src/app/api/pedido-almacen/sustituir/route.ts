@@ -12,8 +12,9 @@ import { requireApiSessionOrArea } from '@/lib/api-auth';
 import { isMSE, normalizarCnParaCima } from '@/lib/utils';
 import {
   ensureSesionPedidoAlmacen,
-  eliminarLineaPedidoAlmacenPorCn,
+  eliminarLineaPedidoAlmacenPorCnEnSesion,
   getCantidadesPedidoAlmacen,
+  getOrCreatePropuestaAlmacenGrupo,
   recalcularTotalLineasPedidoAlmacen,
   upsertLineasPedidoAlmacen,
 } from '@/lib/stock-propuesta-neon';
@@ -138,11 +139,19 @@ export async function POST(req: NextRequest) {
     activo: false,
   });
 
-  const { importacionId, propuestaId } = await ensureSesionPedidoAlmacen(session.area);
-  await eliminarLineaPedidoAlmacenPorCn(propuestaId, cnViejo);
+  const { importacionId } = await ensureSesionPedidoAlmacen(session.area);
+  await eliminarLineaPedidoAlmacenPorCnEnSesion(importacionId, cnViejo);
 
+  let propuestaId: number | null = null;
   if (cajasPedidas > 0) {
     const stockNuevoFinal = await getStockObjetivoByCn(cnNuevo);
+    propuestaId = await getOrCreatePropuestaAlmacenGrupo(
+      session.area,
+      importacionId,
+      ubicacion,
+      cima.principioActivo,
+      cima.nombre
+    );
     await upsertLineasPedidoAlmacen(propuestaId, [{
       cn: cnNuevo,
       nombre: cima.nombre,
@@ -154,8 +163,10 @@ export async function POST(req: NextRequest) {
     }]);
   }
 
-  const totalLineas = await recalcularTotalLineasPedidoAlmacen(importacionId, propuestaId);
-  const cantidades = await getCantidadesPedidoAlmacen(propuestaId);
+  const totalLineas = await recalcularTotalLineasPedidoAlmacen(importacionId);
+  const cantidades = propuestaId != null
+    ? await getCantidadesPedidoAlmacen(propuestaId)
+    : {};
 
   const stockFinal = await getStockObjetivoByCn(cnNuevo);
 

@@ -1,6 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 import { calcularCajasPropuestas } from '@/lib/propuesta';
-import { ORIGEN_PEDIDO_ALMACEN, isAlmacenArea } from '@/lib/almacen';
+import { ORIGEN_PEDIDO_ALMACEN, isAlmacenArea, nombrePropuestaAlmacen, grupoLetrasAlmacenFar, grupoLetrasAlmacenFarFromLetter, ubicacionAlmacenUsaLetras, type AlmacenFarGrupoLetras } from '@/lib/almacen';
 import { roundCajas } from '@/lib/utils';
 
 const NUTRICION_AREA = 'nutricion';
@@ -21,6 +21,20 @@ function numOrNull(v: unknown): number | null {
   if (v == null) return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+let ensurePropuestasObservacionesSchemaPromise: Promise<void> | null = null;
+async function ensurePropuestasObservacionesSchema(): Promise<void> {
+  if (!ensurePropuestasObservacionesSchemaPromise) {
+    const sql = getDb();
+    ensurePropuestasObservacionesSchemaPromise = (async () => {
+      await sql`
+        ALTER TABLE propuestas
+        ADD COLUMN IF NOT EXISTS observaciones TEXT;
+      `;
+    })();
+  }
+  await ensurePropuestasObservacionesSchemaPromise;
 }
 
 let ensurePropuestasLineasSchemaPromise: Promise<void> | null = null;
@@ -141,6 +155,7 @@ export type PropuestaCabecera = {
   estado: string;
   fechaGeneracion: string;
   tramitadaEn: string | null;
+  observaciones?: string | null;
 };
 
 export type PropuestaLinea = {
@@ -685,33 +700,134 @@ export async function recuperarRecuentoGenerado(
 export async function getBorradorPropuesta(
   area: string, importacionStockId: number
 ): Promise<PropuestaCabecera | null> {
+  await ensurePropuestasObservacionesSchema();
   const sql = getDb();
   const rows = (await sql`
-    SELECT id, area, estado, fecha_generacion::text, tramitada_en::text
+    SELECT id, area, estado, fecha_generacion::text, tramitada_en::text, observaciones
     FROM propuestas
     WHERE area = ${area} AND importacion_stock_id = ${importacionStockId} AND estado = 'borrador'
     ORDER BY id DESC LIMIT 1;
   `) as Array<{
     id: number; area: string; estado: string;
-    fecha_generacion: string; tramitada_en: string | null;
+    fecha_generacion: string; tramitada_en: string | null; observaciones: string | null;
   }>;
   const r = rows[0];
   if (!r) return null;
-  return { id: num(r.id), area: r.area, estado: r.estado, fechaGeneracion: r.fecha_generacion, tramitadaEn: r.tramitada_en };
+  return {
+    id: num(r.id), area: r.area, estado: r.estado,
+    fechaGeneracion: r.fecha_generacion, tramitadaEn: r.tramitada_en,
+    observaciones: r.observaciones,
+  };
 }
 
-export async function crearPropuesta(area: string, importacionStockId: number): Promise<PropuestaCabecera> {
+export async function getBorradorPropuestaAlmacenPorNombre(
+  area: string,
+  importacionStockId: number,
+  nombreGrupo: string
+): Promise<PropuestaCabecera | null> {
+  await ensurePropuestasObservacionesSchema();
   const sql = getDb();
   const rows = (await sql`
-    INSERT INTO propuestas (area, estado, importacion_stock_id, fecha_generacion)
-    VALUES (${area}, 'borrador', ${importacionStockId}, now())
-    RETURNING id, area, estado, fecha_generacion::text, tramitada_en::text;
+    SELECT id, area, estado, fecha_generacion::text, tramitada_en::text, observaciones
+    FROM propuestas
+    WHERE area = ${area}
+      AND importacion_stock_id = ${importacionStockId}
+      AND estado = 'borrador'
+      AND observaciones = ${nombreGrupo}
+    ORDER BY id DESC LIMIT 1;
+  `) as Array<{
+    id: number; area: string; estado: string;
+    fecha_generacion: string; tramitada_en: string | null; observaciones: string | null;
+  }>;
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    id: num(r.id), area: r.area, estado: r.estado,
+    fechaGeneracion: r.fecha_generacion, tramitadaEn: r.tramitada_en,
+    observaciones: r.observaciones,
+  };
+}
+
+export async function listBorradoresPropuestaAlmacen(
+  area: string,
+  importacionStockId: number
+): Promise<Array<PropuestaCabecera & { totalLineas: number }>> {
+  await ensurePropuestasObservacionesSchema();
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT
+      p.id,
+      p.area,
+      p.estado,
+      p.fecha_generacion::text AS fecha_generacion,
+      p.tramitada_en::text AS tramitada_en,
+      p.observaciones,
+      COUNT(pl.id) FILTER (WHERE COALESCE(pl.cajas_validadas, pl.cajas_propuestas) > 0)::int AS total_lineas
+    FROM propuestas p
+    LEFT JOIN propuestas_lineas pl ON pl.propuesta_id = p.id
+    WHERE p.area = ${area}
+      AND p.importacion_stock_id = ${importacionStockId}
+      AND p.estado = 'borrador'
+    GROUP BY p.id
+    ORDER BY p.observaciones ASC NULLS LAST, p.id ASC;
   `) as Array<{
     id: number; area: string; estado: string;
     fecha_generacion: string; tramitada_en: string | null;
+    observaciones: string | null; total_lineas: number;
+  }>;
+
+  return rows.map((r) => ({
+    id: num(r.id),
+    area: r.area,
+    estado: r.estado,
+    fechaGeneracion: r.fecha_generacion,
+    tramitadaEn: r.tramitada_en,
+    observaciones: r.observaciones,
+    totalLineas: num(r.total_lineas),
+  }));
+}
+
+export async function getOrCreatePropuestaAlmacenGrupo(
+  area: string,
+  importacionStockId: number,
+  ubicacion: string,
+  principioActivo: string | null,
+  nombre: string
+): Promise<number> {
+  const grupoLetras: AlmacenFarGrupoLetras | null = ubicacionAlmacenUsaLetras(ubicacion)
+    ? grupoLetrasAlmacenFar(principioActivo, nombre)
+    : null;
+  const etiqueta = nombrePropuestaAlmacen(ubicacion, grupoLetras);
+
+  const existing = await getBorradorPropuestaAlmacenPorNombre(area, importacionStockId, etiqueta);
+  if (existing) return existing.id;
+
+  const created = await crearPropuesta(area, importacionStockId, etiqueta);
+  return created.id;
+}
+
+export async function crearPropuesta(
+  area: string,
+  importacionStockId: number,
+  observaciones?: string | null
+): Promise<PropuestaCabecera> {
+  await ensurePropuestasObservacionesSchema();
+  const sql = getDb();
+  const obs = observaciones?.trim() || null;
+  const rows = (await sql`
+    INSERT INTO propuestas (area, estado, importacion_stock_id, fecha_generacion, observaciones)
+    VALUES (${area}, 'borrador', ${importacionStockId}, now(), ${obs})
+    RETURNING id, area, estado, fecha_generacion::text, tramitada_en::text, observaciones;
+  `) as Array<{
+    id: number; area: string; estado: string;
+    fecha_generacion: string; tramitada_en: string | null; observaciones: string | null;
   }>;
   const r = rows[0]!;
-  return { id: num(r.id), area: r.area, estado: r.estado, fechaGeneracion: r.fecha_generacion, tramitadaEn: r.tramitada_en };
+  return {
+    id: num(r.id), area: r.area, estado: r.estado,
+    fechaGeneracion: r.fecha_generacion, tramitadaEn: r.tramitada_en,
+    observaciones: r.observaciones,
+  };
 }
 
 export async function getLineasPropuesta(propuestaId: number): Promise<PropuestaLinea[]> {
@@ -1019,14 +1135,18 @@ export async function actualizarCalculoAutomaticoLineaPropuesta(
 export async function getPropuestaById(propuestaId: number): Promise<{
   id: number; area: string; estado: string;
   importacionStockId: number | null; fechaGeneracion: string;
+  tramitadaEn: string | null;
+  observaciones: string | null;
 } | null> {
+  await ensurePropuestasObservacionesSchema();
   const sql = getDb();
   const rows = (await sql`
-    SELECT id, area, estado, importacion_stock_id, fecha_generacion::text
+    SELECT id, area, estado, importacion_stock_id, fecha_generacion::text, tramitada_en::text, observaciones
     FROM propuestas WHERE id = ${propuestaId} LIMIT 1;
   `) as Array<{
     id: number; area: string; estado: string;
     importacion_stock_id: number | null; fecha_generacion: string;
+    tramitada_en: string | null; observaciones: string | null;
   }>;
   const r = rows[0];
   if (!r) return null;
@@ -1034,10 +1154,16 @@ export async function getPropuestaById(propuestaId: number): Promise<{
     id: num(r.id), area: r.area, estado: r.estado,
     importacionStockId: r.importacion_stock_id ? num(r.importacion_stock_id) : null,
     fechaGeneracion: r.fecha_generacion,
+    tramitadaEn: r.tramitada_en,
+    observaciones: r.observaciones,
   };
 }
 
-export async function tramitarPropuesta(propuestaId: number, importacionStockId: number): Promise<void> {
+export async function tramitarPropuesta(
+  propuestaId: number,
+  importacionStockId: number,
+  area?: string
+): Promise<void> {
   const sql = getDb();
 
   const lineas = (await sql`
@@ -1064,6 +1190,23 @@ export async function tramitarPropuesta(propuestaId: number, importacionStockId:
     WHERE id = ${propuestaId};
   `;
 
+  if (isAlmacenArea(area)) {
+    const pendientes = (await sql`
+      SELECT COUNT(*)::int AS n
+      FROM propuestas
+      WHERE importacion_stock_id = ${importacionStockId}
+        AND estado = 'borrador';
+    `) as Array<{ n: number }>;
+    if (num(pendientes[0]?.n) === 0) {
+      await sql`
+        UPDATE importaciones_stock
+        SET estado = 'generado', generado_en = now(), propuesta_id = ${propuestaId}
+        WHERE id = ${importacionStockId};
+      `;
+    }
+    return;
+  }
+
   await sql`
     UPDATE importaciones_stock
     SET estado = 'generado', generado_en = now(), propuesta_id = ${propuestaId}
@@ -1071,13 +1214,25 @@ export async function tramitarPropuesta(propuestaId: number, importacionStockId:
   `;
 }
 
-export async function deshacerPropuesta(propuestaId: number, importacionStockId: number): Promise<void> {
+export async function deshacerPropuesta(
+  propuestaId: number,
+  importacionStockId: number,
+  area?: string
+): Promise<void> {
   const sql = getDb();
   await sql`
     UPDATE propuestas
     SET estado = 'borrador', tramitada_en = null, validada_en = null
     WHERE id = ${propuestaId};
   `;
+  if (isAlmacenArea(area)) {
+    await sql`
+      UPDATE importaciones_stock
+      SET estado = 'pendiente', generado_en = null, propuesta_id = null
+      WHERE id = ${importacionStockId};
+    `;
+    return;
+  }
   await sql`
     UPDATE importaciones_stock
     SET estado = 'pendiente', generado_en = null, propuesta_id = null
@@ -1159,9 +1314,11 @@ export type PropuestaResumen = {
   recuentoFecha: string | null;
   recuentoOrigen: string | null;
   excelGeneradoEn: string | null;
+  observaciones: string | null;
 };
 
 export async function listPropuestasByArea(area: string): Promise<PropuestaResumen[]> {
+  await ensurePropuestasObservacionesSchema();
   const sql = getDb();
   const rows = (await sql`
     SELECT
@@ -1170,6 +1327,7 @@ export async function listPropuestasByArea(area: string): Promise<PropuestaResum
       p.fecha_generacion::text   AS fecha_generacion,
       p.tramitada_en::text       AS tramitada_en,
       p.excel_generado_en::text  AS excel_generado_en,
+      p.observaciones,
       p.importacion_stock_id     AS recuento_id,
       i.fecha_recuento::text     AS recuento_fecha,
       i.origen                   AS recuento_origen,
@@ -1178,12 +1336,13 @@ export async function listPropuestasByArea(area: string): Promise<PropuestaResum
     LEFT JOIN importaciones_stock i ON i.id = p.importacion_stock_id
     LEFT JOIN propuestas_lineas pl ON pl.propuesta_id = p.id
     WHERE p.area = ${area}
-    GROUP BY p.id, i.fecha_recuento, i.origen
+    GROUP BY p.id, i.fecha_recuento, i.origen, p.observaciones
     ORDER BY p.id DESC
     LIMIT 50;
   `) as Array<{
     id: number; estado: string; fecha_generacion: string;
     tramitada_en: string | null; excel_generado_en: string | null;
+    observaciones: string | null;
     recuento_id: number | null; recuento_fecha: string | null;
     recuento_origen: string | null; total_lineas: number;
   }>;
@@ -1193,6 +1352,7 @@ export async function listPropuestasByArea(area: string): Promise<PropuestaResum
     fechaGeneracion: r.fecha_generacion,
     tramitadaEn: r.tramitada_en,
     excelGeneradoEn: r.excel_generado_en,
+    observaciones: r.observaciones,
     recuentoId: r.recuento_id ? num(r.recuento_id) : null,
     recuentoFecha: r.recuento_fecha,
     recuentoOrigen: r.recuento_origen,
@@ -1348,15 +1508,10 @@ export async function getPedidoAlmacenPendiente(area: string): Promise<RecuentoC
 
 export async function ensureSesionPedidoAlmacen(area: string): Promise<{
   importacionId: number;
-  propuestaId: number;
 }> {
   const pendiente = await getPedidoAlmacenPendiente(area);
   if (pendiente) {
-    let propuesta = await getBorradorPropuesta(area, pendiente.id);
-    if (!propuesta) {
-      propuesta = await crearPropuesta(area, pendiente.id);
-    }
-    return { importacionId: pendiente.id, propuestaId: propuesta.id };
+    return { importacionId: pendiente.id };
   }
 
   const fechaRecuento = new Date().toISOString().slice(0, 10);
@@ -1367,8 +1522,7 @@ export async function ensureSesionPedidoAlmacen(area: string): Promise<{
     ficheroNombre: 'APP Pedido Almacén',
     totalLineas: 0,
   });
-  const propuesta = await crearPropuesta(area, importacionId);
-  return { importacionId, propuestaId: propuesta.id };
+  return { importacionId };
 }
 
 export async function getCantidadesPedidoAlmacen(propuestaId: number): Promise<Record<string, number>> {
@@ -1385,6 +1539,39 @@ export async function getCantidadesPedidoAlmacen(propuestaId: number): Promise<R
     map[row.cn] = num(row.cajas);
   }
   return map;
+}
+
+export async function getCantidadesPedidoAlmacenParaVista(
+  area: string,
+  importacionId: number,
+  ubicacion: string,
+  letra: string | null
+): Promise<Record<string, number>> {
+  const grupoLetras =
+    ubicacionAlmacenUsaLetras(ubicacion) && letra
+      ? grupoLetrasAlmacenFarFromLetter(letra)
+      : null;
+  const etiqueta = nombrePropuestaAlmacen(ubicacion, grupoLetras);
+  const propuesta = await getBorradorPropuestaAlmacenPorNombre(area, importacionId, etiqueta);
+  if (!propuesta) return {};
+  return getCantidadesPedidoAlmacen(propuesta.id);
+}
+
+export async function eliminarLineaPedidoAlmacenPorCnEnSesion(
+  importacionId: number,
+  cn: string
+): Promise<boolean> {
+  await ensurePropuestasLineasSchema();
+  const sql = getDb();
+  const deleted = (await sql`
+    DELETE FROM propuestas_lineas pl
+    USING propuestas p
+    WHERE pl.propuesta_id = p.id
+      AND p.importacion_stock_id = ${importacionId}
+      AND pl.cn = ${cn}
+    RETURNING pl.id;
+  `) as Array<{ id: number }>;
+  return deleted.length > 0;
 }
 
 export async function eliminarLineaPedidoAlmacenPorCn(
@@ -1477,16 +1664,14 @@ export async function upsertLineasPedidoAlmacen(
   return { upserted, eliminadas };
 }
 
-export async function recalcularTotalLineasPedidoAlmacen(
-  importacionId: number,
-  propuestaId: number
-): Promise<number> {
+export async function recalcularTotalLineasPedidoAlmacen(importacionId: number): Promise<number> {
   const sql = getDb();
   const rows = (await sql`
     SELECT COUNT(*)::int AS total
-    FROM propuestas_lineas
-    WHERE propuesta_id = ${propuestaId}
-      AND COALESCE(cajas_validadas, cajas_propuestas) > 0;
+    FROM propuestas_lineas pl
+    INNER JOIN propuestas p ON p.id = pl.propuesta_id
+    WHERE p.importacion_stock_id = ${importacionId}
+      AND COALESCE(pl.cajas_validadas, pl.cajas_propuestas) > 0;
   `) as Array<{ total: number }>;
   const total = num(rows[0]?.total);
   await sql`

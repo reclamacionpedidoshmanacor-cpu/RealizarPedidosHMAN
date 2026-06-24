@@ -10,6 +10,8 @@ import {
   crearPropuesta,
   getLineasPropuesta,
   getPedidoAlmacenPendiente,
+  listBorradoresPropuestaAlmacen,
+  getPropuestaById,
   getPendienteRecuento,
   getRecuentoConStockParaPropuesta,
   insertarLineasPropuesta,
@@ -56,9 +58,32 @@ export async function GET(req: NextRequest) {
         );
       }
 
-      let propuesta = await getBorradorPropuesta(session.area, pedido.id);
+      const borradores = await listBorradoresPropuestaAlmacen(session.area, pedido.id);
+      const propuestaIdParam = Number(req.nextUrl.searchParams.get('propuestaId'));
+
+      let propuesta =
+        propuestaIdParam > 0
+          ? borradores.find((b) => b.id === propuestaIdParam) ??
+            (await getPropuestaById(propuestaIdParam))
+          : borradores.find((b) => b.totalLineas > 0) ?? borradores[0] ?? null;
+
+      if (propuesta && propuestaIdParam > 0 && propuesta.estado !== 'borrador') {
+        return NextResponse.json({ error: 'La propuesta seleccionada no está en borrador.' }, { status: 409 });
+      }
+
       if (!propuesta) {
-        propuesta = await crearPropuesta(session.area, pedido.id);
+        return NextResponse.json({
+          recuento: {
+            id: pedido.id,
+            fechaRecuento: pedido.fechaRecuento,
+            origen: pedido.origen,
+            estado: pedido.estado,
+          },
+          propuesta: null,
+          lineas: [],
+          borradores,
+          modo: 'pedido-almacen',
+        });
       }
 
       const lineasPropuesta = await getLineasPropuesta(propuesta.id);
@@ -93,7 +118,15 @@ export async function GET(req: NextRequest) {
           origen: pedido.origen,
           estado: pedido.estado,
         },
-        propuesta,
+        propuesta: {
+          id: propuesta.id,
+          estado: propuesta.estado,
+          fechaGeneracion: propuesta.fechaGeneracion,
+          tramitadaEn: 'tramitadaEn' in propuesta ? propuesta.tramitadaEn : null,
+          importacionStockId: pedido.id,
+          observaciones: propuesta.observaciones ?? null,
+        },
+        borradores,
         lineas: lineasParaUi,
         modo: 'pedido-almacen',
       });

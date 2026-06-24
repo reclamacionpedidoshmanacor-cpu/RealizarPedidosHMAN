@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'La propuesta no tiene recuento asociado.' }, { status: 409 });
     }
 
-    await deshacerPropuesta(propuestaId, propuesta.importacionStockId);
+    await deshacerPropuesta(propuestaId, propuesta.importacionStockId, propuesta.area);
 
     return NextResponse.json({ ok: true, propuestaId });
   } catch (err) {

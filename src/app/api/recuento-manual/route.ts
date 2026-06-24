@@ -14,9 +14,8 @@ import { loadAlertasSuministroPorCnsSafe, alertaSuministroParaCn } from '@/lib/a
 import { isMSE } from '@/lib/utils';
 import {
   crearRecuento,
-  eliminarLineaPedidoAlmacenPorCn,
-  getBorradorPropuesta,
-  getCantidadesPedidoAlmacen,
+  eliminarLineaPedidoAlmacenPorCnEnSesion,
+  getCantidadesPedidoAlmacenParaVista,
   getLineasRecuento,
   getPedidoAlmacenPendiente,
   getPendienteRecuento,
@@ -115,11 +114,13 @@ export async function GET(req: NextRequest) {
     if (isAlmacenArea(area)) {
       const pedidoPendiente = await getPedidoAlmacenPendiente(area);
       let cantidadesPedido: Record<string, number> = {};
-      if (pedidoPendiente) {
-        const propuesta = await getBorradorPropuesta(area, pedidoPendiente.id);
-        if (propuesta) {
-          cantidadesPedido = await getCantidadesPedidoAlmacen(propuesta.id);
-        }
+      if (pedidoPendiente && ubicacionSeleccionada) {
+        cantidadesPedido = await getCantidadesPedidoAlmacenParaVista(
+          area,
+          pedidoPendiente.id,
+          ubicacionSeleccionada,
+          letraParam?.trim().toLocaleUpperCase('es') || null
+        );
       }
 
       const medsUbicacion = catalogo
@@ -394,10 +395,9 @@ export async function POST(req: NextRequest) {
 
         const pedidoPendiente = await getPedidoAlmacenPendiente(area);
         if (pedidoPendiente) {
-          const propuesta = await getBorradorPropuesta(area, pedidoPendiente.id);
-          if (propuesta) {
-            await eliminarLineaPedidoAlmacenPorCn(propuesta.id, cn);
-            await recalcularTotalLineasPedidoAlmacen(pedidoPendiente.id, propuesta.id);
+          const eliminada = await eliminarLineaPedidoAlmacenPorCnEnSesion(pedidoPendiente.id, cn);
+          if (eliminada) {
+            await recalcularTotalLineasPedidoAlmacen(pedidoPendiente.id);
           }
         }
       }

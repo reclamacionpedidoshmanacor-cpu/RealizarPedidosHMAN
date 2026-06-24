@@ -19,8 +19,52 @@ export const ORIGEN_PEDIDO_ALMACEN = 'Pedido-Almacen';
 /** Ubicación del almacén que se recorre por letras del abecedario. */
 export const ALMACEN_UBICACION_CON_LETRAS = 'ALMACEN FAR';
 
+/** Grupos de letras para propuestas de ALMACEN FAR (orden de recorrido). */
+export const ALMACEN_FAR_GRUPOS_LETRAS = ['A', 'B-C', 'D-H', 'I-N', 'O-S', 'T-Z'] as const;
+
+export type AlmacenFarGrupoLetras = (typeof ALMACEN_FAR_GRUPOS_LETRAS)[number];
+
+const GRUPO_LETRAS_FAR: Record<AlmacenFarGrupoLetras, readonly string[]> = {
+  A: ['A'],
+  'B-C': ['B', 'C'],
+  'D-H': ['D', 'E', 'F', 'G', 'H'],
+  'I-N': ['I', 'J', 'K', 'L', 'M', 'N', 'Ñ'],
+  'O-S': ['O', 'P', 'Q', 'R', 'S'],
+  'T-Z': ['T', 'U', 'V', 'W', 'X', 'Y', 'Z'],
+};
+
 export function ubicacionAlmacenUsaLetras(ubicacion: string | null | undefined): boolean {
   return normalizeAlmacenText(ubicacion) === normalizeAlmacenText(ALMACEN_UBICACION_CON_LETRAS);
+}
+
+export function grupoLetrasAlmacenFarFromLetter(letra: string | null | undefined): AlmacenFarGrupoLetras {
+  const L = String(letra ?? '')
+    .trim()
+    .toLocaleUpperCase('es');
+  if (!L || L === '#') return 'T-Z';
+  for (const grupo of ALMACEN_FAR_GRUPOS_LETRAS) {
+    if (GRUPO_LETRAS_FAR[grupo].includes(L)) return grupo;
+  }
+  return 'T-Z';
+}
+
+export function grupoLetrasAlmacenFar(
+  principioActivo: string | null | undefined,
+  nombre: string | null | undefined
+): AlmacenFarGrupoLetras {
+  return grupoLetrasAlmacenFarFromLetter(letraCatalogoAlmacen(principioActivo, nombre));
+}
+
+/** Etiqueta visible de la propuesta (p. ej. «Propuesta ALMACEN FAR B-C»). */
+export function nombrePropuestaAlmacen(
+  ubicacion: string,
+  grupoLetras?: AlmacenFarGrupoLetras | null
+): string {
+  const ub = ubicacion.trim();
+  if (grupoLetras && ubicacionAlmacenUsaLetras(ubicacion)) {
+    return `Propuesta ${ub} ${grupoLetras}`;
+  }
+  return `Propuesta ${ub}`;
 }
 
 export function isAlmacenArea(area: string | null | undefined): boolean {

@@ -22,6 +22,16 @@ type Propuesta = {
   fechaGeneracion: string;
   tramitadaEn: string | null;
   importacionStockId?: number;
+  observaciones?: string | null;
+};
+
+type BorradorResumen = {
+  id: number;
+  estado: string;
+  fechaGeneracion: string;
+  tramitadaEn: string | null;
+  observaciones: string | null;
+  totalLineas: number;
 };
 
 type Linea = {
@@ -47,8 +57,10 @@ type Linea = {
 
 type ApiResponse = {
   recuento: RecuentoPendiente;
-  propuesta: Propuesta;
+  propuesta: Propuesta | null;
   lineas: Linea[];
+  modo?: string;
+  borradores?: BorradorResumen[];
 };
 
 type DraftEdit = {
@@ -67,6 +79,7 @@ type PropuestaResumen = {
   recuentoFecha: string | null;
   recuentoOrigen: string | null;
   excelGeneradoEn: string | null;
+  observaciones?: string | null;
 };
 
 type PropuestaDetalle = {
@@ -123,15 +136,23 @@ export default function PropuestaPage() {
   const [expandedHistorialId, setExpandedHistorialId] = useState<number | null>(null);
   const [detalleByPropuesta, setDetalleByPropuesta] = useState<Record<number, PropuestaDetalle>>({});
   const [loadingDetalleId, setLoadingDetalleId] = useState<number | null>(null);
+  const [propuestaAlmacenId, setPropuestaAlmacenId] = useState<number | null>(null);
 
   const esAlmacen = getAreaFromCookie() === 'almacen';
 
+  const etiquetaPropuesta = (observaciones?: string | null, id?: number) =>
+    observaciones?.trim() || (id != null ? `Propuesta #${id}` : 'Propuesta');
+
   // ── Carga propuesta activa ────────────────────────────────────────────────
-  const load = async () => {
+  const load = async (propuestaIdOverride?: number | null) => {
     setLoading(true);
     setError(null);
     try {
-      const res     = await fetch('/api/propuestas/actual', { cache: 'no-store' });
+      const params = new URLSearchParams();
+      const id = propuestaIdOverride ?? propuestaAlmacenId;
+      if (id) params.set('propuestaId', String(id));
+      const qs = params.toString();
+      const res     = await fetch(`/api/propuestas/actual${qs ? `?${qs}` : ''}`, { cache: 'no-store' });
       const payload = await res.json();
       if (!res.ok) {
         if (res.status === 404) {
@@ -144,6 +165,9 @@ export default function PropuestaPage() {
         return;
       }
       setData(payload);
+      if (payload.propuesta?.id) {
+        setPropuestaAlmacenId(payload.propuesta.id);
+      }
       const nextEdits: Record<number, DraftEdit> = {};
       for (const linea of payload.lineas as Linea[]) {
         if (esLineaInactiva(linea) || linea.id <= 0) continue;
@@ -207,7 +231,7 @@ export default function PropuestaPage() {
 
   // ── Guardar borrador ──────────────────────────────────────────────────────
   const handleGuardarBorrador = async () => {
-    if (!data) return;
+    if (!data?.propuesta) return;
     const err = validateEdits(data.lineas);
     if (err) { toast.error(err); return; }
     setSaving(true);
@@ -221,7 +245,7 @@ export default function PropuestaPage() {
 
   // ── Tramitar ──────────────────────────────────────────────────────────────
   const handleTramitar = async () => {
-    if (!data) return;
+    if (!data?.propuesta) return;
     const err = validateEdits(data.lineas);
     if (err) { toast.error(err); return; }
     setTramiting(true);
@@ -237,9 +261,11 @@ export default function PropuestaPage() {
       toast.success('Propuesta tramitada correctamente.');
       // Actualizar estado local sin recargar: así el botón Excel aparece de inmediato
       setData(prev =>
-        prev ? { ...prev, propuesta: { ...prev.propuesta, estado: 'tramitada' } } : prev
+        prev && prev.propuesta
+          ? { ...prev, propuesta: { ...prev.propuesta, estado: 'tramitada' } }
+          : prev
       );
-      // Refrescar historial en segundo plano
+      void load();
       void loadHistorial();
     } catch (err) { toast.error(err instanceof Error ? err.message : 'Error inesperado.'); }
     finally { setTramiting(false); }
@@ -247,7 +273,7 @@ export default function PropuestaPage() {
 
   // ── Deshacer tramitación ──────────────────────────────────────────────────
   const handleDeshacer = async () => {
-    if (!data) return;
+    if (!data?.propuesta) return;
     if (!confirm('¿Deshacer la tramitación? La propuesta volverá a borrador y el recuento quedará pendiente de nuevo.')) return;
     setDeshaciendo(true);
     try {
@@ -260,8 +286,11 @@ export default function PropuestaPage() {
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo deshacer.');
       toast.success('Propuesta revertida a borrador.');
       setData(prev =>
-        prev ? { ...prev, propuesta: { ...prev.propuesta, estado: 'borrador' } } : prev
+        prev && prev.propuesta
+          ? { ...prev, propuesta: { ...prev.propuesta, estado: 'borrador' } }
+          : prev
       );
+      void load();
       void loadHistorial();
     } catch (err) { toast.error(err instanceof Error ? err.message : 'Error inesperado.'); }
     finally { setDeshaciendo(false); }
@@ -347,12 +376,13 @@ export default function PropuestaPage() {
           <div>
             <h1 className="text-2xl font-bold text-slate-800 mb-1">Propuesta de pedido</h1>
             <p className="text-sm text-slate-500">
-              Calculada a partir del recuento pendiente. Solo incluye artículos activos.
-              Si ajustas cantidades debes indicar el motivo.
+              {esAlmacen
+                ? 'En Almacén hay una propuesta por ubicación (y por grupo de letras en ALMACEN FAR). Tramita cada bloque cuando esté listo.'
+                : 'Calculada a partir del recuento pendiente. Solo incluye artículos activos. Si ajustas cantidades debes indicar el motivo.'}
             </p>
           </div>
 
-          {data && (
+          {data?.propuesta && (
             <div className="flex items-center gap-2">
               {data.propuesta.estado === 'tramitada' && (
                 <>
@@ -367,7 +397,7 @@ export default function PropuestaPage() {
                     {deshaciendo ? 'Deshaciendo…' : 'Deshacer tramitación'}
                   </button>
                   <button
-                    onClick={() => descargarExcel(data.propuesta.id)}
+                    onClick={() => descargarExcel(data.propuesta!.id)}
                     className="flex items-center gap-1.5 rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-medium text-teal-700 hover:bg-teal-100 transition-colors"
                   >
                     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
@@ -398,14 +428,52 @@ export default function PropuestaPage() {
 
         {data && (
           <>
+            {esAlmacen && (data.borradores?.length ?? 0) > 0 && (
+              <div className="mb-4 flex flex-wrap items-center gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Borradores</span>
+                {data.borradores!.map((b) => (
+                  <button
+                    key={b.id}
+                    type="button"
+                    onClick={() => {
+                      setPropuestaAlmacenId(b.id);
+                      void load(b.id);
+                    }}
+                    className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
+                      data.propuesta?.id === b.id
+                        ? 'border-teal-600 bg-teal-50 font-semibold text-teal-800'
+                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    {etiquetaPropuesta(b.observaciones, b.id)}
+                    <span className="ml-1.5 text-xs text-slate-400">({b.totalLineas})</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {!data.propuesta ? (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-6 py-10 text-center">
+                <p className="text-slate-500 text-sm">Pedido de almacén en curso, sin líneas guardadas aún.</p>
+                <p className="text-slate-400 text-xs mt-1">Registra cantidades desde Recuento Manual por ubicación y letra.</p>
+              </div>
+            ) : (
+          <>
+            {(() => {
+              const propuestaActiva = data.propuesta!;
+              return (
+                <>
+            {propuestaActiva.observaciones && (
+              <p className="mb-3 text-base font-semibold text-slate-700">{propuestaActiva.observaciones}</p>
+            )}
             {/* KPIs */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
               <Kpi label="Recuento" value={`#${data.recuento.id}`} sub={fmt(data.recuento.fechaRecuento)} />
               <Kpi label="Origen" value={ORIGEN_LABEL[data.recuento.origen] ?? data.recuento.origen} />
               <Kpi
                 label="Estado propuesta"
-                value={data.propuesta.estado.charAt(0).toUpperCase() + data.propuesta.estado.slice(1)}
-                accent={data.propuesta.estado === 'tramitada' ? 'green' : 'amber'}
+                value={propuestaActiva.estado.charAt(0).toUpperCase() + propuestaActiva.estado.slice(1)}
+                accent={propuestaActiva.estado === 'tramitada' ? 'green' : 'amber'}
               />
               <Kpi
                 label="Líneas"
@@ -456,7 +524,7 @@ export default function PropuestaPage() {
                   {data.lineas.map((linea, idx) => {
                     const inactiva   = esLineaInactiva(linea);
                     const draft      = edits[linea.id];
-                    const editable   = !inactiva && linea.editable !== false && data.propuesta.estado === 'borrador';
+                    const editable   = !inactiva && linea.editable !== false && propuestaActiva.estado === 'borrador';
                     const cajasVal   = draft?.cajasValidadas ?? linea.cajasPropuestas;
                     const diff       = cajasVal - linea.cajasPropuestas;
                     const aumentado  = diff > 0;
@@ -699,7 +767,7 @@ export default function PropuestaPage() {
             </div>
 
             {/* Acciones al pie */}
-            {data.propuesta.estado === 'borrador' && (
+            {propuestaActiva.estado === 'borrador' && (
               <div className="flex items-center justify-end gap-3 border-t border-slate-100 pt-4 mt-2">
                 <p className="text-xs text-slate-400 mr-auto">
                   {data.lineas.length} artículo{data.lineas.length !== 1 ? 's' : ''} en la propuesta
@@ -719,6 +787,11 @@ export default function PropuestaPage() {
                   {tramiting ? 'Tramitando…' : 'Tramitar propuesta'}
                 </button>
               </div>
+            )}
+                </>
+              );
+            })()}
+          </>
             )}
           </>
         )}
@@ -754,6 +827,9 @@ export default function PropuestaPage() {
                     <tr className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}>
                       <td className="px-4 py-2.5">
                         <span className="font-mono text-xs text-slate-500">#{p.id}</span>
+                        {p.observaciones && (
+                          <p className="text-sm font-medium text-slate-700 mt-0.5">{p.observaciones}</p>
+                        )}
                         <p className="text-xs text-slate-400">{fmt(p.fechaGeneracion)}</p>
                       </td>
                       <td className="px-4 py-2.5 text-xs text-slate-600">
