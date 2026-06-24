@@ -8,6 +8,7 @@ import {
   normalizeAlmacenText,
 } from '@/lib/almacen';
 import { listMedicamentosByArea } from '@/lib/catalogo-neon';
+import { loadPedidosResumenAlmacenPorCns } from '@/lib/pedidos-pendientes';
 import {
   crearRecuento,
   getBorradorPropuesta,
@@ -128,23 +129,41 @@ export async function GET(req: NextRequest) {
       const letras = letrasDisponibles(medsUbicacion);
       const filtrados = filtrarPorLetra(medsUbicacion, letraParam);
 
+      let pedidosPorCn: Awaited<ReturnType<typeof loadPedidosResumenAlmacenPorCns>> = {};
+      try {
+        pedidosPorCn = await loadPedidosResumenAlmacenPorCns(filtrados.map((med) => med.cn));
+      } catch {
+        pedidosPorCn = {};
+      }
+
       const medicamentos = filtrados.map((med) => {
         const unidadesPorCaja = Number(med.unidadesPorCaja) > 0 ? Number(med.unidadesPorCaja) : 1;
         const tieneStockOrientativo =
           med.stockMinimo != null || med.puntoPedido != null || med.stockMaximo != null;
+        const pedidos = pedidosPorCn[med.cn] ?? {
+          pedidosRecibidos14d: 0,
+          unidadesRecibidas14d: 0,
+          pedidosPendientes: 0,
+          unidadesPendientes: 0,
+        };
 
         return {
           cn: med.cn,
           principioActivo: med.principioActivo,
           nombre: med.nombre,
           presentacion: med.presentacion,
+          ubicacion: med.ubicacion,
           activo: med.activo,
-          unidadesPorCaja,
+          unidadesPorCaja: Number(med.unidadesPorCaja) > 0 ? Number(med.unidadesPorCaja) : 0,
           cajasPedidas: cantidadesPedido[med.cn] ?? 0,
           stockMinimo: med.stockMinimo,
           puntoPedido: med.puntoPedido,
           stockMaximo: med.stockMaximo,
           tieneStockOrientativo,
+          pedidosRecibidos14d: pedidos.pedidosRecibidos14d,
+          unidadesRecibidas14d: pedidos.unidadesRecibidas14d,
+          pedidosPendientes: pedidos.pedidosPendientes,
+          unidadesPendientes: pedidos.unidadesPendientes,
         };
       });
 

@@ -347,3 +347,87 @@ export async function loadCantidadTransitoByCn(cns: string[]): Promise<Record<st
 
   return totals;
 }
+
+export type PedidoResumenAlmacenCn = {
+  pedidosRecibidos14d: number;
+  unidadesRecibidas14d: number;
+  pedidosPendientes: number;
+  unidadesPendientes: number;
+};
+
+const PEDIDO_RESUMEN_ALMACEN_VACIO: PedidoResumenAlmacenCn = {
+  pedidosRecibidos14d: 0,
+  unidadesRecibidas14d: 0,
+  pedidosPendientes: 0,
+  unidadesPendientes: 0,
+};
+
+function cantidadPedidoOrder(row: {
+  por_entregar_cantidad: string | null;
+  cantidad_recibida: string | null;
+}): number {
+  return (
+    parseNumberMaybe(row.por_entregar_cantidad) ??
+    parseNumberMaybe(row.cantidad_recibida) ??
+    0
+  );
+}
+
+/** Resumen de pedidos recibidos (últimas 2 semanas) y pendientes por CN — recuento almacén. */
+export async function loadPedidosResumenAlmacenPorCns(
+  cns: string[]
+): Promise<Record<string, PedidoResumenAlmacenCn>> {
+  const normalizedCns = [...new Set(cns.map((cn) => toCn6(cn)).filter((cn): cn is string => !!cn))];
+  const result: Record<string, PedidoResumenAlmacenCn> = {};
+  for (const cn of normalizedCns) {
+    result[cn] = { ...PEDIDO_RESUMEN_ALMACEN_VACIO };
+  }
+  if (normalizedCns.length === 0) return result;
+
+  const sql = getPedidosReadonlyClient();
+  const rows = (await sql`
+    SELECT
+      lpad(right(regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') AS cn6,
+      o.recibido,
+      o.anulado,
+      o.recibido_at::text AS recibido_at,
+      o.por_entregar_cantidad::text AS por_entregar_cantidad,
+      o.cantidad_recibida::text AS cantidad_recibida
+    FROM public.orders o
+    WHERE o.n_mate_prov IS NOT NULL
+      AND regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g') <> ''
+      AND lpad(right(regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') = ANY(${normalizedCns});
+  `) as Array<{
+    cn6: string;
+    recibido: boolean;
+    anulado: boolean;
+    recibido_at: string | null;
+    por_entregar_cantidad: string | null;
+    cantidad_recibida: string | null;
+  }>;
+
+  const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+
+  for (const row of rows) {
+    const cn6 = toCn6(row.cn6);
+    if (!cn6 || !result[cn6]) continue;
+
+    const qty = cantidadPedidoOrder(row);
+    const bucket = result[cn6]!;
+
+    if (!row.anulado && !row.recibido) {
+      bucket.pedidosPendientes += 1;
+      if (qty > 0) bucket.unidadesPendientes += qty;
+      continue;
+    }
+
+    if (row.anulado || !row.recibido_at) continue;
+    const recibidoAt = new Date(row.recibido_at);
+    if (Number.isNaN(recibidoAt.getTime()) || recibidoAt.getTime() < cutoff) continue;
+
+    bucket.pedidosRecibidos14d += 1;
+    if (qty > 0) bucket.unidadesRecibidas14d += qty;
+  }
+
+  return result;
+}

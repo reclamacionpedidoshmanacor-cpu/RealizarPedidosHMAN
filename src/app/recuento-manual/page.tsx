@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { AREA_IDS, type AreaId } from '@/lib/areas';
+import { normalizeAlmacenText } from '@/lib/almacen';
 
 /* ─── tipos recuento manual ─── */
 type RecuentoPendiente = { id: number; origen: string; fechaRecuento: string; totalLineas: number } | null;
@@ -13,6 +14,7 @@ type MedicamentoManual = {
   principioActivo: string | null;
   nombre: string;
   presentacion?: string | null;
+  ubicacion?: string | null;
   activo: boolean;
   unidadesPorCaja: number;
   cajas?: number;
@@ -23,6 +25,10 @@ type MedicamentoManual = {
   puntoPedido?: number | null;
   stockMaximo?: number | null;
   tieneStockOrientativo?: boolean;
+  pedidosRecibidos14d?: number;
+  unidadesRecibidas14d?: number;
+  pedidosPendientes?: number;
+  unidadesPendientes?: number;
 };
 
 type ApiResponse = {
@@ -54,6 +60,20 @@ type Step = 'area' | 'ubicacion' | 'letra-almacen' | 'recuento' | 'pedido-almace
 type DraftLinea = { cajas: number; unidadesSueltas: number };
 type AlmacenDraftLinea = { cajasPedidas: number };
 
+type GrupoPrincipioAlmacen = {
+  key: string;
+  principioActivo: string;
+  medicamentos: MedicamentoManual[];
+};
+
+type EditarPasilloPayload = {
+  principioActivo: string;
+  nombre: string;
+  presentacion: string;
+  ubicacion: string;
+  unidadesPorCaja: number;
+};
+
 type CimaPreview = {
   cn: string;
   nombre: string;
@@ -72,6 +92,18 @@ const AREAS: { id: AreaId; label: string; emoji: string; color: string; bg: stri
 ];
 
 /* ─── helpers ─── */
+function formatUnidadesPedido(value: number): string {
+  return new Intl.NumberFormat('es-ES', { maximumFractionDigits: 0 }).format(Math.round(value));
+}
+
+function parseUdsCajaInput(value: string): number {
+  const raw = value.trim();
+  if (!raw) return 0;
+  const n = Number(raw.replace(',', '.'));
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.round(n);
+}
+
 function toIntInput(v: string): number {
   const n = Number(v);
   if (!Number.isFinite(n) || n < 0) return 0;
@@ -155,6 +187,8 @@ export default function RecuentoManualPage() {
   const [extrasAlmacen, setExtrasAlmacen] = useState<MedicamentoManual[]>([]);
   const [sustitucionCnViejo, setSustitucionCnViejo] = useState<string | null>(null);
   const [sustituyendo, setSustituyendo] = useState(false);
+  const [edicionCn, setEdicionCn] = useState<string | null>(null);
+  const [editando, setEditando] = useState(false);
 
   /* ── estado reposición (solo UPE) ── */
   const [repoBorrador, setRepoBorrador] = useState<ReposicionBorrador>(null);
@@ -251,6 +285,7 @@ export default function RecuentoManualPage() {
     setUbicacion(ub);
     setExtrasAlmacen([]);
     setSustitucionCnViejo(null);
+    setEdicionCn(null);
     if (area === 'almacen') {
       setLetra(null);
       const res = await fetch(`/api/recuento-manual?ubicacion=${encodeURIComponent(ub)}`, { cache: 'no-store' });
@@ -329,6 +364,28 @@ export default function RecuentoManualPage() {
     return [...extras, ...base];
   }, [data?.medicamentos, extrasAlmacen]);
 
+  const gruposAlmacen = useMemo((): GrupoPrincipioAlmacen[] => {
+    const map = new Map<string, GrupoPrincipioAlmacen>();
+    for (const med of medicamentosAlmacenVisibles) {
+      const principio = (med.principioActivo ?? med.nombre ?? med.cn).trim() || med.cn;
+      const key = principio.toLocaleUpperCase('es');
+      const grupo = map.get(key);
+      if (grupo) {
+        grupo.medicamentos.push(med);
+      } else {
+        map.set(key, { key, principioActivo: principio, medicamentos: [med] });
+      }
+    }
+    for (const grupo of map.values()) {
+      grupo.medicamentos.sort((a, b) =>
+        a.nombre.localeCompare(b.nombre, 'es', { sensitivity: 'base' })
+      );
+    }
+    return [...map.values()].sort((a, b) =>
+      a.principioActivo.localeCompare(b.principioActivo, 'es', { sensitivity: 'base' })
+    );
+  }, [medicamentosAlmacenVisibles]);
+
   const almacenHasChanges = useMemo(() => {
     if (!data || data.modo !== 'pedido-almacen') return false;
     return medicamentosAlmacenVisibles.some((med) => {
@@ -372,6 +429,7 @@ export default function RecuentoManualPage() {
       }
 
       setSustitucionCnViejo(null);
+      setEdicionCn(null);
       toast.success(
         `Sustituido CN ${cnViejo} → ${nuevo.cn}${cajas > 0 ? ` · ${cajas} caja(s) en pedido` : ''}`
       );
@@ -380,6 +438,53 @@ export default function RecuentoManualPage() {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
       setSustituyendo(false);
+    }
+  };
+
+  const handleGuardarEdicionPasillo = async (cn: string, payload: EditarPasilloPayload) => {
+    if (!ubicacion || !letra) return;
+    const medActual = medicamentosAlmacenVisibles.find((m) => m.cn === cn);
+    const cambiaUbicacion =
+      normalizeAlmacenText(payload.ubicacion) !== normalizeAlmacenText(ubicacion);
+    const ppioNuevo = payload.principioActivo.trim();
+    const ppioViejo = (medActual?.principioActivo ?? medActual?.nombre ?? '').trim();
+    const cambiaLetra =
+      ppioNuevo.toLocaleUpperCase('es').charAt(0) !== ppioViejo.toLocaleUpperCase('es').charAt(0);
+
+    if (cambiaUbicacion || cambiaLetra) {
+      const aviso = cambiaUbicacion && cambiaLetra
+        ? 'Cambias ubicación y principio activo: el artículo saldrá de esta letra y aparecerá donde corresponda.'
+        : cambiaUbicacion
+          ? 'Cambias la ubicación: el artículo saldrá de este pasillo.'
+          : 'Cambias el principio activo: el artículo puede salir de esta letra.';
+      if (!confirm(`${aviso}\n\n¿Guardar los cambios en catálogo?`)) return;
+    }
+
+    setEditando(true);
+    try {
+      const res = await fetch(`/api/medicamentos/${encodeURIComponent(cn)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          principioActivo: ppioNuevo || null,
+          nombre: payload.nombre.trim(),
+          presentacion: payload.presentacion.trim() || null,
+          ubicacion: payload.ubicacion.trim(),
+          unidadesPorCaja: payload.unidadesPorCaja,
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result?.error ?? 'No se pudo guardar.');
+
+      setEdicionCn(null);
+      setSustitucionCnViejo(null);
+      toast.success('Datos actualizados en catálogo.');
+      await cargarUbicacion(ubicacion, letra);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setEditando(false);
     }
   };
 
@@ -817,6 +922,7 @@ export default function RecuentoManualPage() {
   if (step === 'pedido-almacen') {
     const medicamentos = medicamentosAlmacenVisibles;
     const almacenHasAnyQty = medicamentos.some((med) => (almacenDraft[med.cn]?.cajasPedidas ?? 0) > 0);
+    let presentacionIndex = 0;
 
     return (
       <div className="min-h-screen bg-amber-50 flex flex-col pb-40" ref={tableRef}>
@@ -836,47 +942,81 @@ export default function RecuentoManualPage() {
           )}
         </div>
 
-        <div className="flex-1 px-4 pt-4 space-y-3">
+        <div className="flex-1 px-4 pt-4 space-y-4">
           <p className="text-base text-slate-500 font-semibold">
-            {medicamentos.length} medicamento{medicamentos.length !== 1 ? 's' : ''} — indica cajas a pedir
+            {gruposAlmacen.length} principio activo{gruposAlmacen.length !== 1 ? 's' : ''} · {medicamentos.length} presentación{medicamentos.length !== 1 ? 'es' : ''}
           </p>
           {loading ? (
             <p className="text-2xl text-slate-500 animate-pulse text-center py-20">Cargando…</p>
-          ) : medicamentos.length === 0 ? (
+          ) : gruposAlmacen.length === 0 ? (
             <p className="text-2xl font-bold text-amber-700 text-center py-10">No hay medicamentos para esta letra.</p>
           ) : (
-            medicamentos.map((med, idx) => {
-              const qty = almacenDraft[med.cn]?.cajasPedidas ?? 0;
-              const base = almacenBaseline[med.cn]?.cajasPedidas ?? 0;
-              const changed = qty !== base;
-              const esExtra = extrasAlmacen.some((e) => e.cn === med.cn);
-              return (
-                <div key={med.cn} className="space-y-2">
-                  {esExtra && (
-                    <p className="text-xs font-semibold text-violet-700 px-1">✨ Nuevo sustituto (añadido ahora)</p>
-                  )}
-                  <AlmacenMedCard
-                    med={med}
-                    cantidadCajas={qty}
-                    changed={changed}
-                    index={idx + 1}
-                    total={medicamentos.length}
-                    onChange={(v) => setAlmacenDraft((prev) => ({ ...prev, [med.cn]: { cajasPedidas: v } }))}
-                    onSustituir={() => setSustitucionCnViejo((cur) => (cur === med.cn ? null : med.cn))}
-                    sustitucionAbierta={sustitucionCnViejo === med.cn}
-                  />
-                  {sustitucionCnViejo === med.cn && (
-                    <SustituirPorPanel
-                      cnViejo={med.cn}
-                      nombreViejo={med.principioActivo ?? med.nombre}
-                      busy={sustituyendo}
-                      onCancelar={() => setSustitucionCnViejo(null)}
-                      onConfirmar={(cnNuevo, cajas) => void handleConfirmarSustitucion(med.cn, cnNuevo, cajas)}
-                    />
-                  )}
+            gruposAlmacen.map((grupo) => (
+              <section
+                key={grupo.key}
+                className="rounded-2xl border-2 border-amber-200 bg-white shadow-sm overflow-hidden"
+              >
+                <div className="bg-amber-100 border-b border-amber-200 px-4 py-3">
+                  <p className="text-xl font-extrabold text-amber-900 leading-tight">{grupo.principioActivo}</p>
+                  <p className="text-sm text-amber-800 mt-0.5">
+                    {grupo.medicamentos.length} presentación{grupo.medicamentos.length !== 1 ? 'es' : ''}
+                  </p>
                 </div>
-              );
-            })
+                <div className="p-3 space-y-3">
+                  {grupo.medicamentos.map((med) => {
+                    presentacionIndex += 1;
+                    const qty = almacenDraft[med.cn]?.cajasPedidas ?? 0;
+                    const base = almacenBaseline[med.cn]?.cajasPedidas ?? 0;
+                    const changed = qty !== base;
+                    const esExtra = extrasAlmacen.some((e) => e.cn === med.cn);
+                    return (
+                      <div key={med.cn} className="space-y-2">
+                        {esExtra && (
+                          <p className="text-xs font-semibold text-violet-700 px-1">✨ Nuevo sustituto (añadido ahora)</p>
+                        )}
+                        <AlmacenMedCard
+                          med={med}
+                          cantidadCajas={qty}
+                          changed={changed}
+                          index={presentacionIndex}
+                          total={medicamentos.length}
+                          onChange={(v) => setAlmacenDraft((prev) => ({ ...prev, [med.cn]: { cajasPedidas: v } }))}
+                          onEditar={() => {
+                            setSustitucionCnViejo(null);
+                            setEdicionCn((cur) => (cur === med.cn ? null : med.cn));
+                          }}
+                          onSustituir={() => {
+                            setEdicionCn(null);
+                            setSustitucionCnViejo((cur) => (cur === med.cn ? null : med.cn));
+                          }}
+                          edicionAbierta={edicionCn === med.cn}
+                          sustitucionAbierta={sustitucionCnViejo === med.cn}
+                        />
+                        {edicionCn === med.cn && (
+                          <EditarPasilloPanel
+                            med={med}
+                            ubicaciones={data?.ubicaciones ?? []}
+                            ubicacionActual={ubicacion ?? ''}
+                            busy={editando}
+                            onCancelar={() => setEdicionCn(null)}
+                            onGuardar={(payload) => void handleGuardarEdicionPasillo(med.cn, payload)}
+                          />
+                        )}
+                        {sustitucionCnViejo === med.cn && (
+                          <SustituirPorPanel
+                            cnViejo={med.cn}
+                            nombreViejo={med.principioActivo ?? med.nombre}
+                            busy={sustituyendo}
+                            onCancelar={() => setSustitucionCnViejo(null)}
+                            onConfirmar={(cnNuevo, cajas) => void handleConfirmarSustitucion(med.cn, cnNuevo, cajas)}
+                          />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            ))
           )}
         </div>
 
@@ -1176,6 +1316,133 @@ function MedCard({
   );
 }
 
+/* ════════════════ Panel editar catálogo — solo almacén ════════════════ */
+function EditarPasilloPanel({
+  med,
+  ubicaciones,
+  ubicacionActual,
+  busy,
+  onCancelar,
+  onGuardar,
+}: {
+  med: MedicamentoManual;
+  ubicaciones: string[];
+  ubicacionActual: string;
+  busy: boolean;
+  onCancelar: () => void;
+  onGuardar: (payload: EditarPasilloPayload) => void;
+}) {
+  const [principioActivo, setPrincipioActivo] = useState(med.principioActivo ?? '');
+  const [nombre, setNombre] = useState(med.nombre ?? '');
+  const [presentacion, setPresentacion] = useState(med.presentacion ?? '');
+  const [ubicacion, setUbicacion] = useState(med.ubicacion ?? ubicacionActual);
+  const [udsCaja, setUdsCaja] = useState(
+    med.unidadesPorCaja > 0 ? String(med.unidadesPorCaja) : ''
+  );
+
+  const opcionesUbicacion = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const ub of ubicaciones) {
+      const trimmed = ub.trim();
+      if (!trimmed) continue;
+      map.set(trimmed.toLocaleLowerCase('es'), trimmed);
+    }
+    const actual = (med.ubicacion ?? ubicacionActual).trim();
+    if (actual) map.set(actual.toLocaleLowerCase('es'), actual);
+    return [...map.values()].sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
+  }, [ubicaciones, med.ubicacion, ubicacionActual]);
+
+  return (
+    <div className="rounded-2xl border-2 border-teal-300 bg-teal-50 px-5 py-4 space-y-4">
+      <div>
+        <p className="text-sm font-bold text-teal-800 uppercase tracking-wide">✎ Editar en catálogo</p>
+        <p className="text-sm text-teal-700 mt-1">
+          CN {med.cn} — ajusta nomenclatura o ubicación sin cambiar el código. No consulta CIMA.
+        </p>
+      </div>
+      <div className="space-y-3">
+        <label className="block space-y-1">
+          <span className="text-xs font-bold text-teal-800 uppercase">Principio activo</span>
+          <input
+            type="text"
+            value={principioActivo}
+            onChange={(e) => setPrincipioActivo(e.target.value)}
+            className="w-full rounded-xl border-2 border-teal-200 bg-white px-4 py-3 text-base"
+          />
+        </label>
+        <label className="block space-y-1">
+          <span className="text-xs font-bold text-teal-800 uppercase">Nombre / marca</span>
+          <input
+            type="text"
+            value={nombre}
+            onChange={(e) => setNombre(e.target.value)}
+            className="w-full rounded-xl border-2 border-teal-200 bg-white px-4 py-3 text-base"
+          />
+        </label>
+        <label className="block space-y-1">
+          <span className="text-xs font-bold text-teal-800 uppercase">Presentación</span>
+          <input
+            type="text"
+            value={presentacion}
+            onChange={(e) => setPresentacion(e.target.value)}
+            className="w-full rounded-xl border-2 border-teal-200 bg-white px-4 py-3 text-base"
+          />
+        </label>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label className="block space-y-1">
+            <span className="text-xs font-bold text-teal-800 uppercase">Ubicación</span>
+            <select
+              value={ubicacion}
+              onChange={(e) => setUbicacion(e.target.value)}
+              className="w-full rounded-xl border-2 border-teal-200 bg-white px-4 py-3 text-base"
+            >
+              {opcionesUbicacion.map((ub) => (
+                <option key={ub} value={ub}>{ub}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block space-y-1">
+            <span className="text-xs font-bold text-teal-800 uppercase">Uds/caja</span>
+            <input
+              type="number"
+              inputMode="numeric"
+              min={0}
+              value={udsCaja}
+              placeholder="—"
+              onChange={(e) => setUdsCaja(e.target.value)}
+              className="w-full rounded-xl border-2 border-teal-200 bg-white px-4 py-3 text-base text-center"
+            />
+          </label>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2 justify-end">
+        <button
+          type="button"
+          onClick={onCancelar}
+          disabled={busy}
+          className="rounded-xl border-2 border-slate-300 bg-white px-5 py-3 text-sm font-bold text-slate-600"
+        >
+          Cancelar
+        </button>
+        <button
+          type="button"
+          onClick={() => onGuardar({
+            principioActivo,
+            nombre,
+            presentacion,
+            ubicacion,
+            unidadesPorCaja: parseUdsCajaInput(udsCaja),
+          })}
+          disabled={busy || !nombre.trim() || !ubicacion.trim()}
+          className="rounded-xl bg-teal-700 px-6 py-3 text-sm font-bold text-white disabled:opacity-50"
+        >
+          {busy ? 'Guardando…' : 'Guardar en catálogo'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ════════════════ Panel sustituir por — solo almacén ════════════════ */
 function SustituirPorPanel({
   cnViejo,
@@ -1301,11 +1568,13 @@ function SustituirPorPanel({
 
 /* ════════════════ Tarjeta de medicamento — pedido almacén ════════════════ */
 function AlmacenMedCard({
-  med, cantidadCajas, changed, index, total, onChange, onSustituir, sustitucionAbierta,
+  med, cantidadCajas, changed, index, total, onChange, onEditar, onSustituir, edicionAbierta, sustitucionAbierta,
 }: {
   med: MedicamentoManual; cantidadCajas: number; changed: boolean;
   index: number; total: number; onChange: (v: number) => void;
+  onEditar?: () => void;
   onSustituir?: () => void;
+  edicionAbierta?: boolean;
   sustitucionAbierta?: boolean;
 }) {
   const hints: string[] = [];
@@ -1313,28 +1582,41 @@ function AlmacenMedCard({
   if (med.puntoPedido != null) hints.push(`pto ${med.puntoPedido}`);
   if (med.stockMaximo != null) hints.push(`máx ${med.stockMaximo}`);
 
+  const recibidos = med.pedidosRecibidos14d ?? 0;
+  const udsRecibidas = med.unidadesRecibidas14d ?? 0;
+  const pendientes = med.pedidosPendientes ?? 0;
+  const udsPendientes = med.unidadesPendientes ?? 0;
+
   return (
-    <div className={`rounded-2xl border-2 bg-white px-5 py-4 shadow-sm transition-all ${
-      changed ? 'border-amber-400 bg-amber-50' : 'border-slate-200'
+    <div className={`rounded-2xl border-2 bg-slate-50 px-4 py-4 transition-all ${
+      changed ? 'border-amber-400 bg-amber-50/60' : 'border-slate-200'
     }`}>
-      <div className="flex items-start justify-between gap-2 mb-3">
+      <div className="flex items-start justify-between gap-2 mb-2">
         <div className="flex-1 min-w-0">
-          <p className="text-2xl font-extrabold text-slate-800 leading-tight">{med.principioActivo ?? med.nombre}</p>
-          {med.principioActivo && (
-            <p className="text-lg italic text-slate-400 leading-tight mt-0.5 truncate">{med.nombre}</p>
-          )}
+          <p className="text-lg font-bold text-slate-800 leading-tight">{med.nombre}</p>
           {med.presentacion && (
-            <p className="text-sm text-slate-500 mt-1 line-clamp-2">{med.presentacion}</p>
+            <p className="text-sm text-slate-600 mt-0.5 line-clamp-2">{med.presentacion}</p>
           )}
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
-          <span className="font-mono text-base bg-slate-100 text-slate-500 rounded-lg px-2 py-1">CN {med.cn}</span>
-          <span className="text-sm text-slate-400">{index}/{total}</span>
+          <span className="font-mono text-sm bg-white text-slate-500 rounded-lg px-2 py-1 border border-slate-200">CN {med.cn}</span>
+          <span className="text-xs text-slate-400">{index}/{total}</span>
         </div>
       </div>
 
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3 text-xs">
+        <p className="rounded-lg bg-emerald-50 border border-emerald-100 px-3 py-2 text-emerald-800">
+          <span className="font-semibold">Recibido 2 sem:</span>{' '}
+          {recibidos} pedido{recibidos !== 1 ? 's' : ''}, {formatUnidadesPedido(udsRecibidas)} uds
+        </p>
+        <p className="rounded-lg bg-sky-50 border border-sky-100 px-3 py-2 text-sky-800">
+          <span className="font-semibold">En tránsito:</span>{' '}
+          {pendientes} pedido{pendientes !== 1 ? 's' : ''}, {formatUnidadesPedido(udsPendientes)} uds
+        </p>
+      </div>
+
       {hints.length > 0 && (
-        <p className="text-sm text-teal-700 bg-teal-50 border border-teal-100 rounded-lg px-3 py-2 mb-3">
+        <p className="text-xs text-teal-700 bg-teal-50 border border-teal-100 rounded-lg px-3 py-2 mb-3">
           📊 Referencia de stock (cajas): {hints.join(' · ')}
         </p>
       )}
@@ -1349,26 +1631,43 @@ function AlmacenMedCard({
           value={cantidadCajas === 0 ? '' : cantidadCajas}
           placeholder="0"
           onChange={(e) => onChange(toIntInput(e.target.value))}
-          className="w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-3xl font-bold text-center text-slate-800 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-200"
+          className="w-full rounded-xl border-2 border-slate-300 px-4 py-3 text-2xl font-bold text-center text-slate-800 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-200 bg-white"
         />
-        {med.unidadesPorCaja > 1 && (
+        {med.unidadesPorCaja > 0 ? (
           <p className="text-sm text-slate-400 text-center">1 caja = {med.unidadesPorCaja} uds</p>
+        ) : (
+          <p className="text-sm text-slate-400 text-center">Uds/caja sin definir</p>
         )}
       </div>
-      {changed && <p className="mt-3 text-sm font-semibold text-amber-600">✏ Modificado</p>}
-      {onSustituir && (
-        <button
-          type="button"
-          onClick={onSustituir}
-          className={`mt-4 w-full rounded-xl border-2 px-4 py-3 text-sm font-bold transition-colors ${
-            sustitucionAbierta
-              ? 'border-violet-500 bg-violet-100 text-violet-800'
-              : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-violet-300 hover:text-violet-700'
-          }`}
-        >
-          ↪ Sustituir por otro CN
-        </button>
-      )}
+      {changed && <p className="mt-2 text-sm font-semibold text-amber-600">✏ Modificado</p>}
+      <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {onEditar && (
+          <button
+            type="button"
+            onClick={onEditar}
+            className={`rounded-xl border-2 px-4 py-3 text-sm font-bold transition-colors ${
+              edicionAbierta
+                ? 'border-teal-500 bg-teal-100 text-teal-800'
+                : 'border-slate-200 bg-white text-slate-600 hover:border-teal-300 hover:text-teal-700'
+            }`}
+          >
+            ✎ Editar datos
+          </button>
+        )}
+        {onSustituir && (
+          <button
+            type="button"
+            onClick={onSustituir}
+            className={`rounded-xl border-2 px-4 py-3 text-sm font-bold transition-colors ${
+              sustitucionAbierta
+                ? 'border-violet-500 bg-violet-100 text-violet-800'
+                : 'border-slate-200 bg-white text-slate-600 hover:border-violet-300 hover:text-violet-700'
+            }`}
+          >
+            ↪ Sustituir por otro CN
+          </button>
+        )}
+      </div>
     </div>
   );
 }
