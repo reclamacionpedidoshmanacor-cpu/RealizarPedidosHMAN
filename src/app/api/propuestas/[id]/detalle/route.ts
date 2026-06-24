@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
+import { isAlmacenArea } from '@/lib/almacen';
+import { loadCantidadTransitoByCn } from '@/lib/pedidos-pendientes';
+import { buildStockTransitoCajasByCn } from '@/lib/propuesta';
 import { buildLineasPropuestaParaUi, getLineasPropuesta, getPropuestaById } from '@/lib/stock-propuesta-neon';
 
 export const runtime = 'nodejs';
@@ -23,16 +26,32 @@ export async function GET(
       return NextResponse.json({ error: 'Propuesta no encontrada.' }, { status: 404 });
     }
 
+    const lineasDb = await getLineasPropuesta(propuestaId);
+    let stockTransitoByCn: Record<string, number> = {};
+
+    if (isAlmacenArea(propuesta.area) && lineasDb.length > 0) {
+      try {
+        const transitoUnidadesByCn = await loadCantidadTransitoByCn(lineasDb.map((l) => l.cn));
+        stockTransitoByCn = buildStockTransitoCajasByCn(
+          transitoUnidadesByCn,
+          lineasDb.map((l) => ({ cn: l.cn, unidadesPorCaja: l.unidadesPorCaja }))
+        );
+      } catch {
+        stockTransitoByCn = {};
+      }
+    }
+
     const lineas = propuesta.importacionStockId
       ? await buildLineasPropuestaParaUi(
           propuestaId,
           propuesta.importacionStockId,
           propuesta.area,
           propuesta.estado,
-          {}
+          stockTransitoByCn
         )
-      : (await getLineasPropuesta(propuestaId)).map((linea) => ({
+      : lineasDb.map((linea) => ({
           ...linea,
+          stockTransito: Number(stockTransitoByCn[linea.cn] ?? linea.stockTransito ?? 0),
           activo: true,
           editable: false,
         }));

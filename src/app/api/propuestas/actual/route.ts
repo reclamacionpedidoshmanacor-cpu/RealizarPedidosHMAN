@@ -17,31 +17,9 @@ import {
 } from '@/lib/stock-propuesta-neon';
 import { loadCantidadTransitoByCn } from '@/lib/pedidos-pendientes';
 import { loadAlertasSuministroPorCnsSafe, alertaSuministroParaCn } from '@/lib/alertas-suministro';
-import { calcularCajasPropuestas } from '@/lib/propuesta';
+import { buildStockTransitoCajasByCn, calcularCajasPropuestas } from '@/lib/propuesta';
 
 export const runtime = 'nodejs';
-
-function roundThreeDecimals(value: number): number {
-  return Math.round(value * 1000) / 1000;
-}
-
-function buildStockTransitoCajasByCn(
-  transitoUnidadesByCn: Record<string, number>,
-  rows: Array<{ cn: string; unidadesPorCaja: number }>
-): Record<string, number> {
-  const byCn: Record<string, number> = {};
-  for (const row of rows) {
-    const unidadesTransito = Number(transitoUnidadesByCn[row.cn] ?? 0);
-    if (!Number.isFinite(unidadesTransito) || unidadesTransito <= 0) {
-      byCn[row.cn] = 0;
-      continue;
-    }
-    const cajasTransito =
-      row.unidadesPorCaja > 0 ? unidadesTransito / row.unidadesPorCaja : unidadesTransito;
-    byCn[row.cn] = cajasTransito > 0 ? roundThreeDecimals(cajasTransito) : 0;
-  }
-  return byCn;
-}
 
 async function loadStockTransitoCajasSafely(
   rows: Array<{ cn: string; unidadesPorCaja: number }>
@@ -83,6 +61,15 @@ export async function GET(req: NextRequest) {
         propuesta = await crearPropuesta(session.area, pedido.id);
       }
 
+      const lineasPropuesta = await getLineasPropuesta(propuesta.id);
+      const stockTransitoByCn = await loadStockTransitoCajasSafely(
+        lineasPropuesta.map((linea) => ({
+          cn: linea.cn,
+          unidadesPorCaja: linea.unidadesPorCaja,
+        }))
+      );
+      await actualizarStockTransitoSnapshot(propuesta.id, stockTransitoByCn);
+
       const lineasParaUi = await attachAlertasLineas(
         (
           await buildLineasPropuestaParaUi(
@@ -90,7 +77,7 @@ export async function GET(req: NextRequest) {
             pedido.id,
             session.area,
             propuesta.estado,
-            {}
+            stockTransitoByCn
           )
         ).filter(
           (linea) =>

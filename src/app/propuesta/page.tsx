@@ -100,6 +100,11 @@ function esLineaInactiva(linea: Linea): boolean {
   return linea.activo === false;
 }
 
+function getAreaFromCookie(): string {
+  if (typeof document === 'undefined') return '';
+  return document.cookie.split(';').find(c => c.trim().startsWith('area_session='))?.split('=')[1] ?? '';
+}
+
 // ---------------------------------------------------------------------------
 // Página principal
 // ---------------------------------------------------------------------------
@@ -118,6 +123,8 @@ export default function PropuestaPage() {
   const [expandedHistorialId, setExpandedHistorialId] = useState<number | null>(null);
   const [detalleByPropuesta, setDetalleByPropuesta] = useState<Record<number, PropuestaDetalle>>({});
   const [loadingDetalleId, setLoadingDetalleId] = useState<number | null>(null);
+
+  const esAlmacen = getAreaFromCookie() === 'almacen';
 
   // ── Carga propuesta activa ────────────────────────────────────────────────
   const load = async () => {
@@ -428,10 +435,12 @@ export default function PropuestaPage() {
                       <span>Calculado</span>
                       <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
                     </th>
-                    <th className="px-4 py-3 text-center">
-                      <span>Calculado</span>
-                      <span className="ml-1 normal-case text-[10px] text-slate-400">(comprimidos)</span>
-                    </th>
+                    {!esAlmacen && (
+                      <th className="px-4 py-3 text-center">
+                        <span>Calculado</span>
+                        <span className="ml-1 normal-case text-[10px] text-slate-400">(comprimidos)</span>
+                      </th>
+                    )}
                     <th className="px-4 py-3 text-center">
                       <span>Validado</span>
                       <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
@@ -557,16 +566,18 @@ export default function PropuestaPage() {
                           )}
                         </td>
 
-                        {/* Calculado (comprimidos) */}
-                        <td className="px-4 py-3 text-center">
-                          {inactiva ? (
-                            <span className="text-slate-400">—</span>
-                          ) : (
-                            <span className="inline-block rounded-md bg-slate-50 px-3 py-1 text-sm font-medium tabular-nums text-slate-600 ring-1 ring-slate-200 not-italic">
-                              {fmtUnidades(cajasAUnidades(linea.cajasPropuestas, linea.unidadesPorCaja))}
-                            </span>
-                          )}
-                        </td>
+                        {!esAlmacen && (
+                          /* Calculado (comprimidos) */
+                          <td className="px-4 py-3 text-center">
+                            {inactiva ? (
+                              <span className="text-slate-400">—</span>
+                            ) : (
+                              <span className="inline-block rounded-md bg-slate-50 px-3 py-1 text-sm font-medium tabular-nums text-slate-600 ring-1 ring-slate-200 not-italic">
+                                {fmtUnidades(cajasAUnidades(linea.cajasPropuestas, linea.unidadesPorCaja))}
+                              </span>
+                            )}
+                          </td>
+                        )}
 
                         {/* Validado (cajas) */}
                         <td className="px-4 py-3 text-center">
@@ -829,10 +840,12 @@ export default function PropuestaPage() {
                                       <span>Calculado</span>
                                       <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
                                     </th>
-                                    <th className="px-3 py-2 text-center">
-                                      <span>Calculado</span>
-                                      <span className="ml-1 normal-case text-[10px] text-slate-400">(uds)</span>
-                                    </th>
+                                    {!esAlmacen && (
+                                      <th className="px-3 py-2 text-center">
+                                        <span>Calculado</span>
+                                        <span className="ml-1 normal-case text-[10px] text-slate-400">(uds)</span>
+                                      </th>
+                                    )}
                                     <th className="px-3 py-2 text-center">
                                       <span>Validado</span>
                                       <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
@@ -884,9 +897,11 @@ export default function PropuestaPage() {
                                       <td className="px-3 py-2 text-center tabular-nums not-italic">
                                         {inactiva ? '—' : linea.cajasPropuestas}
                                       </td>
-                                      <td className="px-3 py-2 text-center tabular-nums not-italic">
-                                        {inactiva ? '—' : fmtUnidades(cajasAUnidades(linea.cajasPropuestas, linea.unidadesPorCaja))}
-                                      </td>
+                                      {!esAlmacen && (
+                                        <td className="px-3 py-2 text-center tabular-nums not-italic">
+                                          {inactiva ? '—' : fmtUnidades(cajasAUnidades(linea.cajasPropuestas, linea.unidadesPorCaja))}
+                                        </td>
+                                      )}
                                       <td className="px-3 py-2 text-center tabular-nums font-semibold not-italic">
                                         {inactiva ? '—' : (linea.cajasValidadas ?? linea.cajasPropuestas)}
                                       </td>
