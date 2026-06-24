@@ -64,25 +64,151 @@ function findCol(headerNorm: string[], candidates: string[]): number {
   return -1;
 }
 
-function toIntOrNull(val: unknown): number | null {
-  const raw = String(val ?? '').trim();
+/** Número Excel con coma decimal o miles (p. ej. 2,5 · 1.500). */
+function parseDecimalExcel(val: unknown): number | null {
+  if (val == null || val === '') return null;
+  if (typeof val === 'number' && Number.isFinite(val)) return val;
+
+  let raw = String(val).trim().replace(/\s/g, '');
   if (!raw) return null;
-  const n = Number(raw.replace(',', '.'));
-  if (!Number.isFinite(n)) return null;
+
+  if (raw.includes('.') && raw.includes(',')) {
+    raw = raw.replace(/\./g, '').replace(',', '.');
+  } else if (raw.includes(',') && !raw.includes('.')) {
+    raw = raw.replace(',', '.');
+  } else if (/^\d{1,3}(\.\d{3})+$/.test(raw)) {
+    raw = raw.replace(/\./g, '');
+  }
+
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function toIntOrNull(val: unknown): number | null {
+  const n = parseDecimalExcel(val);
+  if (n == null) return null;
   return Math.max(0, Math.round(n));
 }
 
 function toCajasOrNull(val: unknown): number | null {
-  const raw = String(val ?? '').trim();
-  if (!raw) return null;
-  const n = Number(raw.replace(',', '.'));
-  if (!Number.isFinite(n)) return null;
+  const n = parseDecimalExcel(val);
+  if (n == null) return null;
   return roundCajas(Math.max(0, n));
 }
 
 function cajasDesdeUdes(udes: number, unidadesPorCaja: number): number {
   if (unidadesPorCaja <= 0) return 0;
   return roundCajas(udes / unidadesPorCaja);
+}
+
+type NutricionStockKind = 'min' | 'max';
+type NutricionStockUnit = 'cajas' | 'udes';
+
+function headerIsNutricionStockKind(header: string, kind: NutricionStockKind): boolean {
+  if (kind === 'min') {
+    return /\bminimo\b/.test(header) || /\bmin\b/.test(header);
+  }
+  return /\bmaximo\b/.test(header) || /\bmax\b/.test(header);
+}
+
+function headerIsNutricionStockUnit(header: string, unit: NutricionStockUnit): boolean {
+  if (unit === 'cajas') {
+    return /\bcajas?\b/.test(header);
+  }
+  return /\budes?\b/.test(header) || /\bunidades?\b/.test(header) || /\buds?\b/.test(header);
+}
+
+/** Columnas cortas del Excel de Nutrición: «min» / «max» en cajas (sin sufijo en cabecera). */
+function findNutricionStockColSimple(
+  headerNorm: string[],
+  kind: NutricionStockKind,
+  used: Set<number>
+): number {
+  const candidates =
+    kind === 'min'
+      ? ['min', 'minimo', 'stock minimo', 'stock min']
+      : ['max', 'maximo', 'stock maximo', 'stock max'];
+
+  for (const candidate of candidates) {
+    const i = headerNorm.findIndex((h, colIdx) => {
+      if (used.has(colIdx)) return false;
+      const hClean = h.replace(/[.:]+$/g, '').trim();
+      if (hClean !== candidate) return false;
+      // No usar columnas claramente en udes si existen ambas nomenclaturas
+      if (headerIsNutricionStockUnit(h, 'udes') && !headerIsNutricionStockUnit(h, 'cajas')) {
+        return false;
+      }
+      return true;
+    });
+    if (i !== -1) {
+      used.add(i);
+      return i;
+    }
+  }
+  return -1;
+}
+
+function mapNutricionStockColumns(headerNorm: string[]): {
+  minCajas: number;
+  maxCajas: number;
+  minUdes: number;
+  maxUdes: number;
+} {
+  const used = new Set<number>();
+  let minCajas = findNutricionStockCol(headerNorm, 'min', 'cajas', used);
+  let maxCajas = findNutricionStockCol(headerNorm, 'max', 'cajas', used);
+  const minUdes = findNutricionStockCol(headerNorm, 'min', 'udes', used);
+  const maxUdes = findNutricionStockCol(headerNorm, 'max', 'udes', used);
+
+  if (minCajas === -1) minCajas = findNutricionStockColSimple(headerNorm, 'min', used);
+  if (maxCajas === -1) maxCajas = findNutricionStockColSimple(headerNorm, 'max', used);
+
+  return { minCajas, maxCajas, minUdes, maxUdes };
+}
+
+/** Evita asignar la misma columna a cajas y udes; exige unidad explícita en la cabecera. */
+function findNutricionStockCol(
+  headerNorm: string[],
+  kind: NutricionStockKind,
+  unit: NutricionStockUnit,
+  used: Set<number>
+): number {
+  let bestIdx = -1;
+  let bestScore = 0;
+
+  for (let i = 0; i < headerNorm.length; i++) {
+    if (used.has(i)) continue;
+    const h = headerNorm[i];
+    if (!headerIsNutricionStockKind(h, kind)) continue;
+    if (!headerIsNutricionStockUnit(h, unit)) continue;
+
+    let score = 1;
+    if (h.includes('stock')) score += 2;
+    if (unit === 'cajas' && h.includes('cajas')) score += 2;
+    if (unit === 'udes' && (h.includes('udes') || h.includes('unidades') || h.includes('uds'))) score += 2;
+    if (score > bestScore) {
+      bestScore = score;
+      bestIdx = i;
+    }
+  }
+
+  if (bestIdx !== -1) used.add(bestIdx);
+  return bestIdx;
+}
+
+/** Prioriza cajas; si la celda de cajas está vacía, convierte desde udes. */
+function resolveStockCajasNutricion(
+  row: unknown[],
+  idxCajas: number,
+  idxUdes: number,
+  unidadesPorCaja: number
+): number | null {
+  const cajas = idxCajas !== -1 ? toCajasOrNull(row[idxCajas]) : null;
+  const udes = idxUdes !== -1 ? toIntOrNull(row[idxUdes]) : null;
+
+  if (cajas != null && (cajas > 0 || udes == null)) return cajas;
+  if (udes != null) return cajasDesdeUdes(udes, unidadesPorCaja);
+  return cajas;
 }
 
 function readWorkbookRows(buffer: Buffer): { raw: unknown[][]; errors: string[] } {
@@ -180,7 +306,7 @@ function parseViaCatalogo(raw: string): 'IV' | 'ORAL' | 'OTRO' {
   return 'OTRO';
 }
 
-/** Formato Nutrición: Código SAP, Producto, uds/caja y stocks en cajas y/o udes. */
+/** Formato Nutrición: Código SAP, Producto, uds/caja, min/max en cajas, ubicación y vía. */
 export function parseCatalogoExcelNutricion(buffer: Buffer): CatalogoParseResult {
   const errors: string[] = [];
   const rows: CatalogoRow[] = [];
@@ -191,28 +317,18 @@ export function parseCatalogoExcelNutricion(buffer: Buffer): CatalogoParseResult
   const headers = (raw[0] as string[]).map((h) => String(h));
   const headerNorm = headers.map(normalize);
 
+  const stockCols = mapNutricionStockColumns(headerNorm);
   const idx = {
     sap: findCol(headerNorm, ['codigo sap', 'codigo material', 'material', 'title', 'sap']),
     producto: findCol(headerNorm, ['producto', 'medicamento', 'marca', 'nombre', 'descripcion']),
     udesCaja: findCol(headerNorm, [
-      'udes/caja', 'uds/caja', 'ud/caja', 'unidades/caja', 'unidades por caja', 'unidades x caja',
+      'udes(caja)', 'udes (caja)', 'udes/caja', 'uds/caja', 'ud/caja',
+      'unidades/caja', 'unidades por caja', 'unidades x caja',
     ]),
-    minCajas: findCol(headerNorm, [
-      'stock minimo cajas', 'stock min cajas', 'minimo cajas', 'min cajas',
-      'stock minimo (cajas)', 'stock minimo en cajas', 'stock minimo nº cajas', 'stock minimo no cajas',
-    ]),
-    maxCajas: findCol(headerNorm, [
-      'stock maximo cajas', 'stock max cajas', 'maximo cajas', 'max cajas',
-      'stock maximo (cajas)', 'stock maximo en cajas', 'stock maximo nº cajas', 'stock maximo no cajas',
-    ]),
-    minUdes: findCol(headerNorm, [
-      'stock minimo udes', 'stock minimo unidades', 'stock min udes', 'minimo udes', 'min udes',
-      'stock minimo (udes)', 'stock minimo (unidades)', 'stock minimo en udes', 'stock minimo en unidades',
-    ]),
-    maxUdes: findCol(headerNorm, [
-      'stock maximo udes', 'stock maximo unidades', 'stock max udes', 'maximo udes', 'max udes',
-      'stock maximo (udes)', 'stock maximo (unidades)', 'stock maximo en udes', 'stock maximo en unidades',
-    ]),
+    minCajas: stockCols.minCajas,
+    maxCajas: stockCols.maxCajas,
+    minUdes: stockCols.minUdes,
+    maxUdes: stockCols.maxUdes,
     activo: findCol(headerNorm, ['activo']),
     ubic: findCol(headerNorm, ['ubic', 'ubicacion']),
     via: findCol(headerNorm, ['via', 'administracion', 'ruta', 'ruta de administracion']),
@@ -227,7 +343,7 @@ export function parseCatalogoExcelNutricion(buffer: Buffer): CatalogoParseResult
       rows,
       errors: [
         `Columnas obligatorias no encontradas: ${requiredMissing.join(', ')}.`,
-        'Esperado: Código SAP, Producto, Vía (opc.), Uds/caja y stock mín/máx en cajas y/o udes.',
+        'Esperado: Código SAP, Producto, Uds/caja, min, max (cajas), Ubicación y Vía (opc.).',
       ],
       via: 'OTRO',
     };
@@ -239,7 +355,7 @@ export function parseCatalogoExcelNutricion(buffer: Buffer): CatalogoParseResult
     return {
       rows,
       errors: [
-        'No se encontraron columnas de stock objetivo (mín/máx en cajas o en udes).',
+        'No se encontraron columnas min / max (stock objetivo en cajas).',
       ],
       via: 'OTRO',
     };
@@ -262,17 +378,15 @@ export function parseCatalogoExcelNutricion(buffer: Buffer): CatalogoParseResult
       continue;
     }
 
-    const minCajas = idx.minCajas !== -1 ? toCajasOrNull(row[idx.minCajas]) : null;
-    const maxCajas = idx.maxCajas !== -1 ? toCajasOrNull(row[idx.maxCajas]) : null;
-    const minUdes = idx.minUdes !== -1 ? toIntOrNull(row[idx.minUdes]) : null;
-    const maxUdes = idx.maxUdes !== -1 ? toIntOrNull(row[idx.maxUdes]) : null;
-
     const stockMinimo =
-      minCajas ??
-      (minUdes != null ? cajasDesdeUdes(minUdes, unidadesPorCaja) : 0);
-    const stockMaximo =
-      maxCajas ??
-      (maxUdes != null ? cajasDesdeUdes(maxUdes, unidadesPorCaja) : null);
+      resolveStockCajasNutricion(row, idx.minCajas, idx.minUdes, unidadesPorCaja) ?? 0;
+    const stockMaximo = resolveStockCajasNutricion(row, idx.maxCajas, idx.maxUdes, unidadesPorCaja);
+
+    if (stockMaximo != null && stockMaximo < stockMinimo) {
+      errors.push(
+        `Fila ${i + 1} (${producto}): stock máximo (${stockMaximo}) menor que mínimo (${stockMinimo}). Revisa columnas cajas/udes.`
+      );
+    }
 
     const ubicRaw = idx.ubic !== -1 ? String(row[idx.ubic] ?? '').trim() : '';
     const viaRaw = idx.via !== -1 ? String(row[idx.via] ?? '').trim() : '';

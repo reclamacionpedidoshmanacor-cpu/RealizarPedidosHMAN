@@ -808,7 +808,7 @@ export default function InicioPage() {
                           Stock: {item.stockActualCajas.toFixed(2)} cajas ({item.stockActualUnidades.toFixed(0)} uds)
                         </p>
                         <p className="text-slate-500">
-                          Mínimo: {item.stockMinimo.toFixed(2)} · Punto pedido: {item.puntoPedido.toFixed(2)}
+                          Mínimo: {item.stockMinimo.toFixed(1)} cajas · Punto pedido: {item.puntoPedido.toFixed(1)} cajas
                         </p>
                       </div>
                     </div>

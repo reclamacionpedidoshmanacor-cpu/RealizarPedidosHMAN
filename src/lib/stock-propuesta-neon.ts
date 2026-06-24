@@ -1216,7 +1216,7 @@ export type ResumenOperativo = {
   propuestasBorrador: number;
   ultimaPropuestaTramitadaEn: string | null;
   ultimoRecuentoFecha: string | null;
-  bajoMinimo: number;     // CNs cuyo stock_unidades < stock_minimo en el último recuento
+  bajoMinimo: number;     // CNs cuyo stock en cajas < stock_minimo en el último recuento
   bajoOPunto: number;     // CNs cuyo stock_unidades <= punto_pedido en el último recuento
 };
 
@@ -1252,7 +1252,7 @@ export async function getMedicamentosBajoMinimo(area: string): Promise<Medicamen
     JOIN ultimo u ON sr.importacion_id = u.id
     JOIN medicamentos m ON m.cn = sr.cn AND m.area = ${area} AND m.activo = TRUE
     JOIN stock_objetivo so ON so.cn = sr.cn
-    WHERE sr.stock_unidades < so.stock_minimo
+    WHERE sr.stock_cajas::numeric < so.stock_minimo
     ORDER BY m.principio_activo ASC NULLS LAST, m.nombre ASC;
   `) as Array<{
     cn: string;
@@ -1304,8 +1304,8 @@ export async function getResumenOperativo(area: string): Promise<ResumenOperativ
       ORDER BY id DESC LIMIT 1
     )
     SELECT
-      COUNT(*) FILTER (WHERE sr.stock_unidades < so.stock_minimo)::int   AS bajo_minimo,
-      COUNT(*) FILTER (WHERE sr.stock_unidades <= so.punto_pedido)::int  AS bajo_o_punto
+      COUNT(*) FILTER (WHERE sr.stock_cajas::numeric < so.stock_minimo)::int   AS bajo_minimo,
+      COUNT(*) FILTER (WHERE sr.stock_cajas::numeric <= so.punto_pedido)::int  AS bajo_o_punto
     FROM stock_registros sr
     JOIN ultimo u ON sr.importacion_id = u.id
     JOIN medicamentos m ON m.cn = sr.cn AND m.area = ${area} AND m.activo = TRUE
