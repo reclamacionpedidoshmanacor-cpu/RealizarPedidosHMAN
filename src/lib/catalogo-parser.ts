@@ -16,6 +16,11 @@ export interface CatalogoRow {
   stockMinimo: number;
   puntoPedido: number;
   stockMaximo: number | null;
+  /** Valor para columna BD ppio_activo_cima (import almacén). */
+  ppioActivoCima?: string | null;
+  cimaConsultado?: boolean;
+  /** Si el Excel trae columnas CIMA importadas (no consultar API). */
+  incluyeCimaImportado?: boolean;
 }
 
 export interface CatalogoParseResult {
@@ -463,6 +468,14 @@ export function parseCatalogoExcelAlmacen(buffer: Buffer): CatalogoParseResult {
     udesCaja: findCol(headerNorm, [
       'udes/caja', 'uds/caja', 'ud/caja', 'unidades/caja', 'unidades por caja', 'unidades x caja',
     ]),
+    activo: findCol(headerNorm, ['active', 'activo']),
+    cimaConsultado: findCol(headerNorm, ['cima_consultado', 'cima consultado']),
+    ppioActivoCima: findCol(headerNorm, [
+      'ppio_activo_cima',
+      'ppio activo cima',
+      'ppio_active_cima',
+      'ppio active cima',
+    ]),
   };
 
   const requiredMissing: string[] = [];
@@ -475,7 +488,7 @@ export function parseCatalogoExcelAlmacen(buffer: Buffer): CatalogoParseResult {
       rows,
       errors: [
         `Columnas obligatorias no encontradas: ${requiredMissing.join(', ')}.`,
-        'Esperado: Código SAP, Pr. Activo, Denominación, ubicacion, CN_CIMA, Principio Activo_CIMA, Marca Comercial_CIMA, Presentacion, udes/caja (opcional).',
+        'Esperado: Código SAP, Pr. Activo, Denominación, ubicacion, CN_CIMA, Principio Activo_CIMA, Marca Comercial_CIMA, Presentacion, udes/caja, Active, cima_consultado, ppio_activo_cima (opc.).',
       ],
       via: 'OTRO',
     };
@@ -518,11 +531,36 @@ export function parseCatalogoExcelAlmacen(buffer: Buffer): CatalogoParseResult {
       }
     }
 
-    const principioActivo = firstNonEmpty(ppioCima, prActivo, denominacion);
+    const principioActivo = firstNonEmpty(
+      idx.ppioActivoCima !== -1 ? String(row[idx.ppioActivoCima] ?? '').trim() : '',
+      ppioCima,
+      prActivo,
+      denominacion,
+    );
     const nombre = firstNonEmpty(marcaCima, denominacion, prActivo, principioActivo, cn);
     if (!principioActivo) {
       errors.push(`Fila ${i + 1}: falta principio activo (CN ${cn}).`);
       continue;
+    }
+
+    const activo = idx.activo !== -1 ? parseActivoCatalogo(row[idx.activo]) : true;
+
+    const incluyeCimaImportado =
+      idx.ppioActivoCima !== -1 || idx.cimaConsultado !== -1;
+    let ppioActivoCima: string | null | undefined;
+    let cimaConsultado: boolean | undefined;
+    if (incluyeCimaImportado) {
+      ppioActivoCima =
+        idx.ppioActivoCima !== -1
+          ? String(row[idx.ppioActivoCima] ?? '').trim() || null
+          : null;
+      if (idx.cimaConsultado !== -1) {
+        cimaConsultado = parseBool(row[idx.cimaConsultado]);
+      } else if (ppioActivoCima) {
+        cimaConsultado = true;
+      } else {
+        cimaConsultado = false;
+      }
     }
 
     rows.push({
@@ -534,11 +572,14 @@ export function parseCatalogoExcelAlmacen(buffer: Buffer): CatalogoParseResult {
       via: 'OTRO',
       ubicacion,
       unidadesPorCaja,
-      activo: true,
+      activo,
       mse: isMSE(cn),
       stockMinimo: 0,
       puntoPedido: 0,
       stockMaximo: null,
+      ppioActivoCima,
+      cimaConsultado,
+      incluyeCimaImportado,
     });
   }
 

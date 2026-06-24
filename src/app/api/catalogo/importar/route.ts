@@ -51,6 +51,12 @@ export async function POST(req: NextRequest) {
       }
 
       const presentacion = row.presentacion?.trim() || null;
+      const cimaImportado = row.incluyeCimaImportado
+        ? {
+            ppioActivoCima: row.ppioActivoCima ?? null,
+            cimaConsultado: row.cimaConsultado ?? false,
+          }
+        : {};
 
       if (existing) {
         await updateMedicamento({
@@ -63,6 +69,7 @@ export async function POST(req: NextRequest) {
           unidadesPorCaja: row.unidadesPorCaja,
           activo: row.activo,
           mse: isMSE(row.cn),
+          ...cimaImportado,
         });
         actualizados++;
       } else {
@@ -81,6 +88,7 @@ export async function POST(req: NextRequest) {
           tipoMse:         null,
           precioUnidad:    null,
           precioCaja:      null,
+          ...cimaImportado,
         });
         insertados++;
       }

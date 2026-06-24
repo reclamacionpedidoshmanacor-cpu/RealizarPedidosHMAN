@@ -38,6 +38,8 @@ export type MedicamentoBase = {
   tipoMse: string | null;
   precioUnidad: number | null;
   precioCaja: number | null;
+  ppioActivoCima?: string | null;
+  cimaConsultado?: boolean;
 };
 
 export type StockObjetivo = {
@@ -251,13 +253,17 @@ export async function insertMedicamento(row: MedicamentoBase) {
   await ensureMedicamentosSchema();
   const sql = getCatalogoClient();
   const mse = isMSE(row.cn);
+  const ppioActivoCima = row.ppioActivoCima ?? null;
+  const cimaConsultado = row.cimaConsultado ?? false;
   await sql`
     INSERT INTO public.medicamentos (
       cn, nombre, principio_activo, presentacion, via, area, ubicacion,
-      unidades_por_caja, activo, comprable, mse, tipo_mse, precio_unidad, precio_caja, actualizado_en
+      unidades_por_caja, activo, comprable, mse, tipo_mse, precio_unidad, precio_caja,
+      ppio_activo_cima, cima_consultado, actualizado_en
     ) VALUES (
       ${row.cn}, ${row.nombre}, ${row.principioActivo}, ${row.presentacion ?? null}, ${row.via}, ${row.area}, ${row.ubicacion},
-      ${row.unidadesPorCaja}, ${row.activo}, ${row.comprable}, ${mse}, ${row.tipoMse}, ${row.precioUnidad}, ${row.precioCaja}, now()
+      ${row.unidadesPorCaja}, ${row.activo}, ${row.comprable}, ${mse}, ${row.tipoMse}, ${row.precioUnidad}, ${row.precioCaja},
+      ${ppioActivoCima}, ${cimaConsultado}, now()
     );
   `;
 }
@@ -266,6 +272,34 @@ export async function updateMedicamento(row: MedicamentoBase) {
   await ensureMedicamentosSchema();
   const sql = getCatalogoClient();
   const mse = isMSE(row.cn);
+  const actualizaCima =
+    row.ppioActivoCima !== undefined || row.cimaConsultado !== undefined;
+
+  if (actualizaCima) {
+    await sql`
+      UPDATE public.medicamentos
+      SET
+        nombre = ${row.nombre},
+        principio_activo = ${row.principioActivo},
+        presentacion = ${row.presentacion ?? null},
+        via = ${row.via},
+        area = ${row.area},
+        ubicacion = ${row.ubicacion},
+        unidades_por_caja = ${row.unidadesPorCaja},
+        activo = ${row.activo},
+        comprable = ${row.comprable},
+        mse = ${mse},
+        tipo_mse = ${row.tipoMse},
+        precio_unidad = ${row.precioUnidad},
+        precio_caja = ${row.precioCaja},
+        ppio_activo_cima = ${row.ppioActivoCima ?? null},
+        cima_consultado = ${row.cimaConsultado ?? false},
+        actualizado_en = now()
+      WHERE cn = ${row.cn};
+    `;
+    return;
+  }
+
   await sql`
     UPDATE public.medicamentos
     SET
