@@ -302,7 +302,7 @@ export type MovimientoConsumo = {
   cn: string;
   componente: string;
   medicamento: string;
-  ppioActivoCima: string | null;
+  ppioActivoCima: boolean | null;
   unidadesPorCaja: number;
   direccion: DireccionMovimiento;
   periodoReciente: number;
@@ -330,12 +330,20 @@ export type MovimientosConsumoResult = {
   };
 };
 
+function nombreGrupoPpioCima(
+  ppioActivoCima: boolean | null | undefined,
+  componente: string | null | undefined,
+): string {
+  if (ppioActivoCima === true) return componente?.trim() ?? '';
+  return '';
+}
+
 function claveGrupoMovimiento(m: Pick<MovimientoConsumo, 'ppioActivoCima' | 'componente' | 'cn' | 'medicamento'>): {
   clave: string;
   nombre: string;
   aproximada: boolean;
 } {
-  const cima = m.ppioActivoCima?.trim();
+  const cima = nombreGrupoPpioCima(m.ppioActivoCima, m.componente);
   if (cima) return { clave: cima.toLowerCase(), nombre: cima, aproximada: false };
   const pa = m.componente?.trim();
   if (pa) return { clave: `pa:${pa.toLowerCase()}`, nombre: pa, aproximada: true };
@@ -445,7 +453,7 @@ export async function getMovimientosConsumo(area: string): Promise<MovimientosCo
         cr.cn,
         COALESCE(MAX(m.principio_activo), MAX(cr.componente), '') AS componente,
         COALESCE(MAX(m.nombre), MAX(cr.medicamento), '') AS medicamento,
-        NULLIF(TRIM(MAX(m.ppio_activo_cima)), '') AS ppio_activo_cima,
+        BOOL_OR(COALESCE(m.ppio_activo_cima, FALSE)) AS ppio_activo_cima,
         MAX(m.unidades_por_caja) AS unidades_por_caja,
         SUM(CASE WHEN cr.fecha >  p.split_date                            THEN cr.viales_dispensados ELSE 0 END)::float AS periodo_reciente,
         SUM(CASE WHEN cr.fecha <= p.split_date AND cr.fecha > p.start_date THEN cr.viales_dispensados ELSE 0 END)::float AS periodo_anterior
@@ -465,7 +473,7 @@ export async function getMovimientosConsumo(area: string): Promise<MovimientosCo
     WHERE periodo_reciente > 0 OR periodo_anterior > 0
     ORDER BY componente, medicamento;
   `) as Array<{
-    cn: string; componente: string; medicamento: string; ppio_activo_cima: string | null;
+    cn: string; componente: string; medicamento: string; ppio_activo_cima: boolean;
     unidades_por_caja: number; periodo_reciente: number; periodo_anterior: number;
   }>;
 
@@ -741,7 +749,7 @@ export type AlertaCompra = {
   cn: string;
   componente: string;
   medicamento: string;
-  ppioActivoCima: string | null;
+  ppioActivoCima: boolean | null;
   unidadesPorCaja: number;
   stockActualUnidades: number;
   stockActualCajas: number;
@@ -785,7 +793,7 @@ function claveGrupoFrom(alerta: Pick<AlertaCompra, 'ppioActivoCima' | 'component
   nombre: string;
   aproximada: boolean;
 } {
-  const cima = alerta.ppioActivoCima?.trim();
+  const cima = nombreGrupoPpioCima(alerta.ppioActivoCima, alerta.componente);
   if (cima) return { clave: cima.toLowerCase(), nombre: cima, aproximada: false };
   const pa = alerta.componente?.trim();
   if (pa) return { clave: `pa:${pa.toLowerCase()}`, nombre: pa, aproximada: true };
@@ -852,7 +860,7 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
     WITH
     meds AS (
       SELECT m.cn, m.principio_activo, m.nombre, m.unidades_por_caja,
-             NULLIF(TRIM(m.ppio_activo_cima), '') AS ppio_activo_cima,
+             COALESCE(m.ppio_activo_cima, FALSE) AS ppio_activo_cima,
              COALESCE(so.stock_minimo,  0) AS stock_minimo,
              COALESCE(so.stock_maximo,  0) AS stock_maximo
       FROM medicamentos m
@@ -900,7 +908,7 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
        OR COALESCE(sa.stock_unidades, 0) > 0
     ORDER BY m.principio_activo, m.nombre;
   `) as Array<{
-    cn: string; componente: string; medicamento: string; ppio_activo_cima: string | null;
+    cn: string; componente: string; medicamento: string; ppio_activo_cima: boolean;
     unidades_por_caja: number; stock_minimo: number; stock_maximo: number;
     stock_unidades: number; consumo_reciente: number; consumo_anterior: number;
   }>;

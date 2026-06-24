@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
     const sql = getDb();
 
     // Asegurar que las dos columnas existen
-    await sql`ALTER TABLE medicamentos ADD COLUMN IF NOT EXISTS ppio_activo_cima TEXT;`;
+    await sql`ALTER TABLE medicamentos ADD COLUMN IF NOT EXISTS ppio_activo_cima BOOLEAN NOT NULL DEFAULT FALSE;`;
     await sql`ALTER TABLE medicamentos ADD COLUMN IF NOT EXISTS cima_consultado BOOLEAN NOT NULL DEFAULT FALSE;`;
 
     const { soloVacios = true } = await req.json().catch(() => ({ soloVacios: true })) as { soloVacios?: boolean };
@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
     const rows = (await sql`
       SELECT cn FROM medicamentos
       WHERE area = ${session.area}
-        AND (${soloVacios} = FALSE OR ppio_activo_cima IS NULL)
+        AND (${soloVacios} = FALSE OR cima_consultado = FALSE)
       ORDER BY cn;
     `) as Array<{ cn: string }>;
 
@@ -70,7 +70,7 @@ export async function POST(req: NextRequest) {
         if (pactivos) {
           await sql`
             UPDATE medicamentos
-            SET ppio_activo_cima = ${pactivos},
+            SET ppio_activo_cima = TRUE,
                 cima_consultado  = TRUE
             WHERE cn = ${cn} AND area = ${session.area};
           `;
@@ -83,7 +83,8 @@ export async function POST(req: NextRequest) {
         } else {
           await sql`
             UPDATE medicamentos
-            SET cima_consultado = TRUE
+            SET ppio_activo_cima = FALSE,
+                cima_consultado = TRUE
             WHERE cn = ${cn} AND area = ${session.area};
           `;
           fallidos++;

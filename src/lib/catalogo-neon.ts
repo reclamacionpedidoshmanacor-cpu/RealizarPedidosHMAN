@@ -19,7 +19,7 @@ export type CatalogoMedicamento = {
   stockMinimo: number | null;
   puntoPedido: number | null;
   stockMaximo: number | null;
-  ppioActivoCima: string | null;
+  ppioActivoCima: boolean;
   cimaConsultado: boolean;
 };
 
@@ -38,7 +38,7 @@ export type MedicamentoBase = {
   tipoMse: string | null;
   precioUnidad: number | null;
   precioCaja: number | null;
-  ppioActivoCima?: string | null;
+  ppioActivoCima?: boolean | null;
   cimaConsultado?: boolean;
 };
 
@@ -100,7 +100,40 @@ export async function ensureMedicamentosSchema(): Promise<void> {
       await sql`ALTER TABLE public.medicamentos ADD COLUMN IF NOT EXISTS presentacion TEXT;`;
       await sql`ALTER TABLE public.medicamentos ADD COLUMN IF NOT EXISTS ppio_activo_cima TEXT;`;
       await sql`ALTER TABLE public.medicamentos ADD COLUMN IF NOT EXISTS cima_consultado BOOLEAN DEFAULT FALSE;`;
-    })();
+
+      const col = (await sql`
+        SELECT data_type
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'medicamentos'
+          AND column_name = 'ppio_activo_cima'
+        LIMIT 1;
+      `) as Array<{ data_type: string }>;
+
+      const dataType = col[0]?.data_type?.toLowerCase() ?? '';
+      if (dataType === 'text' || dataType === 'character varying') {
+        await sql`
+          ALTER TABLE public.medicamentos
+          ALTER COLUMN ppio_activo_cima TYPE BOOLEAN
+          USING (
+            CASE
+              WHEN ppio_activo_cima IS NULL OR BTRIM(ppio_activo_cima::text) = '' THEN FALSE
+              WHEN LOWER(BTRIM(ppio_activo_cima::text)) IN ('false', 'f', '0', 'no', 'n') THEN FALSE
+              WHEN LOWER(BTRIM(ppio_activo_cima::text)) IN ('true', 't', '1', 'si', 's', 'yes') THEN TRUE
+              ELSE TRUE
+            END
+          );
+        `;
+      } else if (!col[0]) {
+        await sql`
+          ALTER TABLE public.medicamentos
+          ADD COLUMN IF NOT EXISTS ppio_activo_cima BOOLEAN NOT NULL DEFAULT FALSE;
+        `;
+      }
+    })().catch((err) => {
+      ensureMedicamentosSchemaPromise = null;
+      throw err;
+    });
   }
   await ensureMedicamentosSchemaPromise;
 }
@@ -127,7 +160,7 @@ export async function listMedicamentosByArea(area: string): Promise<CatalogoMedi
       so.stock_minimo,
       so.punto_pedido,
       so.stock_maximo,
-      COALESCE(m.ppio_activo_cima, NULL)  AS ppio_activo_cima,
+      COALESCE(m.ppio_activo_cima, FALSE) AS ppio_activo_cima,
       COALESCE(m.cima_consultado, FALSE)  AS cima_consultado
     FROM public.medicamentos m
     LEFT JOIN public.stock_objetivo so ON so.cn = m.cn
@@ -151,7 +184,7 @@ export async function listMedicamentosByArea(area: string): Promise<CatalogoMedi
     stock_minimo: number | null;
     punto_pedido: number | null;
     stock_maximo: number | null;
-    ppio_activo_cima: string | null;
+    ppio_activo_cima: boolean;
     cima_consultado: boolean;
   }>;
 
@@ -173,7 +206,7 @@ export async function listMedicamentosByArea(area: string): Promise<CatalogoMedi
     stockMinimo: row.stock_minimo == null ? null : Number(row.stock_minimo),
     puntoPedido: row.punto_pedido == null ? null : Number(row.punto_pedido),
     stockMaximo: row.stock_maximo == null ? null : Number(row.stock_maximo),
-    ppioActivoCima: row.ppio_activo_cima,
+    ppioActivoCima: row.ppio_activo_cima ?? false,
     cimaConsultado: row.cima_consultado ?? false,
   }));
 }
@@ -253,7 +286,7 @@ export async function insertMedicamento(row: MedicamentoBase) {
   await ensureMedicamentosSchema();
   const sql = getCatalogoClient();
   const mse = isMSE(row.cn);
-  const ppioActivoCima = row.ppioActivoCima ?? null;
+  const ppioActivoCima = row.ppioActivoCima ?? false;
   const cimaConsultado = row.cimaConsultado ?? false;
   await sql`
     INSERT INTO public.medicamentos (
@@ -292,7 +325,7 @@ export async function updateMedicamento(row: MedicamentoBase) {
         tipo_mse = ${row.tipoMse},
         precio_unidad = ${row.precioUnidad},
         precio_caja = ${row.precioCaja},
-        ppio_activo_cima = ${row.ppioActivoCima ?? null},
+        ppio_activo_cima = ${row.ppioActivoCima ?? false},
         cima_consultado = ${row.cimaConsultado ?? false},
         actualizado_en = now()
       WHERE cn = ${row.cn};

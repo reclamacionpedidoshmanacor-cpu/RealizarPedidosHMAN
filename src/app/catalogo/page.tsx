@@ -16,7 +16,7 @@ interface Medicamento {
   mse: boolean; tipoMse: string | null;
   precioUnidad: number | null; precioCaja: number | null;
   stockMinimo: number | null; puntoPedido: number | null; stockMaximo: number | null;
-  ppioActivoCima: string | null; cimaConsultado: boolean;
+  ppioActivoCima: boolean; cimaConsultado: boolean;
   alertaSuministro?: AlertaSuministroCn | null;
 }
 
@@ -940,7 +940,7 @@ export default function CatalogoPage() {
                         {med.cn}
                         {med.cimaConsultado && (
                           med.ppioActivoCima
-                            ? <span title={`CIMA: ${med.ppioActivoCima}`} className="inline-block w-2 h-2 rounded-full bg-green-500 shrink-0" />
+                            ? <span title={`CIMA: ${med.principioActivo ?? '—'}`} className="inline-block w-2 h-2 rounded-full bg-green-500 shrink-0" />
                             : <span title="CIMA consultado: principio activo no encontrado" className="inline-block w-2 h-2 rounded-full bg-red-400 shrink-0" />
                         )}
                         {isMSE(med.cn) && (

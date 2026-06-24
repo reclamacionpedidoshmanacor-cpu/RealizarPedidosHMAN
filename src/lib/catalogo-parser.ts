@@ -16,8 +16,8 @@ export interface CatalogoRow {
   stockMinimo: number;
   puntoPedido: number;
   stockMaximo: number | null;
-  /** Valor para columna BD ppio_activo_cima (import almacén). */
-  ppioActivoCima?: string | null;
+  /** Indica si CIMA devolvió principio activo (import almacén / enriquecer). */
+  ppioActivoCima?: boolean | null;
   cimaConsultado?: boolean;
   /** Si el Excel trae columnas CIMA importadas (no consultar API). */
   incluyeCimaImportado?: boolean;
@@ -75,6 +75,42 @@ function findCol(headerNorm: string[], candidates: string[]): number {
     if (partial !== -1) return partial;
   }
   return -1;
+}
+
+/** Solo coincidencia exacta de cabecera (evita que «principio activo» matchee «ppio_activo_cima»). */
+function findColExact(headerNorm: string[], candidates: string[]): number {
+  for (const candidate of candidates) {
+    const norm = normalize(candidate);
+    const exact = headerNorm.findIndex((h) => h === norm);
+    if (exact !== -1) return exact;
+  }
+  return -1;
+}
+
+function cellText(row: unknown[], col: number): string {
+  if (col === -1) return '';
+  return String(row[col] ?? '').trim();
+}
+
+/** TRUE/SI/1 o FALSE/NO/0; vacío = null. */
+function parseBoolCelda(val: unknown): boolean | null {
+  if (typeof val === 'boolean') return val;
+  const s = String(val ?? '').trim().toUpperCase();
+  if (!s) return null;
+  if (s === 'TRUE' || s === 'VERDADERO' || s === 'SI' || s === 'S' || s === '1') return true;
+  if (s === 'FALSE' || s === 'FALSO' || s === 'NO' || s === 'N' || s === '0') return false;
+  return null;
+}
+
+/** Descarta valores que son solo el CN (error habitual en Excel). */
+function textoPrincipioActivoImport(value: string, cn: string): string {
+  const text = value.trim();
+  if (!text) return '';
+  if (text === cn) return '';
+  const cnDigits = cn.replace(/\D/g, '');
+  const textDigits = text.replace(/\D/g, '');
+  if (cnDigits.length >= 6 && textDigits === cnDigits) return '';
+  return text;
 }
 
 /** Número Excel con coma decimal o miles (p. ej. 2,5 · 1.500). */
@@ -457,24 +493,25 @@ export function parseCatalogoExcelAlmacen(buffer: Buffer): CatalogoParseResult {
   const headerNorm = headers.map(normalize);
 
   const idx = {
-    sap: findCol(headerNorm, ['codigo sap', 'codigo material', 'material', 'sap']),
-    prActivo: findCol(headerNorm, ['pr. activo', 'pr activo', 'ppio activo', 'principio activo']),
-    denominacion: findCol(headerNorm, ['denominacion', 'denominación', 'descripcion', 'descripción']),
-    ubic: findCol(headerNorm, ['ubicacion', 'ubic']),
-    cnCima: findCol(headerNorm, ['cn_cima', 'cn cima']),
-    ppioCima: findCol(headerNorm, ['principio activo_cima', 'principio activo cima']),
-    marcaCima: findCol(headerNorm, ['marca comercial_cima', 'marca comercial cima']),
+    sap: findColExact(headerNorm, ['codigo sap', 'codigo material', 'material', 'sap']),
+    denominacion: findColExact(headerNorm, ['denominacion', 'denominación']),
+    ubic: findColExact(headerNorm, ['ubicacion', 'ubic']),
+    cnCima: findColExact(headerNorm, ['cn_cima', 'cn cima']),
+    ppioActivo: findColExact(headerNorm, [
+      'ppio activo',
+      'pr. activo',
+      'pr activo',
+      'principio activo',
+    ]),
     presentacion: findCol(headerNorm, ['presentacion', 'presentación']),
     udesCaja: findCol(headerNorm, [
       'udes/caja', 'uds/caja', 'ud/caja', 'unidades/caja', 'unidades por caja', 'unidades x caja',
     ]),
-    activo: findCol(headerNorm, ['active', 'activo']),
-    cimaConsultado: findCol(headerNorm, ['cima_consultado', 'cima consultado']),
-    ppioActivoCima: findCol(headerNorm, [
+    activo: findColExact(headerNorm, ['active', 'activo']),
+    cimaConsultado: findColExact(headerNorm, ['cima_consultado', 'cima consultado']),
+    ppioActivoCima: findColExact(headerNorm, [
       'ppio_activo_cima',
       'ppio activo cima',
-      'ppio_active_cima',
-      'ppio active cima',
     ]),
   };
 
@@ -482,13 +519,15 @@ export function parseCatalogoExcelAlmacen(buffer: Buffer): CatalogoParseResult {
   if (idx.sap === -1 && idx.cnCima === -1) {
     requiredMissing.push('Código SAP o CN_CIMA');
   }
+  if (idx.denominacion === -1) requiredMissing.push('denominacion');
   if (idx.ubic === -1) requiredMissing.push('ubicacion');
+  if (idx.ppioActivo === -1) requiredMissing.push('Ppio Activo');
   if (requiredMissing.length) {
     return {
       rows,
       errors: [
         `Columnas obligatorias no encontradas: ${requiredMissing.join(', ')}.`,
-        'Esperado: Código SAP, Pr. Activo, Denominación, ubicacion, CN_CIMA, Principio Activo_CIMA, Marca Comercial_CIMA, Presentacion, udes/caja, Active, cima_consultado, ppio_activo_cima (opc.).',
+        'Esperado: Código SAP, denominacion, ubicacion, Ppio Activo, Active, cima_consultado, ppio_activo_cima (opc.).',
       ],
       via: 'OTRO',
     };
@@ -506,21 +545,29 @@ export function parseCatalogoExcelAlmacen(buffer: Buffer): CatalogoParseResult {
       continue;
     }
 
-    const prActivo = idx.prActivo !== -1 ? String(row[idx.prActivo] ?? '').trim() : '';
-    const denominacion = idx.denominacion !== -1 ? String(row[idx.denominacion] ?? '').trim() : '';
-    const ppioCima = idx.ppioCima !== -1 ? String(row[idx.ppioCima] ?? '').trim() : '';
-    const marcaCima = idx.marcaCima !== -1 ? String(row[idx.marcaCima] ?? '').trim() : '';
-    const presentacion = idx.presentacion !== -1 ? String(row[idx.presentacion] ?? '').trim() : '';
-    const ubicacion = String(row[idx.ubic] ?? '').trim();
+    const denominacion = cellText(row, idx.denominacion);
+    const principioActivo = textoPrincipioActivoImport(cellText(row, idx.ppioActivo), cn);
+    const presentacion = cellText(row, idx.presentacion);
+    const ubicacion = cellText(row, idx.ubic);
+
+    if (!denominacion) {
+      errors.push(`Fila ${i + 1}: denominación vacía (CN ${cn}).`);
+      continue;
+    }
 
     if (!ubicacion) {
       errors.push(`Fila ${i + 1}: ubicación vacía (CN ${cn}).`);
       continue;
     }
 
+    if (!principioActivo) {
+      errors.push(`Fila ${i + 1}: falta «Ppio Activo» (CN ${cn}).`);
+      continue;
+    }
+
     let unidadesPorCaja = 0;
     if (idx.udesCaja !== -1) {
-      const udesRaw = String(row[idx.udesCaja] ?? '').trim();
+      const udesRaw = cellText(row, idx.udesCaja);
       if (udesRaw) {
         const parsed = toIntOrNull(row[idx.udesCaja]);
         if (parsed == null || parsed <= 0) {
@@ -531,32 +578,20 @@ export function parseCatalogoExcelAlmacen(buffer: Buffer): CatalogoParseResult {
       }
     }
 
-    const principioActivo = firstNonEmpty(
-      idx.ppioActivoCima !== -1 ? String(row[idx.ppioActivoCima] ?? '').trim() : '',
-      ppioCima,
-      prActivo,
-      denominacion,
-    );
-    const nombre = firstNonEmpty(marcaCima, denominacion, prActivo, principioActivo, cn);
-    if (!principioActivo) {
-      errors.push(`Fila ${i + 1}: falta principio activo (CN ${cn}).`);
-      continue;
-    }
-
     const activo = idx.activo !== -1 ? parseActivoCatalogo(row[idx.activo]) : true;
 
     const incluyeCimaImportado =
       idx.ppioActivoCima !== -1 || idx.cimaConsultado !== -1;
-    let ppioActivoCima: string | null | undefined;
+    let ppioActivoCima: boolean | undefined;
     let cimaConsultado: boolean | undefined;
     if (incluyeCimaImportado) {
-      ppioActivoCima =
-        idx.ppioActivoCima !== -1
-          ? String(row[idx.ppioActivoCima] ?? '').trim() || null
-          : null;
+      if (idx.ppioActivoCima !== -1) {
+        ppioActivoCima = parseBoolCelda(row[idx.ppioActivoCima]) ?? false;
+      }
+
       if (idx.cimaConsultado !== -1) {
         cimaConsultado = parseBool(row[idx.cimaConsultado]);
-      } else if (ppioActivoCima) {
+      } else if (idx.ppioActivoCima !== -1) {
         cimaConsultado = true;
       } else {
         cimaConsultado = false;
@@ -567,7 +602,7 @@ export function parseCatalogoExcelAlmacen(buffer: Buffer): CatalogoParseResult {
       cn,
       sapCode: sapRaw || cn,
       principioActivo,
-      nombre,
+      nombre: denominacion,
       presentacion: presentacion || null,
       via: 'OTRO',
       ubicacion,

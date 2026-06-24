@@ -53,8 +53,7 @@ export async function listCnsConPpioActivoCima(): Promise<string[]> {
     SELECT cn
     FROM public.medicamentos
     WHERE activo = true
-      AND ppio_activo_cima IS NOT NULL
-      AND TRIM(ppio_activo_cima) <> ''
+      AND ppio_activo_cima = TRUE
     ORDER BY cn;
   `) as Array<{ cn: string }>;
   return rows.map((r) => r.cn);

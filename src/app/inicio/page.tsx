@@ -31,7 +31,7 @@ type MovimientoConsumo = {
   cn: string;
   componente: string;
   medicamento: string;
-  ppioActivoCima: string | null;
+  ppioActivoCima: boolean | null;
   unidadesPorCaja: number;
   direccion: DireccionMovimiento;
   periodoReciente: number;
@@ -81,7 +81,7 @@ type AlertaCompra = {
   cn: string;
   componente: string;
   medicamento: string;
-  ppioActivoCima: string | null;
+  ppioActivoCima: boolean | null;
   unidadesPorCaja: number;
   stockActualUnidades: number;
   stockActualCajas: number;

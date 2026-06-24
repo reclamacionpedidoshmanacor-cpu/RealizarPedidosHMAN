@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
       const presentacion = row.presentacion?.trim() || null;
       const cimaImportado = row.incluyeCimaImportado
         ? {
-            ppioActivoCima: row.ppioActivoCima ?? null,
+            ppioActivoCima: row.ppioActivoCima ?? false,
             cimaConsultado: row.cimaConsultado ?? false,
           }
         : {};
