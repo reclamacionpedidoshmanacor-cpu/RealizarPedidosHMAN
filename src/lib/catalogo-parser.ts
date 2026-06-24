@@ -50,6 +50,14 @@ function parseBool(val: unknown): boolean {
   return s === 'SI' || s === 'S' || s === 'TRUE' || s === '1';
 }
 
+/** Activo en catálogo: vacío = activo; solo NO/FALSE/0 marcan inactivo. */
+function parseActivoCatalogo(val: unknown): boolean {
+  const s = String(val ?? '').trim().toUpperCase();
+  if (!s) return true;
+  if (s === 'NO' || s === 'N' || s === 'FALSE' || s === '0') return false;
+  return parseBool(val);
+}
+
 function findCol(headerNorm: string[], candidates: string[]): number {
   for (const candidate of candidates) {
     const norm = normalize(candidate);
@@ -306,7 +314,7 @@ function parseViaCatalogo(raw: string): 'IV' | 'ORAL' | 'OTRO' {
   return 'OTRO';
 }
 
-/** Formato Nutrición: Código SAP, Producto, uds/caja, min/max en cajas, ubicación y vía. */
+/** Formato Nutrición: Código SAP, Producto, uds/caja, min/max/punto pedido en cajas, activo, ubicación y vía. */
 export function parseCatalogoExcelNutricion(buffer: Buffer): CatalogoParseResult {
   const errors: string[] = [];
   const rows: CatalogoRow[] = [];
@@ -329,7 +337,10 @@ export function parseCatalogoExcelNutricion(buffer: Buffer): CatalogoParseResult
     maxCajas: stockCols.maxCajas,
     minUdes: stockCols.minUdes,
     maxUdes: stockCols.maxUdes,
-    activo: findCol(headerNorm, ['activo']),
+    activo: findCol(headerNorm, ['activo', 'active']),
+    puntoPedido: findCol(headerNorm, [
+      'punto pedido', 'puntopedido', 'pto pedido', 'punto de pedido', 'pto. pedido',
+    ]),
     ubic: findCol(headerNorm, ['ubic', 'ubicacion']),
     via: findCol(headerNorm, ['via', 'administracion', 'ruta', 'ruta de administracion']),
   };
@@ -343,7 +354,7 @@ export function parseCatalogoExcelNutricion(buffer: Buffer): CatalogoParseResult
       rows,
       errors: [
         `Columnas obligatorias no encontradas: ${requiredMissing.join(', ')}.`,
-        'Esperado: Código SAP, Producto, Uds/caja, min, max (cajas), Ubicación y Vía (opc.).',
+        'Esperado: Código SAP, Producto, Uds/caja, min, max (cajas), punto pedido (opc.), activo/active (opc.), Ubicación y Vía (opc.).',
       ],
       via: 'OTRO',
     };
@@ -390,7 +401,10 @@ export function parseCatalogoExcelNutricion(buffer: Buffer): CatalogoParseResult
 
     const ubicRaw = idx.ubic !== -1 ? String(row[idx.ubic] ?? '').trim() : '';
     const viaRaw = idx.via !== -1 ? String(row[idx.via] ?? '').trim() : '';
-    const activo = idx.activo !== -1 ? parseBool(row[idx.activo]) : true;
+    const activo = idx.activo !== -1 ? parseActivoCatalogo(row[idx.activo]) : true;
+    const puntoPedidoExcel =
+      idx.puntoPedido !== -1 ? toCajasOrNull(row[idx.puntoPedido]) : null;
+    const puntoPedido = puntoPedidoExcel ?? stockMinimo;
     const cn = cnFromSapMaterial(sapRaw);
 
     rows.push({
@@ -404,7 +418,7 @@ export function parseCatalogoExcelNutricion(buffer: Buffer): CatalogoParseResult
       activo,
       mse: isMSE(cn),
       stockMinimo,
-      puntoPedido: stockMinimo,
+      puntoPedido,
       stockMaximo,
     });
   }
