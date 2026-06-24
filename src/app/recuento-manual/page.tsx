@@ -104,6 +104,19 @@ function parseUdsCajaInput(value: string): number {
   return Math.round(n);
 }
 
+async function parseApiJson(res: Response): Promise<Record<string, unknown>> {
+  const text = await res.text();
+  if (!text.trim()) return {};
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    if (res.redirected || text.includes('<!DOCTYPE') || text.includes('<html')) {
+      throw new Error('Sesión no válida. Vuelve a entrar en la app.');
+    }
+    throw new Error('Respuesta no válida del servidor.');
+  }
+}
+
 function toIntInput(v: string): number {
   const n = Number(v);
   if (!Number.isFinite(n) || n < 0) return 0;
@@ -189,6 +202,7 @@ export default function RecuentoManualPage() {
   const [sustituyendo, setSustituyendo] = useState(false);
   const [edicionCn, setEdicionCn] = useState<string | null>(null);
   const [editando, setEditando] = useState(false);
+  const [inactivandoCn, setInactivandoCn] = useState<string | null>(null);
 
   /* ── estado reposición (solo UPE) ── */
   const [repoBorrador, setRepoBorrador] = useState<ReposicionBorrador>(null);
@@ -462,11 +476,13 @@ export default function RecuentoManualPage() {
 
     setEditando(true);
     try {
-      const res = await fetch(`/api/medicamentos/${encodeURIComponent(cn)}`, {
-        method: 'PATCH',
+      const res = await fetch('/api/recuento-manual', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
+          action: 'editar-catalogo',
+          cn,
           principioActivo: ppioNuevo || null,
           nombre: payload.nombre.trim(),
           presentacion: payload.presentacion.trim() || null,
@@ -474,8 +490,8 @@ export default function RecuentoManualPage() {
           unidadesPorCaja: payload.unidadesPorCaja,
         }),
       });
-      const result = await res.json();
-      if (!res.ok) throw new Error(result?.error ?? 'No se pudo guardar.');
+      const result = await parseApiJson(res);
+      if (!res.ok) throw new Error(String(result?.error ?? 'No se pudo guardar.'));
 
       setEdicionCn(null);
       setSustitucionCnViejo(null);
@@ -485,6 +501,41 @@ export default function RecuentoManualPage() {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
       setEditando(false);
+    }
+  };
+
+  const handleMarcarInactivo = async (cn: string) => {
+    if (!ubicacion || !letra) return;
+    const med = medicamentosAlmacenVisibles.find((m) => m.cn === cn);
+    const qty = almacenDraft[cn]?.cajasPedidas ?? 0;
+    const etiqueta = med?.nombre ?? cn;
+    let aviso =
+      `${etiqueta}\nCN ${cn}\n\nDejará de aparecer en el pedido de almacén. Podrás reactivarlo desde Catálogo.`;
+    if (qty > 0) {
+      aviso += `\n\nTiene ${qty} caja(s) en el pedido actual; también se quitarán.`;
+    }
+    if (!confirm(`¿Marcar como inactivo?\n\n${aviso}`)) return;
+
+    setInactivandoCn(cn);
+    try {
+      const res = await fetch('/api/recuento-manual', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ action: 'marcar-inactivo', cn }),
+      });
+      const result = await parseApiJson(res);
+      if (!res.ok) throw new Error(String(result?.error ?? 'No se pudo marcar como inactivo.'));
+
+      setEdicionCn(null);
+      setSustitucionCnViejo(null);
+      setExtrasAlmacen((prev) => prev.filter((e) => e.cn !== cn));
+      toast.success('Artículo marcado como inactivo.');
+      await cargarUbicacion(ubicacion, letra);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setInactivandoCn(null);
     }
   };
 
@@ -989,6 +1040,8 @@ export default function RecuentoManualPage() {
                             setEdicionCn(null);
                             setSustitucionCnViejo((cur) => (cur === med.cn ? null : med.cn));
                           }}
+                          onMarcarInactivo={() => void handleMarcarInactivo(med.cn)}
+                          inactivando={inactivandoCn === med.cn}
                           edicionAbierta={edicionCn === med.cn}
                           sustitucionAbierta={sustitucionCnViejo === med.cn}
                         />
@@ -1404,12 +1457,12 @@ function EditarPasilloPanel({
           <label className="block space-y-1">
             <span className="text-xs font-bold text-teal-800 uppercase">Uds/caja</span>
             <input
-              type="number"
+              type="text"
               inputMode="numeric"
-              min={0}
+              pattern="[0-9]*"
               value={udsCaja}
               placeholder="—"
-              onChange={(e) => setUdsCaja(e.target.value)}
+              onChange={(e) => setUdsCaja(e.target.value.replace(/[^\d]/g, ''))}
               className="w-full rounded-xl border-2 border-teal-200 bg-white px-4 py-3 text-base text-center"
             />
           </label>
@@ -1568,12 +1621,15 @@ function SustituirPorPanel({
 
 /* ════════════════ Tarjeta de medicamento — pedido almacén ════════════════ */
 function AlmacenMedCard({
-  med, cantidadCajas, changed, index, total, onChange, onEditar, onSustituir, edicionAbierta, sustitucionAbierta,
+  med, cantidadCajas, changed, index, total, onChange, onEditar, onSustituir, onMarcarInactivo, inactivando,
+  edicionAbierta, sustitucionAbierta,
 }: {
   med: MedicamentoManual; cantidadCajas: number; changed: boolean;
   index: number; total: number; onChange: (v: number) => void;
   onEditar?: () => void;
   onSustituir?: () => void;
+  onMarcarInactivo?: () => void;
+  inactivando?: boolean;
   edicionAbierta?: boolean;
   sustitucionAbierta?: boolean;
 }) {
@@ -1599,7 +1655,22 @@ function AlmacenMedCard({
           )}
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
-          <span className="font-mono text-sm bg-white text-slate-500 rounded-lg px-2 py-1 border border-slate-200">CN {med.cn}</span>
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
+            <span className="font-mono text-sm bg-white text-slate-500 rounded-lg px-2 py-1 border border-slate-200">
+              CN {med.cn}
+            </span>
+            {onMarcarInactivo && (
+              <button
+                type="button"
+                onClick={onMarcarInactivo}
+                disabled={inactivando}
+                title="Marcar inactivo en catálogo (deja de aparecer en el pedido)"
+                className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-bold text-red-700 hover:bg-red-100 disabled:opacity-50"
+              >
+                {inactivando ? '…' : 'Inactivo'}
+              </button>
+            )}
+          </div>
           <span className="text-xs text-slate-400">{index}/{total}</span>
         </div>
       </div>

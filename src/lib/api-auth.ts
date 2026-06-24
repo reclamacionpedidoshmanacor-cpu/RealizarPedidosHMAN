@@ -24,3 +24,16 @@ export function requireApiSession(req: NextRequest): SessionResult {
 
   return { ok: true, area };
 }
+
+/** Sesión completa o solo área (flujo público de recuento / pasillo Almacén). */
+export function requireApiSessionOrArea(req: NextRequest): SessionResult {
+  const session = requireApiSession(req);
+  if (session.ok) return session;
+
+  const area = req.cookies.get('area_session')?.value;
+  if (isValidArea(area)) {
+    return { ok: true, area };
+  }
+
+  return session;
+}

@@ -7,16 +7,19 @@ import {
   mergeUbicacionesAlmacen,
   normalizeAlmacenText,
 } from '@/lib/almacen';
-import { listMedicamentosByArea } from '@/lib/catalogo-neon';
+import { listMedicamentosByArea, getMedicamentoByCn, updateMedicamento } from '@/lib/catalogo-neon';
 import { loadPedidosResumenAlmacenPorCns } from '@/lib/pedidos-pendientes';
+import { isMSE } from '@/lib/utils';
 import {
   crearRecuento,
+  eliminarLineaPedidoAlmacenPorCn,
   getBorradorPropuesta,
   getCantidadesPedidoAlmacen,
   getLineasRecuento,
   getPedidoAlmacenPendiente,
   getPendienteRecuento,
   incorporarFaltantesRecuento,
+  recalcularTotalLineasPedidoAlmacen,
   recalcularTotalLineasRecuento,
   upsertLineaRecuento,
 } from '@/lib/stock-propuesta-neon';
@@ -249,6 +252,11 @@ export async function POST(req: NextRequest) {
       ubicacion?: unknown;
       fechaRecuento?: unknown;
       lineas?: unknown;
+      cn?: unknown;
+      principioActivo?: unknown;
+      nombre?: unknown;
+      presentacion?: unknown;
+      unidadesPorCaja?: unknown;
     };
 
     const action = String(body.action ?? '').trim().toLowerCase();
@@ -257,6 +265,123 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Area no valida.' }, { status: 400 });
     }
     const area = isValidArea(areaRaw) ? areaRaw : getAreaFromCookie(req);
+
+    if (action === 'editar-catalogo') {
+      if (!isAlmacenArea(area)) {
+        return NextResponse.json({ error: 'Edición de catálogo solo disponible en Almacén.' }, { status: 400 });
+      }
+
+      const cn = String(body.cn ?? '').trim();
+      if (!cn) {
+        return NextResponse.json({ error: 'CN requerido.' }, { status: 400 });
+      }
+
+      const existing = await getMedicamentoByCn(cn);
+      if (!existing) {
+        return NextResponse.json({ error: 'Medicamento no encontrado.' }, { status: 404 });
+      }
+      if (existing.area !== area) {
+        return NextResponse.json({ error: 'No autorizado para esta area.' }, { status: 403 });
+      }
+
+      const nombre = body.nombre != null ? String(body.nombre).trim() : existing.nombre;
+      if (!nombre) {
+        return NextResponse.json({ error: 'Nombre requerido.' }, { status: 400 });
+      }
+
+      const principioActivo =
+        body.principioActivo != null
+          ? String(body.principioActivo).trim() || null
+          : existing.principioActivo;
+      const presentacion =
+        body.presentacion != null
+          ? String(body.presentacion).trim() || null
+          : existing.presentacion;
+      const ubicacionEdit =
+        body.ubicacion != null ? String(body.ubicacion).trim() : (existing.ubicacion ?? '');
+      if (!ubicacionEdit) {
+        return NextResponse.json({ error: 'Ubicación requerida.' }, { status: 400 });
+      }
+
+      let unidadesPorCaja = existing.unidadesPorCaja;
+      if (body.unidadesPorCaja != null) {
+        const n = Number(body.unidadesPorCaja);
+        if (!Number.isFinite(n) || n < 0) {
+          return NextResponse.json({ error: 'Uds/caja inválidas.' }, { status: 400 });
+        }
+        unidadesPorCaja = Math.round(n);
+      }
+
+      await updateMedicamento({
+        cn,
+        nombre,
+        principioActivo,
+        presentacion,
+        via: existing.via,
+        area: existing.area,
+        ubicacion: ubicacionEdit,
+        unidadesPorCaja,
+        activo: existing.activo,
+        comprable: existing.comprable,
+        mse: isMSE(cn),
+        tipoMse: existing.tipoMse,
+        precioUnidad: existing.precioUnidad,
+        precioCaja: existing.precioCaja,
+      });
+
+      const res = NextResponse.json({ ok: true, action: 'editar-catalogo', cn });
+      return withAreaCookie(res, area);
+    }
+
+    if (action === 'marcar-inactivo') {
+      if (!isAlmacenArea(area)) {
+        return NextResponse.json({ error: 'Solo disponible en Almacén.' }, { status: 400 });
+      }
+
+      const cn = String(body.cn ?? '').trim();
+      if (!cn) {
+        return NextResponse.json({ error: 'CN requerido.' }, { status: 400 });
+      }
+
+      const existing = await getMedicamentoByCn(cn);
+      if (!existing) {
+        return NextResponse.json({ error: 'Medicamento no encontrado.' }, { status: 404 });
+      }
+      if (existing.area !== area) {
+        return NextResponse.json({ error: 'No autorizado para esta area.' }, { status: 403 });
+      }
+
+      if (existing.activo) {
+        await updateMedicamento({
+          cn,
+          nombre: existing.nombre,
+          principioActivo: existing.principioActivo,
+          presentacion: existing.presentacion,
+          via: existing.via,
+          area: existing.area,
+          ubicacion: existing.ubicacion,
+          unidadesPorCaja: existing.unidadesPorCaja,
+          activo: false,
+          comprable: existing.comprable,
+          mse: isMSE(cn),
+          tipoMse: existing.tipoMse,
+          precioUnidad: existing.precioUnidad,
+          precioCaja: existing.precioCaja,
+        });
+
+        const pedidoPendiente = await getPedidoAlmacenPendiente(area);
+        if (pedidoPendiente) {
+          const propuesta = await getBorradorPropuesta(area, pedidoPendiente.id);
+          if (propuesta) {
+            await eliminarLineaPedidoAlmacenPorCn(propuesta.id, cn);
+            await recalcularTotalLineasPedidoAlmacen(pedidoPendiente.id, propuesta.id);
+          }
+        }
+      }
+
+      const res = NextResponse.json({ ok: true, action: 'marcar-inactivo', cn });
+      return withAreaCookie(res, area);
+    }
 
     if (isAlmacenArea(area)) {
       return NextResponse.json(

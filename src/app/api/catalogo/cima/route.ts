@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireApiSession } from '@/lib/api-auth';
+import { requireApiSessionOrArea } from '@/lib/api-auth';
 import { buscarMedicamentoPorCN } from '@/lib/cima';
 import { inferirUnidadesPorCaja } from '@/lib/cima-presentacion';
 import { normalizarCnParaCima } from '@/lib/utils';
@@ -7,7 +7,7 @@ import { normalizarCnParaCima } from '@/lib/utils';
 export const runtime = 'nodejs';
 
 export async function GET(req: NextRequest) {
-  const session = requireApiSession(req);
+  const session = requireApiSessionOrArea(req);
   if (!session.ok) return session.response;
 
   const rawCn = req.nextUrl.searchParams.get('cn')?.trim() ?? '';

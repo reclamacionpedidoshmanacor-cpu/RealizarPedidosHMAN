@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { isValidArea, type AreaId } from '@/lib/areas';
 import { isAlmacenArea } from '@/lib/almacen';
 import { listMedicamentosByArea } from '@/lib/catalogo-neon';
-import { requireApiSession } from '@/lib/api-auth';
+import { requireApiSessionOrArea } from '@/lib/api-auth';
 import {
   ensureSesionPedidoAlmacen,
   getCantidadesPedidoAlmacen,
@@ -20,7 +20,7 @@ function parseNonNegativeInteger(value: unknown): number | null {
 }
 
 export async function GET(req: NextRequest) {
-  const session = requireApiSession(req);
+  const session = requireApiSessionOrArea(req);
   if (!session.ok) return session.response;
   if (!isAlmacenArea(session.area)) {
     return NextResponse.json({ error: 'Pedido de almacén solo disponible para el área Almacén.' }, { status: 403 });
@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const session = requireApiSession(req);
+  const session = requireApiSessionOrArea(req);
   if (!session.ok) return session.response;
   if (!isAlmacenArea(session.area)) {
     return NextResponse.json({ error: 'Pedido de almacén solo disponible para el área Almacén.' }, { status: 403 });

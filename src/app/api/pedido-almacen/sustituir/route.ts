@@ -8,24 +8,18 @@ import {
   updateMedicamento,
   upsertStockObjetivo,
 } from '@/lib/catalogo-neon';
-import { requireApiSession } from '@/lib/api-auth';
+import { requireApiSessionOrArea } from '@/lib/api-auth';
 import { isMSE, normalizarCnParaCima } from '@/lib/utils';
 import {
   ensureSesionPedidoAlmacen,
+  eliminarLineaPedidoAlmacenPorCn,
   getCantidadesPedidoAlmacen,
   recalcularTotalLineasPedidoAlmacen,
   upsertLineasPedidoAlmacen,
 } from '@/lib/stock-propuesta-neon';
 import { registrarRevisionPendiente } from '@/lib/catalogo-revision-neon';
-import { neon } from '@neondatabase/serverless';
 
 export const runtime = 'nodejs';
-
-function getDb() {
-  const url = process.env.REALIZAR_PEDIDOS_DATABASE_URL ?? process.env.DATABASE_URL;
-  if (!url) throw new Error('Falta REALIZAR_PEDIDOS_DATABASE_URL.');
-  return neon(url);
-}
 
 function parseNonNegativeInteger(value: unknown): number | null {
   const num = Number(value);
@@ -33,16 +27,8 @@ function parseNonNegativeInteger(value: unknown): number | null {
   return num;
 }
 
-async function eliminarLineaPedidoPorCn(propuestaId: number, cn: string): Promise<void> {
-  const sql = getDb();
-  await sql`
-    DELETE FROM propuestas_lineas
-    WHERE propuesta_id = ${propuestaId} AND cn = ${cn};
-  `;
-}
-
 export async function POST(req: NextRequest) {
-  const session = requireApiSession(req);
+  const session = requireApiSessionOrArea(req);
   if (!session.ok) return session.response;
   if (!isAlmacenArea(session.area)) {
     return NextResponse.json({ error: 'Sustitución solo disponible en el área Almacén.' }, { status: 403 });
@@ -153,7 +139,7 @@ export async function POST(req: NextRequest) {
   });
 
   const { importacionId, propuestaId } = await ensureSesionPedidoAlmacen(session.area);
-  await eliminarLineaPedidoPorCn(propuestaId, cnViejo);
+  await eliminarLineaPedidoAlmacenPorCn(propuestaId, cnViejo);
 
   if (cajasPedidas > 0) {
     const stockNuevoFinal = await getStockObjetivoByCn(cnNuevo);

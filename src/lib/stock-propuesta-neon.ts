@@ -1387,6 +1387,20 @@ export async function getCantidadesPedidoAlmacen(propuestaId: number): Promise<R
   return map;
 }
 
+export async function eliminarLineaPedidoAlmacenPorCn(
+  propuestaId: number,
+  cn: string
+): Promise<boolean> {
+  await ensurePropuestasLineasSchema();
+  const sql = getDb();
+  const deleted = (await sql`
+    DELETE FROM propuestas_lineas
+    WHERE propuesta_id = ${propuestaId} AND cn = ${cn}
+    RETURNING id;
+  `) as Array<{ id: number }>;
+  return deleted.length > 0;
+}
+
 export async function upsertLineasPedidoAlmacen(
   propuestaId: number,
   lineas: Array<{
