@@ -537,94 +537,117 @@ export async function loadAlertasSuministroPorCns(
     candidatosPorCn.set(cn6, list);
   };
 
-  const cimaRows = (await sql`
-    SELECT cn, nombre, descripcion, updated_at::text AS updated_at
-    FROM public.suministro_alertas
-    WHERE resuelto = false
-      AND estado = 'Activo'
-      AND cn = ANY(${normalizedCns});
-  `) as Array<{
-    cn: string;
-    nombre: string | null;
-    descripcion: string | null;
-    updated_at: string;
-  }>;
+  try {
+    const cimaRows = (await sql`
+      SELECT cn, nombre, descripcion, updated_at::text AS updated_at
+      FROM public.suministro_alertas
+      WHERE resuelto = false
+        AND estado = 'Activo'
+        AND cn IS NOT NULL
+        AND regexp_replace(cn::text, '[^0-9]', '', 'g') <> ''
+        AND lpad(right(regexp_replace(cn::text, '[^0-9]', '', 'g'), 6), 6, '0') = ANY(${normalizedCns});
+    `) as Array<{
+      cn: string;
+      nombre: string | null;
+      descripcion: string | null;
+      updated_at: string;
+    }>;
 
-  for (const row of cimaRows) {
-    const cn6 = toCn6(row.cn);
-    const ms = parseTs(row.updated_at);
-    if (!cn6 || ms == null) continue;
-    push(cn6, {
-      tipo: 'cima',
-      etiqueta: 'CIMA — problema suministro',
-      detalle: row.descripcion?.trim() || row.nombre?.trim() || null,
-      fecha: row.updated_at,
-      ms,
-    });
+    for (const row of cimaRows) {
+      const cn6 = toCn6(row.cn);
+      const ms = parseTs(row.updated_at);
+      if (!cn6 || ms == null) continue;
+      push(cn6, {
+        tipo: 'cima',
+        etiqueta: 'CIMA — problema suministro',
+        detalle: row.descripcion?.trim() || row.nombre?.trim() || null,
+        fecha: row.updated_at,
+        ms,
+      });
+    }
+  } catch (err) {
+    console.warn(
+      '[alertas-suministro] No se pudieron leer alertas CIMA:',
+      err instanceof Error ? err.message : err,
+    );
   }
 
-  const faltaRows = (await sql`
-    SELECT
-      lpad(right(regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') AS cn6,
-      o.updated_at::text AS updated_at
-    FROM public.orders o
-    WHERE o.en_falta = true
-      AND o.recibido = false
-      AND o.anulado = false
-      AND o.n_mate_prov IS NOT NULL
-      AND regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g') <> ''
-      AND lpad(right(regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') = ANY(${normalizedCns});
-  `) as Array<{ cn6: string; updated_at: string }>;
+  try {
+    const faltaRows = (await sql`
+      SELECT
+        lpad(right(regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') AS cn6,
+        o.updated_at::text AS updated_at
+      FROM public.orders o
+      WHERE o.en_falta = true
+        AND o.recibido = false
+        AND o.anulado = false
+        AND o.n_mate_prov IS NOT NULL
+        AND regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g') <> ''
+        AND lpad(right(regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') = ANY(${normalizedCns});
+    `) as Array<{ cn6: string; updated_at: string }>;
 
-  for (const row of faltaRows) {
-    const cn6 = toCn6(row.cn6);
-    const ms = parseTs(row.updated_at);
-    if (!cn6 || ms == null) continue;
-    push(cn6, {
-      tipo: 'en_falta',
-      etiqueta: 'En falta',
-      detalle: null,
-      fecha: row.updated_at,
-      ms,
-    });
+    for (const row of faltaRows) {
+      const cn6 = toCn6(row.cn6);
+      const ms = parseTs(row.updated_at);
+      if (!cn6 || ms == null) continue;
+      push(cn6, {
+        tipo: 'en_falta',
+        etiqueta: 'En falta',
+        detalle: null,
+        fecha: row.updated_at,
+        ms,
+      });
+    }
+  } catch (err) {
+    console.warn(
+      '[alertas-suministro] No se pudieron leer pedidos en falta:',
+      err instanceof Error ? err.message : err,
+    );
   }
 
-  const proveedorRows = (await sql`
-    SELECT
-      lpad(right(regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') AS cn6,
-      rl.estado_actual::text AS estado,
-      rl.texto_libre,
-      rl.updated_at::text AS updated_at
-    FROM public.orders o
-    INNER JOIN public.respuestas_proveedor rp ON rp.documento_compras = o.documento_compras
-    INNER JOIN public.respuestas_lineas rl
-      ON rl.respuesta_id = rp.id AND rl.posicion = o.posicion
-    WHERE o.recibido = false
-      AND o.anulado = false
-      AND rl.estado_actual IN ('sin_existencias', 'suministro', 'aemps')
-      AND o.n_mate_prov IS NOT NULL
-      AND regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g') <> ''
-      AND lpad(right(regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') = ANY(${normalizedCns});
-  `) as Array<{
-    cn6: string;
-    estado: string;
-    texto_libre: string | null;
-    updated_at: string;
-  }>;
+  try {
+    const proveedorRows = (await sql`
+      SELECT
+        lpad(right(regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') AS cn6,
+        rl.estado_actual::text AS estado,
+        rl.texto_libre,
+        rl.updated_at::text AS updated_at
+      FROM public.orders o
+      INNER JOIN public.respuestas_proveedor rp ON rp.documento_compras = o.documento_compras
+      INNER JOIN public.respuestas_lineas rl
+        ON rl.respuesta_id = rp.id AND rl.posicion = o.posicion
+      WHERE o.recibido = false
+        AND o.anulado = false
+        AND rl.estado_actual IN ('sin_existencias', 'suministro', 'aemps')
+        AND o.n_mate_prov IS NOT NULL
+        AND regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g') <> ''
+        AND lpad(right(regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') = ANY(${normalizedCns});
+    `) as Array<{
+      cn6: string;
+      estado: string;
+      texto_libre: string | null;
+      updated_at: string;
+    }>;
 
-  for (const row of proveedorRows) {
-    const cn6 = toCn6(row.cn6);
-    const ms = parseTs(row.updated_at);
-    const meta = ESTADOS_PROVEEDOR_ALERTA[row.estado];
-    if (!cn6 || ms == null || !meta) continue;
-    const detalle = row.texto_libre?.trim() || null;
-    push(cn6, {
-      tipo: meta.tipo,
-      etiqueta: meta.etiqueta,
-      detalle,
-      fecha: row.updated_at,
-      ms,
-    });
+    for (const row of proveedorRows) {
+      const cn6 = toCn6(row.cn6);
+      const ms = parseTs(row.updated_at);
+      const meta = ESTADOS_PROVEEDOR_ALERTA[row.estado];
+      if (!cn6 || ms == null || !meta) continue;
+      const detalle = row.texto_libre?.trim() || null;
+      push(cn6, {
+        tipo: meta.tipo,
+        etiqueta: meta.etiqueta,
+        detalle,
+        fecha: row.updated_at,
+        ms,
+      });
+    }
+  } catch (err) {
+    console.warn(
+      '[alertas-suministro] No se pudieron leer respuestas de proveedor:',
+      err instanceof Error ? err.message : err,
+    );
   }
 
   for (const cn6 of normalizedCns) {
