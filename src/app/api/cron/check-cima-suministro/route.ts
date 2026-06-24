@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { runChequeoCimaSuministroCatalogoLote } from '@/lib/cima-suministro-neon';
+import {
+  getCimaLoteConfig,
+  runChequeoCimaSuministroCatalogoLote,
+} from '@/lib/cima-suministro-neon';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -18,6 +21,8 @@ export async function GET(request: NextRequest) {
       : 0;
 
     return NextResponse.json({
+      modo: 'lote',
+      config: getCimaLoteConfig(),
       message: result.cicloCompleto
         ? `CIMA catálogo: ciclo completado (${result.comprobados} CNs en este lote, ${result.problemasActivos} problemas)`
         : `CIMA catálogo: lote ${result.comprobados} CNs (${avance}/${result.totalUniverso}), quedan ${result.pendientesTrasLote}`,

@@ -248,11 +248,25 @@ export async function checkCimaSuministroParaCn(cn: string): Promise<boolean> {
 }
 
 const CIMA_DELAY_MS = 150;
-/** Margen de seguridad frente al límite de 300 s en Vercel. */
-const CIMA_LOTE_TIEMPO_MS = 270_000;
-/** Tope por ejecución aunque CIMA responda muy rápido. */
-const CIMA_LOTE_MAX_CN = 220;
+
+function envInt(name: string, fallback: number): number {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : fallback;
+}
+
+/** Segundos máx. por llamada (cron externo p. ej. cron-job.org suele cortar ~30 s). */
+const CIMA_LOTE_TIEMPO_MS = envInt('CIMA_LOTE_TIEMPO_MS', 25_000);
+/** CNs máx. por llamada. */
+const CIMA_LOTE_MAX_CN = envInt('CIMA_LOTE_MAX_CN', 18);
 const CIMA_LOTE_FETCH = 40;
+
+export function getCimaLoteConfig() {
+  return {
+    loteTiempoMs: CIMA_LOTE_TIEMPO_MS,
+    loteMaxCn: CIMA_LOTE_MAX_CN,
+    delayMs: CIMA_DELAY_MS,
+  };
+}
 
 export type ChequeoCimaSuministroLoteResult = {
   comprobados: number;
