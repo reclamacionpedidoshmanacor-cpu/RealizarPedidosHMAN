@@ -41,21 +41,13 @@ export function letraCatalogoAlmacen(
 
 export function mergeUbicacionesAlmacen(desdeCatalogo: string[]): string[] {
   const map = new Map<string, string>();
-  for (const ub of ALMACEN_UBICACIONES) {
-    map.set(normalizeAlmacenText(ub), ub);
-  }
   for (const raw of desdeCatalogo) {
     const trimmed = String(raw ?? '').trim();
     if (!trimmed) continue;
     const key = normalizeAlmacenText(trimmed);
     if (!map.has(key)) map.set(key, trimmed);
   }
-  const fijas = ALMACEN_UBICACIONES.filter((ub) => map.has(normalizeAlmacenText(ub)));
-  const extras = [...map.entries()]
-    .filter(([key]) => !ALMACEN_UBICACIONES.some((ub) => normalizeAlmacenText(ub) === key))
-    .map(([, v]) => v)
-    .sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
-  return [...fijas, ...extras];
+  return [...map.values()].sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
 }
 
 export function filtrarPorLetra<T extends { principioActivo: string | null; nombre: string }>(

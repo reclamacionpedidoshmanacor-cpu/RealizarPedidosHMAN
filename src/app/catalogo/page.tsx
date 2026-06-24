@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
 import { cn, formatCajas, formatEuro, formatMseLabel, isMSE, parseCajasInput, roundCajas } from '@/lib/utils';
 import { toSapCode } from '@/lib/propuesta';
-import { ALMACEN_UBICACIONES } from '@/lib/almacen';
+import { mergeUbicacionesAlmacen } from '@/lib/almacen';
 
 interface Medicamento {
   cn: string; nombre: string; principioActivo: string | null;
@@ -192,8 +192,13 @@ export default function CatalogoPage() {
   }, []);
 
   const ubicacionesUnicas = useMemo(() => {
-    if (esAlmacen) return [...ALMACEN_UBICACIONES];
-    return Array.from(new Set(meds.map(m => m.ubicacion).filter(Boolean) as string[])).sort();
+    const desdeCatalogo = meds
+      .map((m) => m.ubicacion)
+      .filter((u): u is string => Boolean(u?.trim()));
+    if (esAlmacen) return mergeUbicacionesAlmacen(desdeCatalogo);
+    return Array.from(new Set(desdeCatalogo)).sort((a, b) =>
+      a.localeCompare(b, 'es', { sensitivity: 'base' })
+    );
   }, [meds, esAlmacen]);
 
   const buscarCimaPorCn = async (cn: string) => {
@@ -858,7 +863,9 @@ export default function CatalogoPage() {
                 {thSort('cn', 'CN')}
                 {thSort('principioActivo', 'Principio activo')}
                 {thSort('nombre', 'Nombre / Marca')}
-                <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Vía</th>
+                {!esAlmacen && (
+                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Vía</th>
+                )}
                 {thSort('ubicacion', 'Ubicación')}
                 <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">Uds/caja</th>
                 {esAlmacen && (
@@ -887,7 +894,9 @@ export default function CatalogoPage() {
                     <td className="px-4 py-2">
                       <input className="w-full rounded border border-slate-300 px-2 py-1 text-xs" value={editData.nombre ?? ''} onChange={e => setEditData(p => ({ ...p, nombre: e.target.value }))} />
                     </td>
-                    <td className="px-4 py-2 text-xs text-slate-500">{med.via}</td>
+                    {!esAlmacen && (
+                      <td className="px-4 py-2 text-xs text-slate-500">{med.via}</td>
+                    )}
                     <td className="px-4 py-2">
                       <UbicacionSelect
                         value={editData.ubicacion ?? ''}
@@ -944,13 +953,15 @@ export default function CatalogoPage() {
                     <td className="px-4 py-3 text-slate-600 max-w-[180px] truncate" title={med.nombre}>
                       {med.nombre}
                     </td>
-                    <td className="px-4 py-3">
-                      {med.via && (
-                        <span className={cn('rounded px-2 py-0.5 text-xs font-semibold', VIA_BADGE[med.via] ?? VIA_BADGE.OTRO)}>
-                          {med.via}
-                        </span>
-                      )}
-                    </td>
+                    {!esAlmacen && (
+                      <td className="px-4 py-3">
+                        {med.via && (
+                          <span className={cn('rounded px-2 py-0.5 text-xs font-semibold', VIA_BADGE[med.via] ?? VIA_BADGE.OTRO)}>
+                            {med.via}
+                          </span>
+                        )}
+                      </td>
+                    )}
                     <td className="px-4 py-3 text-xs text-slate-500">{med.ubicacion ?? '—'}</td>
                     <td className="px-4 py-3 text-center text-sm font-mono">
                       {esAlmacen && med.unidadesPorCaja <= 0 ? '—' : med.unidadesPorCaja}
@@ -1049,17 +1060,19 @@ export default function CatalogoPage() {
                     </button>
                   </div>
                 </Field>
-                <Field label="Vía">
-                  <select
-                    className="field-input bg-white"
-                    value={nuevoData.via}
-                    onChange={e => setNuevoData(p => ({ ...p, via: e.target.value }))}
-                  >
-                    <option value="IV">IV</option>
-                    <option value="ORAL">ORAL</option>
-                    <option value="OTRO">OTRO</option>
-                  </select>
-                </Field>
+                {!esAlmacen && (
+                  <Field label="Vía">
+                    <select
+                      className="field-input bg-white"
+                      value={nuevoData.via}
+                      onChange={e => setNuevoData(p => ({ ...p, via: e.target.value }))}
+                    >
+                      <option value="IV">IV</option>
+                      <option value="ORAL">ORAL</option>
+                      <option value="OTRO">OTRO</option>
+                    </select>
+                  </Field>
+                )}
               </div>
               {esAlmacen && (
                 <p className="text-xs text-violet-600 -mt-1">
