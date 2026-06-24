@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { AREA_IDS, type AreaId } from '@/lib/areas';
 import { normalizeAlmacenText } from '@/lib/almacen';
+import { cn } from '@/lib/utils';
 
 /* ─── tipos recuento manual ─── */
 type RecuentoPendiente = { id: number; origen: string; fechaRecuento: string; totalLineas: number } | null;
@@ -115,6 +116,14 @@ async function parseApiJson(res: Response): Promise<Record<string, unknown>> {
     }
     throw new Error('Respuesta no válida del servidor.');
   }
+}
+
+function restoreScrollY(y: number) {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      window.scrollTo(0, y);
+    });
+  });
 }
 
 function toIntInput(v: string): number {
@@ -256,6 +265,47 @@ export default function RecuentoManualPage() {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const refrescarPedidoAlmacen = async (
+    ub: string,
+    letraFiltro?: string | null,
+    opts?: { resetBaseline?: boolean },
+  ) => {
+    const scrollY = window.scrollY;
+    try {
+      const params = new URLSearchParams({ ubicacion: ub });
+      if (letraFiltro) params.set('letra', letraFiltro);
+      const res = await fetch(`/api/recuento-manual?${params.toString()}`, { cache: 'no-store' });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'Error al cargar medicamentos.');
+      const typed = payload as ApiResponse;
+      setData(typed);
+
+      if (typed.modo === 'pedido-almacen') {
+        const reset = opts?.resetBaseline === true;
+        setAlmacenDraft((prev) => {
+          const next: Record<string, AlmacenDraftLinea> = {};
+          for (const med of typed.medicamentos) {
+            const vals = { cajasPedidas: med.cajasPedidas ?? 0 };
+            next[med.cn] = reset ? { ...vals } : (prev[med.cn] ?? { ...vals });
+          }
+          return next;
+        });
+        setAlmacenBaseline((prev) => {
+          const next: Record<string, AlmacenDraftLinea> = {};
+          for (const med of typed.medicamentos) {
+            const vals = { cajasPedidas: med.cajasPedidas ?? 0 };
+            next[med.cn] = reset ? { ...vals } : (prev[med.cn] ?? { ...vals });
+          }
+          return next;
+        });
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      restoreScrollY(scrollY);
     }
   };
 
@@ -436,6 +486,25 @@ export default function RecuentoManualPage() {
         return [{ ...nuevo, activo: true }, ...filtrados];
       });
 
+      setData((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          medicamentos: prev.medicamentos.filter((m) => m.cn !== cnViejo),
+        };
+      });
+
+      setAlmacenDraft((prev) => {
+        const next = { ...prev };
+        delete next[cnViejo];
+        return next;
+      });
+      setAlmacenBaseline((prev) => {
+        const next = { ...prev };
+        delete next[cnViejo];
+        return next;
+      });
+
       const draftVal = { cajasPedidas: cajas };
       setAlmacenDraft((prev) => ({ ...prev, [nuevo.cn]: draftVal }));
       if (cajas > 0) {
@@ -447,7 +516,6 @@ export default function RecuentoManualPage() {
       toast.success(
         `Sustituido CN ${cnViejo} → ${nuevo.cn}${cajas > 0 ? ` · ${cajas} caja(s) en pedido` : ''}`
       );
-      if (letra) await cargarUbicacion(ubicacion, letra);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
@@ -496,7 +564,34 @@ export default function RecuentoManualPage() {
       setEdicionCn(null);
       setSustitucionCnViejo(null);
       toast.success('Datos actualizados en catálogo.');
-      await cargarUbicacion(ubicacion, letra);
+
+      setData((prev) => {
+        if (!prev) return prev;
+        const patch = {
+          principioActivo: ppioNuevo || null,
+          nombre: payload.nombre.trim(),
+          presentacion: payload.presentacion.trim() || null,
+          ubicacion: payload.ubicacion.trim(),
+          unidadesPorCaja: payload.unidadesPorCaja,
+        };
+        if (cambiaLetra || cambiaUbicacion) {
+          setAlmacenDraft((prev) => {
+            const next = { ...prev };
+            delete next[cn];
+            return next;
+          });
+          setAlmacenBaseline((prev) => {
+            const next = { ...prev };
+            delete next[cn];
+            return next;
+          });
+          return { ...prev, medicamentos: prev.medicamentos.filter((m) => m.cn !== cn) };
+        }
+        return {
+          ...prev,
+          medicamentos: prev.medicamentos.map((m) => (m.cn === cn ? { ...m, ...patch } : m)),
+        };
+      });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
@@ -530,8 +625,21 @@ export default function RecuentoManualPage() {
       setEdicionCn(null);
       setSustitucionCnViejo(null);
       setExtrasAlmacen((prev) => prev.filter((e) => e.cn !== cn));
+      setData((prev) => {
+        if (!prev) return prev;
+        return { ...prev, medicamentos: prev.medicamentos.filter((m) => m.cn !== cn) };
+      });
+      setAlmacenDraft((prev) => {
+        const next = { ...prev };
+        delete next[cn];
+        return next;
+      });
+      setAlmacenBaseline((prev) => {
+        const next = { ...prev };
+        delete next[cn];
+        return next;
+      });
       toast.success('Artículo marcado como inactivo.');
-      await cargarUbicacion(ubicacion, letra);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
@@ -569,7 +677,7 @@ export default function RecuentoManualPage() {
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo guardar el pedido.');
       toast.success(`✅ Pedido guardado (${payload.upserted} línea(s))`);
-      if (letra) await cargarUbicacion(ubicacion, letra);
+      if (letra) await refrescarPedidoAlmacen(ubicacion, letra, { resetBaseline: true });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
@@ -1040,7 +1148,7 @@ export default function RecuentoManualPage() {
                             setEdicionCn(null);
                             setSustitucionCnViejo((cur) => (cur === med.cn ? null : med.cn));
                           }}
-                          onMarcarInactivo={() => void handleMarcarInactivo(med.cn)}
+                          onToggleActivo={() => void handleMarcarInactivo(med.cn)}
                           inactivando={inactivandoCn === med.cn}
                           edicionAbierta={edicionCn === med.cn}
                           sustitucionAbierta={sustitucionCnViejo === med.cn}
@@ -1621,14 +1729,14 @@ function SustituirPorPanel({
 
 /* ════════════════ Tarjeta de medicamento — pedido almacén ════════════════ */
 function AlmacenMedCard({
-  med, cantidadCajas, changed, index, total, onChange, onEditar, onSustituir, onMarcarInactivo, inactivando,
+  med, cantidadCajas, changed, index, total, onChange, onEditar, onSustituir, onToggleActivo, inactivando,
   edicionAbierta, sustitucionAbierta,
 }: {
   med: MedicamentoManual; cantidadCajas: number; changed: boolean;
   index: number; total: number; onChange: (v: number) => void;
   onEditar?: () => void;
   onSustituir?: () => void;
-  onMarcarInactivo?: () => void;
+  onToggleActivo?: () => void;
   inactivando?: boolean;
   edicionAbierta?: boolean;
   sustitucionAbierta?: boolean;
@@ -1655,20 +1763,32 @@ function AlmacenMedCard({
           )}
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
-          <div className="flex flex-wrap items-center justify-end gap-1.5">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <span className="font-mono text-sm bg-white text-slate-500 rounded-lg px-2 py-1 border border-slate-200">
               CN {med.cn}
             </span>
-            {onMarcarInactivo && (
-              <button
-                type="button"
-                onClick={onMarcarInactivo}
-                disabled={inactivando}
-                title="Marcar inactivo en catálogo (deja de aparecer en el pedido)"
-                className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-bold text-red-700 hover:bg-red-100 disabled:opacity-50"
-              >
-                {inactivando ? '…' : 'Inactivo'}
-              </button>
+            {onToggleActivo && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] font-bold uppercase text-slate-500 tracking-wide">Activo</span>
+                <button
+                  type="button"
+                  onClick={onToggleActivo}
+                  disabled={inactivando}
+                  title="Desliza para marcar inactivo en catálogo"
+                  aria-label="Activo"
+                  className={cn(
+                    'inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors disabled:opacity-50',
+                    med.activo !== false ? 'bg-teal-500' : 'bg-slate-300',
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'inline-block h-3.5 w-3.5 rounded-full bg-white shadow transform transition-transform',
+                      med.activo !== false ? 'translate-x-4' : 'translate-x-1',
+                    )}
+                  />
+                </button>
+              </div>
             )}
           </div>
           <span className="text-xs text-slate-400">{index}/{total}</span>
