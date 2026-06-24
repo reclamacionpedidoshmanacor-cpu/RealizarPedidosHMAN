@@ -12,7 +12,7 @@ import { isAlmacenArea } from '@/lib/almacen';
 import {
   alertaSuministroParaCn,
   loadAlertasSuministroPorCnsSafe,
-} from '@/lib/pedidos-pendientes';
+} from '@/lib/alertas-suministro';
 
 export const runtime = 'nodejs';
 

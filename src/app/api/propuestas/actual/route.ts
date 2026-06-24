@@ -15,7 +15,8 @@ import {
   insertarLineasPropuesta,
   reemplazarLineasPropuestaDesdeRecuento,
 } from '@/lib/stock-propuesta-neon';
-import { loadCantidadTransitoByCn, loadAlertasSuministroPorCnsSafe, alertaSuministroParaCn } from '@/lib/pedidos-pendientes';
+import { loadCantidadTransitoByCn } from '@/lib/pedidos-pendientes';
+import { loadAlertasSuministroPorCnsSafe, alertaSuministroParaCn } from '@/lib/alertas-suministro';
 import { calcularCajasPropuestas } from '@/lib/propuesta';
 
 export const runtime = 'nodejs';

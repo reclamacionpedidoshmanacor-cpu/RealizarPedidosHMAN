@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { neon } from '@neondatabase/serverless';
 import { requireApiSession } from '@/lib/api-auth';
+import { checkCimaSuministroParaCn } from '@/lib/cima-suministro-neon';
 
 export const runtime = 'nodejs';
 
@@ -73,6 +74,11 @@ export async function POST(req: NextRequest) {
                 cima_consultado  = TRUE
             WHERE cn = ${cn} AND area = ${session.area};
           `;
+          try {
+            await checkCimaSuministroParaCn(cn);
+          } catch {
+            /* no bloquear enriquecimiento por fallo puntual CIMA suministro */
+          }
           actualizados++;
         } else {
           await sql`

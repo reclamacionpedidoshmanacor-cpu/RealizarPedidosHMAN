@@ -8,7 +8,8 @@ import {
   normalizeAlmacenText,
 } from '@/lib/almacen';
 import { listMedicamentosByArea, getMedicamentoByCn, updateMedicamento } from '@/lib/catalogo-neon';
-import { loadPedidosResumenAlmacenPorCns, cnClavePedidos, loadAlertasSuministroPorCnsSafe, alertaSuministroParaCn } from '@/lib/pedidos-pendientes';
+import { loadPedidosResumenAlmacenPorCns, cnClavePedidos } from '@/lib/pedidos-pendientes';
+import { loadAlertasSuministroPorCnsSafe, alertaSuministroParaCn } from '@/lib/alertas-suministro';
 import { isMSE } from '@/lib/utils';
 import {
   crearRecuento,

@@ -1,0 +1,13 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/check-cima-suministro",
+      "schedule": "0 7 * * *"
+    }
+  ],
+  "functions": {
+    "src/app/api/cron/check-cima-suministro/route.ts": {
+      "maxDuration": 300
+    }
+  }
+}

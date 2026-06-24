@@ -28,6 +28,13 @@ interface CimaApiResponse {
   pactivos?: string | { nombre?: string; cant?: string; unidad?: string }[];
   presentaciones?: { cn?: string | number; nombre?: string }[];
   estado?: { aut?: number };
+  psum?: boolean;
+}
+
+const CIMA_PUBLIC = 'https://cima.aemps.es/cima/publico/detalle.html';
+
+function cimaUrl(nregistro: string): string {
+  return `${CIMA_PUBLIC}?nregistro=${encodeURIComponent(nregistro)}`;
 }
 
 function formatPrincipioActivo(
@@ -118,36 +125,75 @@ export interface CimaProblemaSupministro {
   cn: string;
   nombre: string;
   descripcion: string | null;
+  cimaUrl: string;
 }
 
-export async function checkDesabastecimiento(rawCn: string): Promise<CimaProblemaSupministro | null> {
-  const datos = await buscarMedicamentoPorCN(rawCn);
-  if (!datos) return null;
-
-  const nregistro = datos.nregistro.trim();
-
-  let descripcion: string | null = null;
+async function fetchDescripcionProblema(nregistro: string): Promise<string | null> {
   try {
     const psRes = await fetch(
       `${CIMA_REST}/problemaSuministro?nregistro=${encodeURIComponent(nregistro)}`,
       { headers: CIMA_HEADERS, signal: AbortSignal.timeout(6_000) }
     );
-    if (psRes.ok && psRes.status !== 204) {
-      const text = await psRes.text();
-      if (text.trim()) {
-        const ps = JSON.parse(text);
-        const item = Array.isArray(ps) ? ps[0] : ps;
-        if (item) {
-          descripcion = item.descripcion ?? item.motivo ?? item.detalle ?? null;
-        }
-      }
-    }
-  } catch { /* sin descripcion */ }
+    if (!psRes.ok || psRes.status === 204) return null;
+    const text = await psRes.text();
+    if (!text.trim()) return null;
+    const ps = JSON.parse(text);
+    const item = Array.isArray(ps) ? ps[0] : ps;
+    if (!item) return null;
+    return item.descripcion ?? item.motivo ?? item.detalle ?? item.texto ?? item.informacion ?? null;
+  } catch {
+    return null;
+  }
+}
 
-  return {
-    nregistro,
-    cn: datos.cn,
-    nombre: datos.nombre,
-    descripcion,
-  };
+/** Problema de suministro activo en CIMA (psum=true) para un CN. */
+export async function checkCNenCIMA(rawCn: string): Promise<CimaProblemaSupministro | null> {
+  const trimmed = String(rawCn ?? '').trim();
+  if (!trimmed) return null;
+
+  const candidatos = new Set<string>();
+  const normalizado = normalizarCnParaCima(trimmed);
+  if (normalizado) candidatos.add(normalizado);
+  candidatos.add(trimmed.replace(/\D/g, '') || trimmed);
+
+  try {
+    for (const cn of candidatos) {
+      if (!cn) continue;
+      const data = await fetchCimaMedicamentoPorCn(cn);
+      if (!data?.psum || !data.nregistro) continue;
+
+      const nregistro = String(data.nregistro).trim();
+      const descripcion = await fetchDescripcionProblema(nregistro);
+
+      return {
+        nregistro,
+        cn: trimmed,
+        nombre: String(data.nombre ?? '').trim(),
+        descripcion,
+        cimaUrl: cimaUrl(nregistro),
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export async function checkCNsConProblemas(cns: string[]): Promise<CimaProblemaSupministro[]> {
+  const unique = [...new Set(cns.map((c) => c.trim()).filter(Boolean))];
+  const all: CimaProblemaSupministro[] = [];
+
+  for (const cn of unique) {
+    const result = await checkCNenCIMA(cn);
+    if (result && !all.some((a) => a.nregistro === result.nregistro)) {
+      all.push(result);
+    }
+    await new Promise((r) => setTimeout(r, 150));
+  }
+
+  return all;
+}
+
+export async function checkDesabastecimiento(rawCn: string): Promise<CimaProblemaSupministro | null> {
+  return checkCNenCIMA(rawCn);
 }
