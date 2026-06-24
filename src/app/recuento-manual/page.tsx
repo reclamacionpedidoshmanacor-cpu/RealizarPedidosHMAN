@@ -927,10 +927,13 @@ export default function RecuentoManualPage() {
     deepLinkHandledRef.current = true;
 
     const areaParam = params.get('area');
-    const targetArea: AreaId =
-      areaParam && AREA_IDS.includes(areaParam as AreaId)
-        ? (areaParam as AreaId)
-        : 'upe';
+    if (!areaParam || !AREA_IDS.includes(areaParam as AreaId)) {
+      toast.error('Enlace de reposición no válido: falta un área activa.');
+      setStep('area');
+      return;
+    }
+
+    const targetArea = areaParam as AreaId;
 
     const run = async () => {
       await seleccionarArea(targetArea);

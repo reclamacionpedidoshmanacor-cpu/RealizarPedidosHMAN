@@ -1,12 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { isValidArea } from '@/lib/areas';
 import { finalizarPedido, getPedidoConLineas, ensureTablesReposicion } from '@/lib/reposicion-neon';
 
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     await ensureTablesReposicion();
+    const area = req.cookies.get('area_session')?.value;
+    if (!isValidArea(area)) {
+      return NextResponse.json({ error: 'Area no seleccionada o no valida.' }, { status: 400 });
+    }
     const { id } = await params;
     const pedidoId = Number(id);
     if (!Number.isFinite(pedidoId)) {
@@ -16,6 +21,9 @@ export async function POST(
     const result = await getPedidoConLineas(pedidoId);
     if (!result) {
       return NextResponse.json({ error: 'Pedido no encontrado.' }, { status: 404 });
+    }
+    if (result.cabecera.area !== area) {
+      return NextResponse.json({ error: 'No autorizado para este pedido.' }, { status: 403 });
     }
     if (result.cabecera.estado !== 'borrador') {
       return NextResponse.json({ error: 'El pedido ya está finalizado.' }, { status: 400 });

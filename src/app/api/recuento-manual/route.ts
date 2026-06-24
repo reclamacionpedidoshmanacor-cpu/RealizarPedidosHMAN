@@ -64,10 +64,10 @@ function buildUbicacionesMap(
   return map;
 }
 
-function getAreaFromCookie(req: NextRequest): AreaId {
+function getAreaFromCookie(req: NextRequest): AreaId | null {
   const areaCookie = req.cookies.get('area_session')?.value;
   if (isValidArea(areaCookie)) return areaCookie;
-  return 'oncologia';
+  return null;
 }
 
 function withAreaCookie(res: NextResponse, area: AreaId): NextResponse {
@@ -87,6 +87,9 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Area no valida.' }, { status: 400 });
     }
     const area = isValidArea(areaQuery) ? areaQuery : getAreaFromCookie(req);
+    if (!area) {
+      return NextResponse.json({ error: 'Area no seleccionada o no valida.' }, { status: 400 });
+    }
 
     const catalogo = await listMedicamentosByArea(area);
     const ubicacionesDesdeCatalogo = catalogo
@@ -282,6 +285,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Area no valida.' }, { status: 400 });
     }
     const area = isValidArea(areaRaw) ? areaRaw : getAreaFromCookie(req);
+    if (!area) {
+      return NextResponse.json({ error: 'Area no seleccionada o no valida.' }, { status: 400 });
+    }
 
     if (action === 'editar-catalogo') {
       if (!isAlmacenArea(area)) {

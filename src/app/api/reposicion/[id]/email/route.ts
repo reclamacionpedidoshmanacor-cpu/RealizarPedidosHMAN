@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
+import { getPedidoConLineas, ensureTablesReposicion } from '@/lib/reposicion-neon';
 import { sendReposicionEmail } from '@/lib/reposicion-email';
 
 export const runtime = 'nodejs';
@@ -12,10 +13,19 @@ export async function POST(
   if (!session.ok) return session.response;
 
   try {
+    await ensureTablesReposicion();
     const { id } = await params;
     const pedidoId = Number(id);
     if (!Number.isFinite(pedidoId)) {
       return NextResponse.json({ error: 'ID inválido.' }, { status: 400 });
+    }
+
+    const pedido = await getPedidoConLineas(pedidoId);
+    if (!pedido) {
+      return NextResponse.json({ error: 'Pedido no encontrado.' }, { status: 404 });
+    }
+    if (pedido.cabecera.area !== session.area) {
+      return NextResponse.json({ error: 'No autorizado para este pedido.' }, { status: 403 });
     }
 
     const result = await sendReposicionEmail(pedidoId);

@@ -47,7 +47,10 @@ export async function POST(req: NextRequest) {
   const cn = String(body.cn ?? '').trim();
   if (!cn) return NextResponse.json({ error: 'CN requerido.' }, { status: 400 });
 
-  const area = body.area ?? session.area;
+  const area = String(body.area ?? '').trim();
+  if (!area) {
+    return NextResponse.json({ error: 'Area requerida.' }, { status: 400 });
+  }
   if (!isValidArea(area)) {
     return NextResponse.json({ error: 'Area no valida.' }, { status: 400 });
   }

@@ -12,7 +12,7 @@ export const medicamentos = sqliteTable('medicamentos', {
   principioActivo:  text('principio_activo'),                        // PPIO ACTIVO
   presentacion:     text('presentacion'),                            // de CIMA (opcional)
   via:              text('via'),                                     // 'IV' | 'ORAL' | 'OTRO'
-  area:             text('area').notNull().default('oncologia'),     // 'oncologia'|'upe'|'iv'|'nutricion'|'almacen'
+  area:             text('area').notNull(),                          // 'oncologia'|'upe'|'iv'|'nutricion'|'almacen'
   ubicacion:        text('ubicacion'),                               // CIT, Armario NEA, Nevera NEA...
   unidadesPorCaja:  integer('unidades_por_caja').notNull(),          // MultiploPedido
   activo:           integer('activo', { mode: 'boolean' }).notNull().default(true),
@@ -54,7 +54,7 @@ export const preciosHistorial = sqliteTable('precios_historial', {
 // ---------------------------------------------------------------------------
 export const importacionesStock = sqliteTable('importaciones_stock', {
   id:             integer('id').primaryKey({ autoIncrement: true }),
-  area:           text('area').notNull().default('oncologia'),
+  area:           text('area').notNull(),
   origen:         text('origen').notNull(),                          // 'SAP' | 'Manual'
   estado:         text('estado').notNull().default('pendiente'),     // 'pendiente' | 'validado' | 'generado'
   fechaRecuento:  text('fecha_recuento').notNull(),                  // fecha declarada del stock
@@ -86,7 +86,7 @@ export const stockRegistros = sqliteTable('stock_registros', {
 // ---------------------------------------------------------------------------
 export const propuestas = sqliteTable('propuestas', {
   id:                integer('id').primaryKey({ autoIncrement: true }),
-  area:              text('area').notNull().default('oncologia'),
+  area:              text('area').notNull(),
   fechaGeneracion:   text('fecha_generacion').notNull().default(sql`(datetime('now'))`),
   estado:            text('estado').notNull().default('borrador'),   // 'borrador' | 'tramitada'
   validadaEn:        text('validada_en'),

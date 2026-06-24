@@ -107,8 +107,15 @@ export default function CatalogoPage() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const getArea = () => {
-    if (typeof document === 'undefined') return 'oncologia';
-    return document.cookie.split(';').find(c => c.trim().startsWith('area_session='))?.split('=')[1] ?? 'oncologia';
+    if (typeof document === 'undefined') return '';
+    return document.cookie.split(';').find(c => c.trim().startsWith('area_session='))?.split('=')[1] ?? '';
+  };
+
+  const requireArea = (silent = false) => {
+    const area = getArea();
+    if (area) return area;
+    if (!silent) toast.error('No hay un área activa. Vuelve a entrar en la app.');
+    return null;
   };
 
   const esAlmacen = getArea() === 'almacen';
@@ -134,8 +141,18 @@ export default function CatalogoPage() {
   const fetchMeds = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/medicamentos?area=${getArea()}`);
-      setMeds(await res.json());
+      const area = requireArea(true);
+      if (!area) {
+        setMeds([]);
+        toast.error('No hay un área activa. Vuelve a entrar en la app.');
+        return;
+      }
+      const res = await fetch(`/api/medicamentos?area=${area}`);
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo cargar el catálogo.');
+      setMeds(Array.isArray(payload) ? payload : []);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
       setLoading(false);
     }
@@ -263,12 +280,17 @@ export default function CatalogoPage() {
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || importingRef.current) return;
+    const area = requireArea();
+    if (!area) {
+      if (fileRef.current) fileRef.current.value = '';
+      return;
+    }
     importingRef.current = true;
     setImporting(true);
     try {
       const fd = new FormData();
       fd.append('file', file);
-      fd.append('area', getArea());
+      fd.append('area', area);
       const res = await fetch('/api/catalogo/importar', { method: 'POST', body: fd });
       const data = await res.json();
       if (!res.ok) {
@@ -299,8 +321,10 @@ export default function CatalogoPage() {
   };
 
   const moverConflictoAAreaActual = async (item: { cn: string; nombre: string; areaExistente: string }) => {
+    const area = requireArea();
+    if (!area) return;
     const ok = confirm(
-      `El CN ${item.cn} está en el área "${item.areaExistente}".\n\n¿Quieres moverlo al área activa (${getArea()})?`
+      `El CN ${item.cn} está en el área "${item.areaExistente}".\n\n¿Quieres moverlo al área activa (${area})?`
     );
     if (!ok) return;
 
@@ -316,7 +340,7 @@ export default function CatalogoPage() {
 
       setOmitidos((prev) => prev.filter((o) => o.cn !== item.cn));
       toast.success(
-        `CN ${item.cn} movido de ${item.areaExistente} a ${getArea()}. Vuelve a importar el Excel para actualizar sus datos en esta área.`
+        `CN ${item.cn} movido de ${item.areaExistente} a ${area}. Vuelve a importar el Excel para actualizar sus datos en esta área.`
       );
       await fetchMeds();
     } catch (err) {
@@ -517,6 +541,8 @@ export default function CatalogoPage() {
       toast.error('CN y Nombre son obligatorios.');
       return;
     }
+    const area = requireArea();
+    if (!area) return;
     setSavingNuevo(true);
     try {
       const res = await fetch('/api/medicamentos', {
@@ -524,7 +550,7 @@ export default function CatalogoPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...nuevoData,
-          area: getArea(),
+          area,
           ...buildStockPayload(nuevoData),
         }),
       });

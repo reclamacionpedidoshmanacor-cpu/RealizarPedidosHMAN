@@ -1,5 +1,6 @@
 import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
+import { isValidArea, type AreaId } from '@/lib/areas';
 import {
   ensureTablesReposicion,
   getHistorialReposicion,
@@ -12,19 +13,43 @@ import { listMedicamentosByArea } from '@/lib/catalogo-neon';
 
 const AREA_UPE = 'upe';
 
-async function getArea(): Promise<string> {
+async function getAreaFromCookie(): Promise<AreaId | null> {
   const jar = await cookies();
-  return jar.get('area_session')?.value ?? AREA_UPE;
+  const area = jar.get('area_session')?.value;
+  return isValidArea(area) ? area : null;
+}
+
+async function requireReposicionArea(): Promise<
+  | { ok: true; area: typeof AREA_UPE }
+  | { ok: false; response: NextResponse }
+> {
+  const area = await getAreaFromCookie();
+  if (!area) {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: 'Area no seleccionada o no valida.' }, { status: 400 }),
+    };
+  }
+  if (area !== AREA_UPE) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: 'Pedidos de reposición solo disponibles para Pac. Externos.' },
+        { status: 403 }
+      ),
+    };
+  }
+  return { ok: true, area };
 }
 
 /* ── GET /api/reposicion ── lista historial + borrador activo */
 export async function GET() {
   try {
     await ensureTablesReposicion();
-    const area = await getArea();
-    if (area !== AREA_UPE) {
-      return NextResponse.json({ error: 'Pedidos de reposición solo disponibles para Pac. Externos.' }, { status: 403 });
-    }
+    const access = await requireReposicionArea();
+    if (!access.ok) return access.response;
+
+    const area = access.area;
     const [historial, borrador] = await Promise.all([
       getHistorialReposicion(area),
       getPedidoBorrador(area),
@@ -40,10 +65,10 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     await ensureTablesReposicion();
-    const area = await getArea();
-    if (area !== AREA_UPE) {
-      return NextResponse.json({ error: 'Pedidos de reposición solo disponibles para Pac. Externos.' }, { status: 403 });
-    }
+    const access = await requireReposicionArea();
+    if (!access.ok) return access.response;
+
+    const area = access.area;
 
     const body = await req.json() as {
       ubicacion: string;
