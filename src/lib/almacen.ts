@@ -16,6 +16,13 @@ export type AlmacenUbicacion = (typeof ALMACEN_UBICACIONES)[number];
 
 export const ORIGEN_PEDIDO_ALMACEN = 'Pedido-Almacen';
 
+/** Ubicación del almacén que se recorre por letras del abecedario. */
+export const ALMACEN_UBICACION_CON_LETRAS = 'ALMACEN FAR';
+
+export function ubicacionAlmacenUsaLetras(ubicacion: string | null | undefined): boolean {
+  return normalizeAlmacenText(ubicacion) === normalizeAlmacenText(ALMACEN_UBICACION_CON_LETRAS);
+}
+
 export function isAlmacenArea(area: string | null | undefined): boolean {
   return area === ALMACEN_AREA;
 }

@@ -6,6 +6,7 @@ import {
   letrasDisponibles,
   mergeUbicacionesAlmacen,
   normalizeAlmacenText,
+  ubicacionAlmacenUsaLetras,
 } from '@/lib/almacen';
 import { listMedicamentosByArea, getMedicamentoByCn, updateMedicamento } from '@/lib/catalogo-neon';
 import { loadPedidosResumenAlmacenPorCns, cnClavePedidos } from '@/lib/pedidos-pendientes';
@@ -130,8 +131,11 @@ export async function GET(req: NextRequest) {
           return a.nombre.localeCompare(b.nombre, 'es', { sensitivity: 'base' });
         });
 
-      const letras = letrasDisponibles(medsUbicacion);
-      const filtrados = filtrarPorLetra(medsUbicacion, letraParam);
+      const usaLetras = ubicacionAlmacenUsaLetras(ubicacionSeleccionada);
+      const letras = usaLetras ? letrasDisponibles(medsUbicacion) : [];
+      const filtrados = usaLetras
+        ? filtrarPorLetra(medsUbicacion, letraParam)
+        : medsUbicacion;
 
       let pedidosPorCn: Awaited<ReturnType<typeof loadPedidosResumenAlmacenPorCns>> = {};
       let alertasPorCn: Awaited<ReturnType<typeof loadAlertasSuministroPorCnsSafe>> = {};
@@ -188,8 +192,9 @@ export async function GET(req: NextRequest) {
         pedidoPendiente,
         ubicaciones,
         ubicacionSeleccionada,
-        letraSeleccionada: letraParam?.trim().toLocaleUpperCase('es') || null,
+        letraSeleccionada: usaLetras ? letraParam?.trim().toLocaleUpperCase('es') || null : null,
         letrasDisponibles: letras,
+        usaLetrasUbicacion: usaLetras,
         medicamentos,
         totalUbicacion: medsUbicacion.length,
       });

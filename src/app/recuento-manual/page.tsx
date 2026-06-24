@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { AREA_IDS, type AreaId } from '@/lib/areas';
-import { normalizeAlmacenText } from '@/lib/almacen';
+import { normalizeAlmacenText, ubicacionAlmacenUsaLetras } from '@/lib/almacen';
 import { cn } from '@/lib/utils';
 import type { AlertaSuministroCn } from '@/lib/pedidos-pendientes';
 import { BadgeSuministro } from '@/components/BadgeSuministro';
@@ -46,6 +46,7 @@ type ApiResponse = {
   ubicacionSeleccionada: string | null;
   letraSeleccionada?: string | null;
   letrasDisponibles?: string[];
+  usaLetrasUbicacion?: boolean;
   totalUbicacion?: number;
   medicamentos: MedicamentoManual[];
   faltantesActivosArea?: number;
@@ -253,6 +254,7 @@ export default function RecuentoManualPage() {
 
   const tableRef = useRef<HTMLDivElement>(null);
   const areaConfig = AREAS.find((a) => a.id === area) ?? AREAS[0];
+  const almacenConLetras = ubicacion ? ubicacionAlmacenUsaLetras(ubicacion) : false;
 
   /* ════════ RECUENTO MANUAL ════════ */
 
@@ -381,10 +383,16 @@ export default function RecuentoManualPage() {
     setEdicionCn(null);
     if (area === 'almacen') {
       setLetra(null);
-      const res = await fetch(`/api/recuento-manual?ubicacion=${encodeURIComponent(ub)}`, { cache: 'no-store' });
-      const payload = (await res.json()) as ApiResponse;
-      setData(payload);
-      setStep('letra-almacen');
+      if (ubicacionAlmacenUsaLetras(ub)) {
+        const res = await fetch(`/api/recuento-manual?ubicacion=${encodeURIComponent(ub)}`, { cache: 'no-store' });
+        const payload = (await res.json()) as ApiResponse;
+        setData(payload);
+        setStep('letra-almacen');
+      } else {
+        await cargarUbicacion(ub);
+        setStep('pedido-almacen');
+        setTimeout(() => tableRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+      }
       return;
     }
     await cargarUbicacion(ub);
@@ -553,14 +561,14 @@ export default function RecuentoManualPage() {
   };
 
   const handleGuardarEdicionPasillo = async (cn: string, payload: EditarPasilloPayload) => {
-    if (!ubicacion || !letra) return;
+    if (!ubicacion) return;
     const medActual = medicamentosAlmacenVisibles.find((m) => m.cn === cn);
     const cambiaUbicacion =
       normalizeAlmacenText(payload.ubicacion) !== normalizeAlmacenText(ubicacion);
     const ppioNuevo = payload.principioActivo.trim();
     const ppioViejo = (medActual?.principioActivo ?? medActual?.nombre ?? '').trim();
-    const cambiaLetra =
-      ppioNuevo.toLocaleUpperCase('es').charAt(0) !== ppioViejo.toLocaleUpperCase('es').charAt(0);
+    const cambiaLetra = almacenConLetras
+      && ppioNuevo.toLocaleUpperCase('es').charAt(0) !== ppioViejo.toLocaleUpperCase('es').charAt(0);
 
     if (cambiaUbicacion || cambiaLetra) {
       const aviso = cambiaUbicacion && cambiaLetra
@@ -629,7 +637,7 @@ export default function RecuentoManualPage() {
   };
 
   const handleMarcarInactivo = async (cn: string) => {
-    if (!ubicacion || !letra) return;
+    if (!ubicacion) return;
     const med = medicamentosAlmacenVisibles.find((m) => m.cn === cn);
     const qty = almacenDraft[cn]?.cajasPedidas ?? 0;
     const etiqueta = med?.nombre ?? cn;
@@ -706,7 +714,7 @@ export default function RecuentoManualPage() {
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo guardar el pedido.');
       toast.success(`✅ Pedido guardado (${payload.upserted} línea(s))`);
-      if (letra) await refrescarPedidoAlmacen(ubicacion, letra, { resetBaseline: true });
+      await refrescarPedidoAlmacen(ubicacion, almacenConLetras ? letra : null, { resetBaseline: true });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
@@ -1115,13 +1123,18 @@ export default function RecuentoManualPage() {
     return (
       <div className="min-h-screen bg-amber-50 flex flex-col pb-40" ref={tableRef}>
         <div className="sticky top-0 z-20 bg-white border-b-2 border-amber-200 shadow-sm px-4 py-3 flex items-center gap-3 flex-wrap">
-          <button onClick={() => setStep('letra-almacen')}
-            className="rounded-xl border-2 border-slate-300 bg-white px-4 py-2 text-lg font-bold text-slate-600 hover:bg-slate-50 active:scale-95">
-            ← Letra
+          <button
+            onClick={() => setStep(almacenConLetras ? 'letra-almacen' : 'ubicacion')}
+            className="rounded-xl border-2 border-slate-300 bg-white px-4 py-2 text-lg font-bold text-slate-600 hover:bg-slate-50 active:scale-95"
+          >
+            {almacenConLetras ? '← Letra' : '← Ubicaciones'}
           </button>
           <div className="flex-1 min-w-0">
             <p className="text-lg font-extrabold text-amber-800 truncate">📦 Pedido Almacén</p>
-            <p className="text-base text-slate-500 truncate">📍 {ubicacion} · Letra {letra}</p>
+            <p className="text-base text-slate-500 truncate">
+              📍 {ubicacion}
+              {almacenConLetras && letra ? ` · Letra ${letra}` : ''}
+            </p>
           </div>
           {data?.pedidoPendiente && (
             <span className="rounded-full bg-amber-100 px-3 py-1 text-sm font-semibold text-amber-800">
@@ -1137,7 +1150,11 @@ export default function RecuentoManualPage() {
           {loading ? (
             <p className="text-2xl text-slate-500 animate-pulse text-center py-20">Cargando…</p>
           ) : gruposAlmacen.length === 0 ? (
-            <p className="text-2xl font-bold text-amber-700 text-center py-10">No hay medicamentos para esta letra.</p>
+            <p className="text-2xl font-bold text-amber-700 text-center py-10">
+              {almacenConLetras
+                ? 'No hay medicamentos para esta letra.'
+                : 'No hay medicamentos activos en esta ubicación.'}
+            </p>
           ) : (
             gruposAlmacen.map((grupo) => (
               <section
