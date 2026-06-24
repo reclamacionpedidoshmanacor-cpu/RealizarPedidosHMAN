@@ -462,3 +462,189 @@ export async function loadPedidosResumenAlmacenPorCns(
 
   return result;
 }
+
+// ---------------------------------------------------------------------------
+// Alertas de suministro por CN (CIMA, en falta, respuesta proveedor)
+// ---------------------------------------------------------------------------
+
+export type TipoAlertaSuministro =
+  | 'cima'
+  | 'en_falta'
+  | 'sin_existencias'
+  | 'problema_suministro'
+  | 'situacion_especial';
+
+export type AlertaSuministroCn = {
+  tipo: TipoAlertaSuministro;
+  etiqueta: string;
+  detalle: string | null;
+  fecha: string;
+};
+
+const ESTADOS_PROVEEDOR_ALERTA: Record<
+  string,
+  { tipo: TipoAlertaSuministro; etiqueta: string }
+> = {
+  sin_existencias: { tipo: 'sin_existencias', etiqueta: 'Sin existencias' },
+  suministro: { tipo: 'problema_suministro', etiqueta: 'Problema de suministro' },
+  aemps: { tipo: 'situacion_especial', etiqueta: 'Situación especial AEMPS' },
+};
+
+type CandidatoAlerta = AlertaSuministroCn & { ms: number };
+
+function parseTs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+function elegirAlertaMasReciente(candidatos: CandidatoAlerta[]): AlertaSuministroCn | null {
+  if (candidatos.length === 0) return null;
+  const mejor = candidatos.reduce((a, b) => (b.ms > a.ms ? b : a));
+  return {
+    tipo: mejor.tipo,
+    etiqueta: mejor.etiqueta,
+    detalle: mejor.detalle,
+    fecha: mejor.fecha,
+  };
+}
+
+export function alertaSuministroParaCn(
+  map: Record<string, AlertaSuministroCn | null>,
+  cn: string,
+): AlertaSuministroCn | null {
+  const key = cnClavePedidos(cn);
+  if (!key) return null;
+  return map[key] ?? null;
+}
+
+/** Alerta vigente más reciente por CN: CIMA, en falta o respuesta proveedor problemática. */
+export async function loadAlertasSuministroPorCns(
+  cns: string[],
+): Promise<Record<string, AlertaSuministroCn | null>> {
+  const normalizedCns = [...new Set(cns.map((cn) => toCn6(cn)).filter((cn): cn is string => !!cn))];
+  const out: Record<string, AlertaSuministroCn | null> = {};
+  for (const cn6 of normalizedCns) out[cn6] = null;
+  if (normalizedCns.length === 0) return out;
+
+  const sql = getPedidosReadonlyClient();
+  const candidatosPorCn = new Map<string, CandidatoAlerta[]>();
+
+  const push = (cn6: string | null, candidato: CandidatoAlerta) => {
+    if (!cn6 || !(cn6 in out)) return;
+    const list = candidatosPorCn.get(cn6) ?? [];
+    list.push(candidato);
+    candidatosPorCn.set(cn6, list);
+  };
+
+  const cimaRows = (await sql`
+    SELECT cn, nombre, descripcion, updated_at::text AS updated_at
+    FROM public.suministro_alertas
+    WHERE resuelto = false
+      AND estado = 'Activo'
+      AND cn = ANY(${normalizedCns});
+  `) as Array<{
+    cn: string;
+    nombre: string | null;
+    descripcion: string | null;
+    updated_at: string;
+  }>;
+
+  for (const row of cimaRows) {
+    const cn6 = toCn6(row.cn);
+    const ms = parseTs(row.updated_at);
+    if (!cn6 || ms == null) continue;
+    push(cn6, {
+      tipo: 'cima',
+      etiqueta: 'CIMA — problema suministro',
+      detalle: row.descripcion?.trim() || row.nombre?.trim() || null,
+      fecha: row.updated_at,
+      ms,
+    });
+  }
+
+  const faltaRows = (await sql`
+    SELECT
+      lpad(right(regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') AS cn6,
+      o.updated_at::text AS updated_at
+    FROM public.orders o
+    WHERE o.en_falta = true
+      AND o.recibido = false
+      AND o.anulado = false
+      AND o.n_mate_prov IS NOT NULL
+      AND regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g') <> ''
+      AND lpad(right(regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') = ANY(${normalizedCns});
+  `) as Array<{ cn6: string; updated_at: string }>;
+
+  for (const row of faltaRows) {
+    const cn6 = toCn6(row.cn6);
+    const ms = parseTs(row.updated_at);
+    if (!cn6 || ms == null) continue;
+    push(cn6, {
+      tipo: 'en_falta',
+      etiqueta: 'En falta',
+      detalle: null,
+      fecha: row.updated_at,
+      ms,
+    });
+  }
+
+  const proveedorRows = (await sql`
+    SELECT
+      lpad(right(regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') AS cn6,
+      rl.estado_actual::text AS estado,
+      rl.texto_libre,
+      rl.updated_at::text AS updated_at
+    FROM public.orders o
+    INNER JOIN public.respuestas_proveedor rp ON rp.documento_compras = o.documento_compras
+    INNER JOIN public.respuestas_lineas rl
+      ON rl.respuesta_id = rp.id AND rl.posicion = o.posicion
+    WHERE o.recibido = false
+      AND o.anulado = false
+      AND rl.estado_actual IN ('sin_existencias', 'suministro', 'aemps')
+      AND o.n_mate_prov IS NOT NULL
+      AND regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g') <> ''
+      AND lpad(right(regexp_replace(o.n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') = ANY(${normalizedCns});
+  `) as Array<{
+    cn6: string;
+    estado: string;
+    texto_libre: string | null;
+    updated_at: string;
+  }>;
+
+  for (const row of proveedorRows) {
+    const cn6 = toCn6(row.cn6);
+    const ms = parseTs(row.updated_at);
+    const meta = ESTADOS_PROVEEDOR_ALERTA[row.estado];
+    if (!cn6 || ms == null || !meta) continue;
+    const detalle = row.texto_libre?.trim() || null;
+    push(cn6, {
+      tipo: meta.tipo,
+      etiqueta: meta.etiqueta,
+      detalle,
+      fecha: row.updated_at,
+      ms,
+    });
+  }
+
+  for (const cn6 of normalizedCns) {
+    out[cn6] = elegirAlertaMasReciente(candidatosPorCn.get(cn6) ?? []);
+  }
+
+  return out;
+}
+
+export async function loadAlertasSuministroPorCnsSafe(
+  cns: string[],
+): Promise<Record<string, AlertaSuministroCn | null>> {
+  try {
+    return await loadAlertasSuministroPorCns(cns);
+  } catch {
+    const fallback: Record<string, AlertaSuministroCn | null> = {};
+    for (const cn of cns) {
+      const key = cnClavePedidos(cn);
+      if (key) fallback[key] = null;
+    }
+    return fallback;
+  }
+}

@@ -5,6 +5,8 @@ import { toast } from 'sonner';
 import { cn, formatCajas, formatEuro, formatMseLabel, isMSE, parseCajasInput, roundCajas } from '@/lib/utils';
 import { toSapCode } from '@/lib/propuesta';
 import { mergeUbicacionesAlmacen } from '@/lib/almacen';
+import type { AlertaSuministroCn } from '@/lib/pedidos-pendientes';
+import { BadgeSuministro } from '@/components/BadgeSuministro';
 
 interface Medicamento {
   cn: string; nombre: string; principioActivo: string | null;
@@ -15,6 +17,7 @@ interface Medicamento {
   precioUnidad: number | null; precioCaja: number | null;
   stockMinimo: number | null; puntoPedido: number | null; stockMaximo: number | null;
   ppioActivoCima: string | null; cimaConsultado: boolean;
+  alertaSuministro?: AlertaSuministroCn | null;
 }
 
 type SortKey = 'principioActivo' | 'nombre' | 'cn' | 'ubicacion' | 'puntoPedido';
@@ -945,6 +948,7 @@ export default function CatalogoPage() {
                             {formatMseLabel(med.tipoMse)}
                           </span>
                         )}
+                        <BadgeSuministro alerta={med.alertaSuministro} />
                       </span>
                     </td>
                     <td className="px-4 py-3 font-medium text-slate-800 max-w-[200px] truncate" title={med.principioActivo ?? ''}>

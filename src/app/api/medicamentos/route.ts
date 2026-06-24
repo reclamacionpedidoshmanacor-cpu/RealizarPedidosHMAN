@@ -9,6 +9,10 @@ import {
   upsertStockObjetivo,
 } from '@/lib/catalogo-neon';
 import { isAlmacenArea } from '@/lib/almacen';
+import {
+  alertaSuministroParaCn,
+  loadAlertasSuministroPorCnsSafe,
+} from '@/lib/pedidos-pendientes';
 
 export const runtime = 'nodejs';
 
@@ -27,7 +31,12 @@ export async function GET(req: NextRequest) {
   }
 
   const rows = await listMedicamentosByArea(area);
-  return NextResponse.json(rows);
+  const alertas = await loadAlertasSuministroPorCnsSafe(rows.map((r) => r.cn));
+  const enriched = rows.map((row) => ({
+    ...row,
+    alertaSuministro: alertaSuministroParaCn(alertas, row.cn),
+  }));
+  return NextResponse.json(enriched);
 }
 
 export async function POST(req: NextRequest) {

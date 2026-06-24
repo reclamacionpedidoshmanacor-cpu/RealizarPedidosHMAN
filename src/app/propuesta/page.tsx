@@ -3,6 +3,8 @@
 import { Fragment, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { MOTIVOS_AJUSTE, cajasAUnidades } from '@/lib/propuesta';
+import type { AlertaSuministroCn } from '@/lib/pedidos-pendientes';
+import { BadgeSuministro } from '@/components/BadgeSuministro';
 
 // ---------------------------------------------------------------------------
 // Tipos
@@ -40,6 +42,7 @@ type Linea = {
   ajustado: boolean;
   activo?: boolean;
   editable?: boolean;
+  alertaSuministro?: AlertaSuministroCn | null;
 };
 
 type ApiResponse = {
@@ -480,6 +483,7 @@ export default function PropuestaPage() {
                                     Inactivo
                                   </span>
                                 )}
+                                <BadgeSuministro alerta={linea.alertaSuministro} />
                               </div>
                               <p className={`leading-snug not-italic ${inactiva ? 'font-medium text-slate-500' : 'font-semibold text-slate-800'}`}>
                                 {linea.principioActivo ?? linea.nombreMedicamento ?? '—'}

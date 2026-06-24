@@ -15,7 +15,7 @@ import {
   insertarLineasPropuesta,
   reemplazarLineasPropuestaDesdeRecuento,
 } from '@/lib/stock-propuesta-neon';
-import { loadCantidadTransitoByCn } from '@/lib/pedidos-pendientes';
+import { loadCantidadTransitoByCn, loadAlertasSuministroPorCnsSafe, alertaSuministroParaCn } from '@/lib/pedidos-pendientes';
 import { calcularCajasPropuestas } from '@/lib/propuesta';
 
 export const runtime = 'nodejs';
@@ -54,6 +54,15 @@ async function loadStockTransitoCajasSafely(
   }
 }
 
+async function attachAlertasLineas<T extends { cn: string }>(lineas: T[]) {
+  if (lineas.length === 0) return lineas;
+  const alertas = await loadAlertasSuministroPorCnsSafe(lineas.map((l) => l.cn));
+  return lineas.map((linea) => ({
+    ...linea,
+    alertaSuministro: alertaSuministroParaCn(alertas, linea.cn),
+  }));
+}
+
 export async function GET(req: NextRequest) {
   const session = requireApiSession(req);
   if (!session.ok) return session.response;
@@ -73,18 +82,20 @@ export async function GET(req: NextRequest) {
         propuesta = await crearPropuesta(session.area, pedido.id);
       }
 
-      const lineasParaUi = (
-        await buildLineasPropuestaParaUi(
-          propuesta.id,
-          pedido.id,
-          session.area,
-          propuesta.estado,
-          {}
+      const lineasParaUi = await attachAlertasLineas(
+        (
+          await buildLineasPropuestaParaUi(
+            propuesta.id,
+            pedido.id,
+            session.area,
+            propuesta.estado,
+            {}
+          )
+        ).filter(
+          (linea) =>
+            linea.activo === false ||
+            (linea.cajasValidadas ?? linea.cajasPropuestas) > 0
         )
-      ).filter(
-        (linea) =>
-          linea.activo === false ||
-          (linea.cajasValidadas ?? linea.cajasPropuestas) > 0
       );
 
       return NextResponse.json({
@@ -210,12 +221,14 @@ export async function GET(req: NextRequest) {
     // Persistimos snapshot de stock en tránsito para auditoría/historial.
     await actualizarStockTransitoSnapshot(propuesta.id, stockTransitoByCn);
 
-    const lineasParaUi = await buildLineasPropuestaParaUi(
-      propuesta.id,
-      recuento.id,
-      session.area,
-      propuesta.estado,
-      stockTransitoByCn
+    const lineasParaUi = await attachAlertasLineas(
+      await buildLineasPropuestaParaUi(
+        propuesta.id,
+        recuento.id,
+        session.area,
+        propuesta.estado,
+        stockTransitoByCn
+      )
     );
 
     return NextResponse.json({ recuento, propuesta, lineas: lineasParaUi });

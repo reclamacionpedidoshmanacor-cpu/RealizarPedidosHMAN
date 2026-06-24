@@ -8,7 +8,7 @@ import {
   normalizeAlmacenText,
 } from '@/lib/almacen';
 import { listMedicamentosByArea, getMedicamentoByCn, updateMedicamento } from '@/lib/catalogo-neon';
-import { loadPedidosResumenAlmacenPorCns, cnClavePedidos } from '@/lib/pedidos-pendientes';
+import { loadPedidosResumenAlmacenPorCns, cnClavePedidos, loadAlertasSuministroPorCnsSafe, alertaSuministroParaCn } from '@/lib/pedidos-pendientes';
 import { isMSE } from '@/lib/utils';
 import {
   crearRecuento,
@@ -133,10 +133,16 @@ export async function GET(req: NextRequest) {
       const filtrados = filtrarPorLetra(medsUbicacion, letraParam);
 
       let pedidosPorCn: Awaited<ReturnType<typeof loadPedidosResumenAlmacenPorCns>> = {};
+      let alertasPorCn: Awaited<ReturnType<typeof loadAlertasSuministroPorCnsSafe>> = {};
       try {
         pedidosPorCn = await loadPedidosResumenAlmacenPorCns(filtrados.map((med) => med.cn));
       } catch {
         pedidosPorCn = {};
+      }
+      try {
+        alertasPorCn = await loadAlertasSuministroPorCnsSafe(filtrados.map((med) => med.cn));
+      } catch {
+        alertasPorCn = {};
       }
 
       const medicamentos = filtrados.map((med) => {
@@ -171,6 +177,7 @@ export async function GET(req: NextRequest) {
           unidadesPendientes: pedidos.unidadesPendientes,
           ultimoRecibidoFecha: pedidos.ultimoRecibidoFecha,
           ultimoRecibidoUnidades: pedidos.ultimoRecibidoUnidades,
+          alertaSuministro: alertaSuministroParaCn(alertasPorCn, med.cn),
         };
       });
 

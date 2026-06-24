@@ -6,6 +6,8 @@ import { toast } from 'sonner';
 import { AREA_IDS, type AreaId } from '@/lib/areas';
 import { normalizeAlmacenText } from '@/lib/almacen';
 import { cn } from '@/lib/utils';
+import type { AlertaSuministroCn } from '@/lib/pedidos-pendientes';
+import { BadgeSuministro } from '@/components/BadgeSuministro';
 
 /* ─── tipos recuento manual ─── */
 type RecuentoPendiente = { id: number; origen: string; fechaRecuento: string; totalLineas: number } | null;
@@ -32,6 +34,7 @@ type MedicamentoManual = {
   unidadesPendientes?: number;
   ultimoRecibidoFecha?: string | null;
   ultimoRecibidoUnidades?: number;
+  alertaSuministro?: AlertaSuministroCn | null;
 };
 
 type ApiResponse = {
@@ -1791,6 +1794,7 @@ function AlmacenMedCard({
             <span className="font-mono text-sm bg-white text-slate-500 rounded-lg px-2 py-1 border border-slate-200">
               CN {med.cn}
             </span>
+            <BadgeSuministro alerta={med.alertaSuministro} className="max-w-[9rem]" />
             {onToggleActivo && (
               <div className="flex items-center gap-1.5">
                 <span className="text-[10px] font-bold uppercase text-slate-500 tracking-wide">Activo</span>
