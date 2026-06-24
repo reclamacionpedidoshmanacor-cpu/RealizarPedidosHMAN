@@ -45,6 +45,11 @@ function toCn6(raw: string | null | undefined): string | null {
   return digits.padStart(6, '0');
 }
 
+/** Clave de cruce con pedidos SAP (6 dígitos finales del CN). */
+export function cnClavePedidos(cn: string): string | null {
+  return toCn6(cn);
+}
+
 function parseNumberMaybe(raw: string | null): number | null {
   if (raw == null) return null;
   const compact = String(raw).trim().replace(/\s/g, '');
@@ -353,6 +358,10 @@ export type PedidoResumenAlmacenCn = {
   unidadesRecibidas14d: number;
   pedidosPendientes: number;
   unidadesPendientes: number;
+  /** Si no hay recibos en 14 días: fecha del último pedido recibido (ISO yyyy-MM-dd). */
+  ultimoRecibidoFecha: string | null;
+  /** Unidades del último pedido recibido (solo si ultimoRecibidoFecha está informado). */
+  ultimoRecibidoUnidades: number;
 };
 
 const PEDIDO_RESUMEN_ALMACEN_VACIO: PedidoResumenAlmacenCn = {
@@ -360,6 +369,8 @@ const PEDIDO_RESUMEN_ALMACEN_VACIO: PedidoResumenAlmacenCn = {
   unidadesRecibidas14d: 0,
   pedidosPendientes: 0,
   unidadesPendientes: 0,
+  ultimoRecibidoFecha: null,
+  ultimoRecibidoUnidades: 0,
 };
 
 function cantidadPedidoOrder(row: {
@@ -407,6 +418,7 @@ export async function loadPedidosResumenAlmacenPorCns(
   }>;
 
   const cutoff = Date.now() - 14 * 24 * 60 * 60 * 1000;
+  const ultimoRecibidoPorCn = new Map<string, { ms: number; fechaIso: string; unidades: number }>();
 
   for (const row of rows) {
     const cn6 = toCn6(row.cn6);
@@ -423,10 +435,29 @@ export async function loadPedidosResumenAlmacenPorCns(
 
     if (row.anulado || !row.recibido_at) continue;
     const recibidoAt = new Date(row.recibido_at);
-    if (Number.isNaN(recibidoAt.getTime()) || recibidoAt.getTime() < cutoff) continue;
+    if (Number.isNaN(recibidoAt.getTime())) continue;
 
-    bucket.pedidosRecibidos14d += 1;
-    if (qty > 0) bucket.unidadesRecibidas14d += qty;
+    const recibidoMs = recibidoAt.getTime();
+    const fechaIso = row.recibido_at.slice(0, 10);
+
+    if (recibidoMs >= cutoff) {
+      bucket.pedidosRecibidos14d += 1;
+      if (qty > 0) bucket.unidadesRecibidas14d += qty;
+    }
+
+    const prev = ultimoRecibidoPorCn.get(cn6);
+    if (!prev || recibidoMs > prev.ms) {
+      ultimoRecibidoPorCn.set(cn6, { ms: recibidoMs, fechaIso, unidades: qty > 0 ? qty : 0 });
+    } else if (recibidoMs === prev.ms && qty > 0) {
+      prev.unidades += qty;
+    }
+  }
+
+  for (const [cn6, last] of ultimoRecibidoPorCn) {
+    const bucket = result[cn6];
+    if (!bucket || bucket.pedidosRecibidos14d > 0) continue;
+    bucket.ultimoRecibidoFecha = last.fechaIso;
+    bucket.ultimoRecibidoUnidades = last.unidades;
   }
 
   return result;

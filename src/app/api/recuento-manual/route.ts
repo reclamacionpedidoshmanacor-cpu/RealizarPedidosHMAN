@@ -8,7 +8,7 @@ import {
   normalizeAlmacenText,
 } from '@/lib/almacen';
 import { listMedicamentosByArea, getMedicamentoByCn, updateMedicamento } from '@/lib/catalogo-neon';
-import { loadPedidosResumenAlmacenPorCns } from '@/lib/pedidos-pendientes';
+import { loadPedidosResumenAlmacenPorCns, cnClavePedidos } from '@/lib/pedidos-pendientes';
 import { isMSE } from '@/lib/utils';
 import {
   crearRecuento,
@@ -143,11 +143,13 @@ export async function GET(req: NextRequest) {
         const unidadesPorCaja = Number(med.unidadesPorCaja) > 0 ? Number(med.unidadesPorCaja) : 1;
         const tieneStockOrientativo =
           med.stockMinimo != null || med.puntoPedido != null || med.stockMaximo != null;
-        const pedidos = pedidosPorCn[med.cn] ?? {
+        const pedidos = pedidosPorCn[cnClavePedidos(med.cn) ?? med.cn] ?? {
           pedidosRecibidos14d: 0,
           unidadesRecibidas14d: 0,
           pedidosPendientes: 0,
           unidadesPendientes: 0,
+          ultimoRecibidoFecha: null,
+          ultimoRecibidoUnidades: 0,
         };
 
         return {
@@ -167,6 +169,8 @@ export async function GET(req: NextRequest) {
           unidadesRecibidas14d: pedidos.unidadesRecibidas14d,
           pedidosPendientes: pedidos.pedidosPendientes,
           unidadesPendientes: pedidos.unidadesPendientes,
+          ultimoRecibidoFecha: pedidos.ultimoRecibidoFecha,
+          ultimoRecibidoUnidades: pedidos.ultimoRecibidoUnidades,
         };
       });
 

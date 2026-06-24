@@ -30,6 +30,8 @@ type MedicamentoManual = {
   unidadesRecibidas14d?: number;
   pedidosPendientes?: number;
   unidadesPendientes?: number;
+  ultimoRecibidoFecha?: string | null;
+  ultimoRecibidoUnidades?: number;
 };
 
 type ApiResponse = {
@@ -95,6 +97,30 @@ const AREAS: { id: AreaId; label: string; emoji: string; color: string; bg: stri
 /* ─── helpers ─── */
 function formatUnidadesPedido(value: number): string {
   return new Intl.NumberFormat('es-ES', { maximumFractionDigits: 0 }).format(Math.round(value));
+}
+
+function formatFechaPedido(iso: string): string {
+  const d = new Date(`${iso.slice(0, 10)}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
+  return new Intl.DateTimeFormat('es-ES', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(d);
+}
+
+function textoRecibidoAlmacen(med: MedicamentoManual): string {
+  const recibidos = med.pedidosRecibidos14d ?? 0;
+  const udsRecibidas = med.unidadesRecibidas14d ?? 0;
+  if (recibidos > 0) {
+    return `${recibidos} pedido${recibidos !== 1 ? 's' : ''}, ${formatUnidadesPedido(udsRecibidas)} uds`;
+  }
+  const fecha = med.ultimoRecibidoFecha?.trim();
+  const udsUltimo = med.ultimoRecibidoUnidades ?? 0;
+  if (fecha) {
+    return `Sin recibos en 2 sem · último: ${formatFechaPedido(fecha)}, ${formatUnidadesPedido(udsUltimo)} uds`;
+  }
+  return 'Sin recibos en 2 sem';
 }
 
 function parseUdsCajaInput(value: string): number {
@@ -1746,8 +1772,6 @@ function AlmacenMedCard({
   if (med.puntoPedido != null) hints.push(`pto ${med.puntoPedido}`);
   if (med.stockMaximo != null) hints.push(`máx ${med.stockMaximo}`);
 
-  const recibidos = med.pedidosRecibidos14d ?? 0;
-  const udsRecibidas = med.unidadesRecibidas14d ?? 0;
   const pendientes = med.pedidosPendientes ?? 0;
   const udsPendientes = med.unidadesPendientes ?? 0;
 
@@ -1798,7 +1822,7 @@ function AlmacenMedCard({
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3 text-xs">
         <p className="rounded-lg bg-emerald-50 border border-emerald-100 px-3 py-2 text-emerald-800">
           <span className="font-semibold">Recibido 2 sem:</span>{' '}
-          {recibidos} pedido{recibidos !== 1 ? 's' : ''}, {formatUnidadesPedido(udsRecibidas)} uds
+          {textoRecibidoAlmacen(med)}
         </p>
         <p className="rounded-lg bg-sky-50 border border-sky-100 px-3 py-2 text-sky-800">
           <span className="font-semibold">En tránsito:</span>{' '}
