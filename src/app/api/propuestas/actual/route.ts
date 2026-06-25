@@ -11,7 +11,6 @@ import {
   getLineasPropuesta,
   getPedidoAlmacenPendiente,
   listBorradoresPropuestaAlmacen,
-  getPropuestaById,
   getPendienteRecuento,
   getRecuentoConStockParaPropuesta,
   insertarLineasPropuesta,
@@ -61,14 +60,13 @@ export async function GET(req: NextRequest) {
       const borradores = await listBorradoresPropuestaAlmacen(session.area, pedido.id);
       const propuestaIdParam = Number(req.nextUrl.searchParams.get('propuestaId'));
 
-      let propuesta =
-        propuestaIdParam > 0
-          ? borradores.find((b) => b.id === propuestaIdParam) ??
-            (await getPropuestaById(propuestaIdParam))
-          : borradores.find((b) => b.totalLineas > 0) ?? borradores[0] ?? null;
-
-      if (propuesta && propuestaIdParam > 0 && propuesta.estado !== 'borrador') {
-        return NextResponse.json({ error: 'La propuesta seleccionada no está en borrador.' }, { status: 409 });
+      let propuesta: (typeof borradores)[number] | null = null;
+      if (propuestaIdParam > 0) {
+        propuesta = borradores.find((b) => b.id === propuestaIdParam) ?? null;
+      }
+      if (!propuesta) {
+        propuesta =
+          borradores.find((b) => b.totalLineas > 0) ?? borradores[0] ?? null;
       }
 
       if (!propuesta) {
