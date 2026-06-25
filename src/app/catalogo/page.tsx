@@ -138,8 +138,8 @@ export default function CatalogoPage() {
     return esNutricion ? roundCajas(Number(value)) : Math.round(Number(value));
   };
 
-  const fetchMeds = useCallback(async () => {
-    setLoading(true);
+  const fetchMeds = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
     try {
       const area = requireArea(true);
       if (!area) {
@@ -154,7 +154,7 @@ export default function CatalogoPage() {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
   }, []);
 
@@ -311,7 +311,7 @@ export default function CatalogoPage() {
       if (omitidosImport.length > 0) {
         toast.message(`${omitidosImport.length} CN en otra área — resuélvelos en el panel de conflictos.`);
       }
-      await fetchMeds();
+      await fetchMeds({ silent: true });
     } catch { toast.error('Error de conexión'); }
     finally {
       importingRef.current = false;
@@ -342,7 +342,7 @@ export default function CatalogoPage() {
       toast.success(
         `CN ${item.cn} movido de ${item.areaExistente} a ${area}. Vuelve a importar el Excel para actualizar sus datos en esta área.`
       );
-      await fetchMeds();
+      await fetchMeds({ silent: true });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
@@ -390,10 +390,10 @@ export default function CatalogoPage() {
       setCimaResultado(data);
       if (data.actualizados > 0) {
         toast.success(`CIMA: ${data.actualizados} medicamentos enriquecidos`);
-        fetchMeds();
+        fetchMeds({ silent: true });
       } else if (data.fallidos > 0) {
         toast.info(`CIMA consultado: ${data.fallidos} CNs no encontrados en la base de datos de AEMPS`);
-        fetchMeds();
+        fetchMeds({ silent: true });
       } else {
         toast.info('CIMA: ningún medicamento nuevo encontrado');
       }
@@ -480,8 +480,56 @@ export default function CatalogoPage() {
     }
   };
 
+  const patchMedicamentoEnLista = (cn: string, data: EditForm): void => {
+    setMeds((prev) =>
+      prev.map((m) => {
+        if (m.cn !== cn) return m;
+        const updated: Medicamento = { ...m };
+        if (data.nombre !== undefined) updated.nombre = data.nombre;
+        if (data.principioActivo !== undefined) updated.principioActivo = data.principioActivo || null;
+        if (data.presentacion !== undefined) updated.presentacion = data.presentacion || null;
+        if (data.ubicacion !== undefined) updated.ubicacion = data.ubicacion || null;
+        if (data.unidadesPorCaja !== undefined) updated.unidadesPorCaja = Number(data.unidadesPorCaja);
+        if (data.comprable !== undefined) updated.comprable = data.comprable;
+        if (data.tipoMse !== undefined) updated.tipoMse = data.tipoMse ? String(data.tipoMse) : null;
+
+        if (esAlmacen) {
+          const sinStock =
+            (data.stockMinimo === '' || data.stockMinimo == null) &&
+            (data.puntoPedido === '' || data.puntoPedido == null) &&
+            (data.stockMaximo === '' || data.stockMaximo == null);
+          if (sinStock || data.clearStockObjetivo) {
+            updated.stockMinimo = null;
+            updated.puntoPedido = null;
+            updated.stockMaximo = null;
+          } else {
+            updated.stockMinimo = data.stockMinimo === '' ? 0 : Number(data.stockMinimo ?? 0);
+            updated.puntoPedido = data.puntoPedido === '' ? 0 : Number(data.puntoPedido ?? 0);
+            updated.stockMaximo = data.stockMaximo === '' ? null : Number(data.stockMaximo);
+          }
+        } else if (esNutricion) {
+          if (data.stockMinimo !== undefined) {
+            updated.stockMinimo = data.stockMinimo === '' ? null : normalizeStockNumber(data.stockMinimo);
+          }
+          if (data.puntoPedido !== undefined) {
+            updated.puntoPedido = data.puntoPedido === '' ? null : normalizeStockNumber(data.puntoPedido);
+          }
+          if (data.stockMaximo !== undefined) {
+            updated.stockMaximo = data.stockMaximo === '' ? null : normalizeStockNumber(data.stockMaximo);
+          }
+        } else {
+          if (data.stockMinimo !== undefined) updated.stockMinimo = data.stockMinimo as number | null;
+          if (data.puntoPedido !== undefined) updated.puntoPedido = data.puntoPedido as number | null;
+          if (data.stockMaximo !== undefined) updated.stockMaximo = data.stockMaximo as number | null;
+        }
+        return updated;
+      })
+    );
+  };
+
   const saveEdit = async () => {
     if (!editingCn) return;
+    const cn = editingCn;
     const payload: Record<string, unknown> = { ...editData };
     if (esAlmacen) {
       const sinStock =
@@ -509,13 +557,18 @@ export default function CatalogoPage() {
         payload.stockMaximo = normalizeStockNumber(payload.stockMaximo as number);
       }
     }
-    const res = await fetch(`/api/medicamentos/${editingCn}`, {
+    const res = await fetch(`/api/medicamentos/${cn}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (res.ok) { toast.success('Guardado'); setEditingCn(null); fetchMeds(); }
-    else { toast.error('Error al guardar'); }
+    if (res.ok) {
+      toast.success('Guardado');
+      patchMedicamentoEnLista(cn, editData);
+      setEditingCn(null);
+    } else {
+      toast.error('Error al guardar');
+    }
   };
 
   const buildStockPayload = (data: typeof nuevoData) => {
@@ -559,7 +612,7 @@ export default function CatalogoPage() {
       toast.success('Medicamento creado correctamente.');
       setShowNuevo(false);
       setNuevoData(esAlmacen ? { ...NUEVO_ALMACEN_EMPTY } : { ...NUEVO_EMPTY });
-      fetchMeds();
+      fetchMeds({ silent: true });
     } catch { toast.error('Error de conexión'); }
     finally { setSavingNuevo(false); }
   };
