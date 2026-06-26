@@ -16,27 +16,41 @@ import {
 
 export const runtime = 'nodejs';
 
+const MAX_ALERTAS_EN_CATALOGO = 500;
+
 export async function GET(req: NextRequest) {
-  const session = requireApiSession(req);
-  if (!session.ok) return session.response;
+  try {
+    const session = requireApiSession(req);
+    if (!session.ok) return session.response;
 
-  const queryArea = req.nextUrl.searchParams.get('area');
-  if (queryArea && !isValidArea(queryArea)) {
-    return NextResponse.json({ error: 'Area no valida.' }, { status: 400 });
+    const queryArea = req.nextUrl.searchParams.get('area');
+    if (queryArea && !isValidArea(queryArea)) {
+      return NextResponse.json({ error: 'Area no valida.' }, { status: 400 });
+    }
+
+    const area = queryArea ?? session.area;
+    if (area !== session.area) {
+      return NextResponse.json({ error: 'No autorizado para otra area.' }, { status: 403 });
+    }
+
+    const rows = await listMedicamentosByArea(area);
+    const cns = rows.map((r) => r.cn);
+    const alertas =
+      cns.length <= MAX_ALERTAS_EN_CATALOGO
+        ? await loadAlertasSuministroPorCnsSafe(cns)
+        : {};
+    const enriched = rows.map((row) => ({
+      ...row,
+      alertaSuministro: alertaSuministroParaCn(alertas, row.cn),
+    }));
+    return NextResponse.json(enriched);
+  } catch (err) {
+    console.error('GET /api/medicamentos', err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Error al cargar el catálogo.' },
+      { status: 500 }
+    );
   }
-
-  const area = queryArea ?? session.area;
-  if (area !== session.area) {
-    return NextResponse.json({ error: 'No autorizado para otra area.' }, { status: 403 });
-  }
-
-  const rows = await listMedicamentosByArea(area);
-  const alertas = await loadAlertasSuministroPorCnsSafe(rows.map((r) => r.cn));
-  const enriched = rows.map((row) => ({
-    ...row,
-    alertaSuministro: alertaSuministroParaCn(alertas, row.cn),
-  }));
-  return NextResponse.json(enriched);
 }
 
 export async function POST(req: NextRequest) {

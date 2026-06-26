@@ -518,7 +518,7 @@ export function alertaSuministroParaCn(
   return map[key] ?? null;
 }
 
-/** Alerta vigente más reciente por CN: en falta o respuesta proveedor problemática. */
+/** Alerta vigente más reciente por CN: CIMA, en falta o respuesta proveedor (Pedidos Pendientes). */
 export async function loadAlertasPedidosPorCns(
   cns: string[],
 ): Promise<Record<string, AlertaSuministroCn | null>> {
@@ -536,6 +536,41 @@ export async function loadAlertasPedidosPorCns(
     list.push(candidato);
     candidatosPorCn.set(cn6, list);
   };
+
+  try {
+    const cimaRows = (await sql`
+      SELECT cn, nombre, descripcion, updated_at::text AS updated_at
+      FROM public.suministro_alertas
+      WHERE resuelto = false
+        AND estado = 'Activo'
+        AND cn IS NOT NULL
+        AND regexp_replace(cn::text, '[^0-9]', '', 'g') <> ''
+        AND lpad(right(regexp_replace(cn::text, '[^0-9]', '', 'g'), 6), 6, '0') = ANY(${normalizedCns});
+    `) as Array<{
+      cn: string;
+      nombre: string | null;
+      descripcion: string | null;
+      updated_at: string;
+    }>;
+
+    for (const row of cimaRows) {
+      const cn6 = toCn6(row.cn);
+      const ms = parseTs(row.updated_at);
+      if (!cn6 || ms == null) continue;
+      push(cn6, {
+        tipo: 'cima',
+        etiqueta: 'CIMA — problema suministro',
+        detalle: row.descripcion?.trim() || row.nombre?.trim() || null,
+        fecha: row.updated_at,
+        ms,
+      });
+    }
+  } catch (err) {
+    console.warn(
+      '[alertas-suministro] No se pudieron leer alertas CIMA (Pedidos Pendientes):',
+      err instanceof Error ? err.message : err,
+    );
+  }
 
   try {
     const faltaRows = (await sql`

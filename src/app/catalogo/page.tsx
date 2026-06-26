@@ -63,6 +63,8 @@ const NUEVO_ALMACEN_EMPTY = {
   stockMaximo: '' as number | '',
 };
 
+const PAGE_SIZE = 100;
+
 function SortIcon({ dir }: { dir: SortDir | null }) {
   if (!dir) return (
     <svg className="h-3 w-3 ml-1 text-slate-300" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
@@ -104,6 +106,8 @@ export default function CatalogoPage() {
   const [revisionPendiente, setRevisionPendiente] = useState<RevisionPendiente[]>([]);
   const [revisionLoading, setRevisionLoading] = useState(false);
   const [marcandoRevisionId, setMarcandoRevisionId] = useState<number | null>(null);
+  const [area, setArea] = useState('');
+  const [page, setPage] = useState(1);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const getArea = () => {
@@ -112,14 +116,14 @@ export default function CatalogoPage() {
   };
 
   const requireArea = (silent = false) => {
-    const area = getArea();
-    if (area) return area;
+    const areaActiva = area || getArea();
+    if (areaActiva) return areaActiva;
     if (!silent) toast.error('No hay un área activa. Vuelve a entrar en la app.');
     return null;
   };
 
-  const esAlmacen = getArea() === 'almacen';
-  const esNutricion = getArea() === 'nutricion';
+  const esAlmacen = area === 'almacen';
+  const esNutricion = area === 'nutricion';
 
   const formatStockCell = (value: number | null | undefined) => {
     if (value == null) return '—';
@@ -147,7 +151,7 @@ export default function CatalogoPage() {
         toast.error('No hay un área activa. Vuelve a entrar en la app.');
         return;
       }
-      const res = await fetch(`/api/medicamentos?area=${area}`);
+      const res = await fetch(`/api/medicamentos?area=${area}`, { credentials: 'include' });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo cargar el catálogo.');
       setMeds(Array.isArray(payload) ? payload : []);
@@ -156,7 +160,7 @@ export default function CatalogoPage() {
     } finally {
       if (!opts?.silent) setLoading(false);
     }
-  }, []);
+  }, [area]);
 
   const loadRevisionPendiente = useCallback(async () => {
     if (getArea() !== 'almacen') {
@@ -202,7 +206,15 @@ export default function CatalogoPage() {
     toast.message(`Filtrado por CN ${cn}. Comprueba los datos en la tabla.`);
   };
 
-  useEffect(() => { void fetchMeds(); void loadRevisionPendiente(); }, [fetchMeds, loadRevisionPendiente]);
+  useEffect(() => {
+    setArea(getArea());
+  }, []);
+
+  useEffect(() => {
+    if (!area) return;
+    void fetchMeds();
+    void loadRevisionPendiente();
+  }, [area, fetchMeds, loadRevisionPendiente]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -210,6 +222,10 @@ export default function CatalogoPage() {
     const q = (params.get('q') ?? '').trim();
     if (q) setSearch(q);
   }, []);
+
+  useEffect(() => {
+    setPage(1);
+  }, [search, filterUbicacion, filterActivo, sortKey, sortDir]);
 
   const ubicacionesUnicas = useMemo(() => {
     const desdeCatalogo = meds
@@ -375,6 +391,13 @@ export default function CatalogoPage() {
       return sortDir === 'asc' ? cmp : -cmp;
     });
   }, [meds, search, filterUbicacion, filterActivo, sortKey, sortDir]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const pageSafe = Math.min(page, totalPages);
+  const paginated = useMemo(() => {
+    const start = (pageSafe - 1) * PAGE_SIZE;
+    return filtered.slice(start, start + PAGE_SIZE);
+  }, [filtered, pageSafe]);
 
   const handleEnriquecerCima = async (soloVacios = true) => {
     setCimaEnriqueciendo(true);
@@ -966,7 +989,7 @@ export default function CatalogoPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.map(med => (
+              {paginated.map(med => (
                 editingCn === med.cn ? (
                   <tr key={med.cn} className="bg-teal-50">
                     <td className="px-4 py-2 font-mono text-xs text-slate-500">{med.cn}</td>
@@ -1104,9 +1127,35 @@ export default function CatalogoPage() {
 
       {/* Pie */}
       {filtered.length > 0 && (
-        <p className="mt-3 text-xs text-slate-400 text-right">
-          Mostrando {filtered.length} de {meds.length} medicamentos
-        </p>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-slate-400">
+            Mostrando {(pageSafe - 1) * PAGE_SIZE + 1}–{Math.min(pageSafe * PAGE_SIZE, filtered.length)} de {filtered.length}
+            {filtered.length !== meds.length ? ` (filtrados de ${meds.length})` : ''}
+          </p>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={pageSafe <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+              >
+                Anterior
+              </button>
+              <span className="text-xs text-slate-500">
+                Página {pageSafe} de {totalPages}
+              </span>
+              <button
+                type="button"
+                disabled={pageSafe >= totalPages}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+              >
+                Siguiente
+              </button>
+            </div>
+          )}
+        </div>
       )}
 
       {/* Modal Nuevo medicamento */}
