@@ -1,37 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
 import {
-  getBorradorPropuesta,
   getRecuentoById,
-  getRecuentoConStockParaPropuesta,
-  reemplazarLineasPropuestaDesdeRecuento,
+  listBorradoresPropuestaAlmacen,
   sincronizarRecuentoPendienteConCatalogo,
+  syncTodasPropuestasUbicacionDesdeRecuento,
 } from '@/lib/stock-propuesta-neon';
-import { loadCantidadTransitoByCn } from '@/lib/pedidos-pendientes';
 
 export const runtime = 'nodejs';
-
-function roundThreeDecimals(value: number): number {
-  return Math.round(value * 1000) / 1000;
-}
-
-function buildStockTransitoCajasByCn(
-  transitoUnidadesByCn: Record<string, number>,
-  rows: Array<{ cn: string; unidadesPorCaja: number }>
-): Record<string, number> {
-  const byCn: Record<string, number> = {};
-  for (const row of rows) {
-    const unidadesTransito = Number(transitoUnidadesByCn[row.cn] ?? 0);
-    if (!Number.isFinite(unidadesTransito) || unidadesTransito <= 0) {
-      byCn[row.cn] = 0;
-      continue;
-    }
-    const cajasTransito =
-      row.unidadesPorCaja > 0 ? unidadesTransito / row.unidadesPorCaja : unidadesTransito;
-    byCn[row.cn] = cajasTransito > 0 ? roundThreeDecimals(cajasTransito) : 0;
-  }
-  return byCn;
-}
 
 export async function POST(
   req: NextRequest,
@@ -55,39 +31,17 @@ export async function POST(
     }
 
     const syncResult = await sincronizarRecuentoPendienteConCatalogo(recuentoId, session.area);
-    const borrador = await getBorradorPropuesta(session.area, recuentoId);
-
-    let propuestaActualizada = false;
-    let lineasPropuesta = 0;
-    if (borrador) {
-      const filasRecuento = await getRecuentoConStockParaPropuesta(recuentoId, session.area);
-      let stockTransitoByCn: Record<string, number> = {};
-      if (filasRecuento.length > 0) {
-        try {
-          const transitoUnidadesByCn = await loadCantidadTransitoByCn(filasRecuento.map((r) => r.cn));
-          stockTransitoByCn = buildStockTransitoCajasByCn(
-            transitoUnidadesByCn,
-            filasRecuento.map((r) => ({ cn: r.cn, unidadesPorCaja: Number(r.unidades_por_caja) }))
-          );
-        } catch {
-          stockTransitoByCn = {};
-        }
-      }
-      lineasPropuesta = await reemplazarLineasPropuestaDesdeRecuento(
-        borrador.id,
-        recuentoId,
-        session.area,
-        stockTransitoByCn
-      );
-      propuestaActualizada = true;
-    }
+    await syncTodasPropuestasUbicacionDesdeRecuento(session.area, recuentoId);
+    const borradores = await listBorradoresPropuestaAlmacen(session.area, recuentoId);
+    const lineasPropuesta = borradores.reduce((sum, b) => sum + b.totalLineas, 0);
 
     return NextResponse.json({
       ok: true,
       recuentoId,
       lineasRecuentoActualizadas: syncResult.updated,
       cnsSinCatalogo: syncResult.cnsSinCatalogo,
-      propuestaActualizada,
+      propuestaActualizada: borradores.length > 0,
+      borradores: borradores.length,
       lineasPropuesta,
     });
   } catch (err) {

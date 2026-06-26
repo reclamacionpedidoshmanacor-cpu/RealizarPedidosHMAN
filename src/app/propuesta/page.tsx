@@ -136,9 +136,11 @@ export default function PropuestaPage() {
   const [expandedHistorialId, setExpandedHistorialId] = useState<number | null>(null);
   const [detalleByPropuesta, setDetalleByPropuesta] = useState<Record<number, PropuestaDetalle>>({});
   const [loadingDetalleId, setLoadingDetalleId] = useState<number | null>(null);
-  const [propuestaAlmacenId, setPropuestaAlmacenId] = useState<number | null>(null);
+  const [propuestaSeleccionadaId, setPropuestaSeleccionadaId] = useState<number | null>(null);
 
   const esAlmacen = getAreaFromCookie() === 'almacen';
+  const usaBorradoresPorUbicacion =
+    esAlmacen || data?.modo === 'por-ubicacion' || (data?.borradores?.length ?? 0) > 0;
 
   const etiquetaPropuesta = (observaciones?: string | null, id?: number) =>
     observaciones?.trim() || (id != null ? `Propuesta #${id}` : 'Propuesta');
@@ -152,7 +154,7 @@ export default function PropuestaPage() {
       const id =
         propuestaIdOverride !== undefined
           ? propuestaIdOverride
-          : propuestaAlmacenId;
+          : propuestaSeleccionadaId;
       if (id) params.set('propuestaId', String(id));
       const qs = params.toString();
       const res = await fetch(`/api/propuestas/actual${qs ? `?${qs}` : ''}`, { cache: 'no-store' });
@@ -169,9 +171,13 @@ export default function PropuestaPage() {
       }
       setData(payload);
       if (payload.propuesta?.id && payload.propuesta.estado === 'borrador') {
-        setPropuestaAlmacenId(payload.propuesta.id);
-      } else if (esAlmacen && !payload.propuesta) {
-        setPropuestaAlmacenId(null);
+        setPropuestaSeleccionadaId(payload.propuesta.id);
+      } else if (
+        (payload.borradores?.length ?? 0) > 0 ||
+        payload.modo === 'por-ubicacion' ||
+        payload.modo === 'pedido-almacen'
+      ) {
+        if (!payload.propuesta) setPropuestaSeleccionadaId(null);
       }
       const nextEdits: Record<number, DraftEdit> = {};
       for (const linea of payload.lineas as Linea[]) {
@@ -248,8 +254,8 @@ export default function PropuestaPage() {
     finally { setSaving(false); }
   };
 
-  const abrirBorradorAlmacen = async (propuestaId: number) => {
-    setPropuestaAlmacenId(propuestaId);
+  const abrirBorrador = async (propuestaId: number) => {
+    setPropuestaSeleccionadaId(propuestaId);
     await load(propuestaId);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -270,8 +276,8 @@ export default function PropuestaPage() {
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo tramitar.');
       toast.success('Propuesta tramitada correctamente.');
-      if (esAlmacen) {
-        setPropuestaAlmacenId(null);
+      if (usaBorradoresPorUbicacion) {
+        setPropuestaSeleccionadaId(null);
         await load(null);
       } else {
         setData(prev =>
@@ -393,7 +399,9 @@ export default function PropuestaPage() {
             <p className="text-sm text-slate-500">
               {esAlmacen
                 ? 'En Almacén hay una propuesta por ubicación (y por grupo de letras en ALMACEN FAR). Tramita cada bloque cuando esté listo.'
-                : 'Calculada a partir del recuento pendiente. Solo incluye artículos activos. Si ajustas cantidades debes indicar el motivo.'}
+                : usaBorradoresPorUbicacion
+                  ? 'Hay una propuesta por ubicación. Selecciona un bloque, revísalo y tramítalo cuando esté listo.'
+                  : 'Calculada a partir del recuento pendiente. Solo incluye artículos activos. Si ajustas cantidades debes indicar el motivo.'}
             </p>
           </div>
 
@@ -443,17 +451,17 @@ export default function PropuestaPage() {
 
         {data && (
           <>
-            {esAlmacen && (data.borradores?.length ?? 0) > 0 && (
+            {(data.borradores?.length ?? 0) > 0 && (
               <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50/80 p-3">
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Borradores pendientes de tramitar — selecciona una para revisarla
+                  Borradores pendientes de tramitar — selecciona una ubicación para revisarla
                 </p>
                 <div className="flex flex-wrap items-center gap-2">
                   {data.borradores!.map((b) => (
                     <button
                       key={b.id}
                       type="button"
-                      onClick={() => void abrirBorradorAlmacen(b.id)}
+                      onClick={() => void abrirBorrador(b.id)}
                       className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
                         data.propuesta?.id === b.id
                           ? 'border-teal-600 bg-teal-50 font-semibold text-teal-800'
@@ -471,11 +479,13 @@ export default function PropuestaPage() {
             {!data.propuesta ? (
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-6 py-10 text-center">
                 <p className="text-slate-500 text-sm">
-                  {esAlmacen
+                  {(data.borradores?.length ?? 0) > 0
                     ? 'Selecciona un borrador arriba para revisarlo y tramitarlo.'
-                    : 'Pedido de almacén en curso, sin líneas guardadas aún.'}
+                    : esAlmacen
+                      ? 'Pedido de almacén en curso, sin líneas guardadas aún.'
+                      : 'Recuento pendiente sin líneas en propuesta. Completa el recuento manual por ubicación.'}
                 </p>
-                {esAlmacen && (
+                {(data.borradores?.length ?? 0) > 0 && (
                   <p className="text-slate-400 text-xs mt-1">
                     También puedes abrir un borrador desde el historial con «Revisar».
                   </p>
@@ -901,17 +911,14 @@ export default function PropuestaPage() {
                               </button>
                             </>
                           )}
-                          {p.estado === 'borrador' && esAlmacen && (
+                          {p.estado === 'borrador' && (
                             <button
-                              onClick={() => void abrirBorradorAlmacen(p.id)}
+                              onClick={() => void abrirBorrador(p.id)}
                               className="rounded border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-medium text-teal-700 hover:bg-teal-100 transition-colors"
                               title="Abrir en el panel superior para revisar y tramitar"
                             >
                               Revisar
                             </button>
-                          )}
-                          {p.estado === 'borrador' && !esAlmacen && (
-                            <span className="text-[11px] text-slate-400 italic">En edición</span>
                           )}
                           <button
                             onClick={() => void handleEliminarPropuestaHistorial(p.id)}

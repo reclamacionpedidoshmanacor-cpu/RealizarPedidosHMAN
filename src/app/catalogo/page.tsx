@@ -65,6 +65,90 @@ const NUEVO_ALMACEN_EMPTY = {
 
 const PAGE_SIZE = 100;
 
+type CatalogoFilters = {
+  search: string;
+  filterUbicacion: string;
+  filterActivo: string;
+  sortKey: SortKey;
+  sortDir: SortDir;
+};
+
+function principioActivoVacio(value: string | null | undefined): boolean {
+  return !String(value ?? '').trim();
+}
+
+function compareMedicamentos(
+  a: Medicamento,
+  b: Medicamento,
+  sortKey: SortKey,
+  sortDir: SortDir,
+): number {
+  const dir = sortDir === 'asc' ? 1 : -1;
+
+  if (sortKey === 'principioActivo') {
+    const aEmpty = principioActivoVacio(a.principioActivo);
+    const bEmpty = principioActivoVacio(b.principioActivo);
+    if (aEmpty !== bEmpty) return dir * (aEmpty ? 1 : -1);
+  }
+
+  let av: string | number = '';
+  let bv: string | number = '';
+  if (sortKey === 'principioActivo') {
+    av = a.principioActivo?.trim() ?? '';
+    bv = b.principioActivo?.trim() ?? '';
+  } else if (sortKey === 'nombre') {
+    av = a.nombre;
+    bv = b.nombre;
+  } else if (sortKey === 'cn') {
+    av = a.cn;
+    bv = b.cn;
+  } else if (sortKey === 'ubicacion') {
+    av = a.ubicacion?.trim() ?? '';
+    bv = b.ubicacion?.trim() ?? '';
+  } else if (sortKey === 'puntoPedido') {
+    av = a.puntoPedido ?? 0;
+    bv = b.puntoPedido ?? 0;
+  }
+
+  if (typeof av === 'number' && typeof bv === 'number') {
+    const cmp = av - bv;
+    if (cmp !== 0) return dir * cmp;
+  } else {
+    const cmp = String(av).localeCompare(String(bv), 'es', { sensitivity: 'base' });
+    if (cmp !== 0) return dir * cmp;
+  }
+
+  const nombreCmp = a.nombre.localeCompare(b.nombre, 'es', { sensitivity: 'base' });
+  if (nombreCmp !== 0) return nombreCmp;
+  return a.cn.localeCompare(b.cn, 'es', { numeric: true, sensitivity: 'base' });
+}
+
+function filterAndSortMedicamentos(meds: Medicamento[], filters: CatalogoFilters): Medicamento[] {
+  const q = filters.search.toLowerCase();
+  const base = meds.filter((m) => {
+    const matchSearch =
+      !q ||
+      m.principioActivo?.toLowerCase().includes(q) ||
+      m.nombre.toLowerCase().includes(q) ||
+      m.cn.includes(q);
+    const matchUbicacion = !filters.filterUbicacion || (m.ubicacion ?? '') === filters.filterUbicacion;
+    const matchActivo =
+      !filters.filterActivo ||
+      (filters.filterActivo === 'si' ? m.activo : !m.activo);
+    return matchSearch && matchUbicacion && matchActivo;
+  });
+
+  return [...base].sort((a, b) =>
+    compareMedicamentos(a, b, filters.sortKey, filters.sortDir)
+  );
+}
+
+function pageForCnInList(list: Medicamento[], cn: string): number | null {
+  const idx = list.findIndex((m) => m.cn === cn);
+  if (idx < 0) return null;
+  return Math.floor(idx / PAGE_SIZE) + 1;
+}
+
 function SortIcon({ dir }: { dir: SortDir | null }) {
   if (!dir) return (
     <svg className="h-3 w-3 ml-1 text-slate-300" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
@@ -109,6 +193,7 @@ export default function CatalogoPage() {
   const [area, setArea] = useState('');
   const [page, setPage] = useState(1);
   const fileRef = useRef<HTMLInputElement>(null);
+  const pendingRepositionCn = useRef<string | null>(null);
 
   const getArea = () => {
     if (typeof document === 'undefined') return '';
@@ -366,31 +451,26 @@ export default function CatalogoPage() {
     }
   };
 
-  const filtered = useMemo(() => {
-    const q = search.toLowerCase();
-    const base = meds.filter(m => {
-      const matchSearch = !q || m.principioActivo?.toLowerCase().includes(q) || m.nombre.toLowerCase().includes(q) || m.cn.includes(q);
-      const matchUbicacion = !filterUbicacion || (m.ubicacion ?? '') === filterUbicacion;
-      const matchActivo = !filterActivo || (filterActivo === 'si' ? m.activo : !m.activo);
-      return matchSearch && matchUbicacion && matchActivo;
-    });
+  const catalogoFilters = useMemo<CatalogoFilters>(
+    () => ({ search, filterUbicacion, filterActivo, sortKey, sortDir }),
+    [search, filterUbicacion, filterActivo, sortKey, sortDir]
+  );
 
-    return [...base].sort((a, b) => {
-      let av: string | number | null = null;
-      let bv: string | number | null = null;
-      if (sortKey === 'principioActivo') { av = a.principioActivo ?? ''; bv = b.principioActivo ?? ''; }
-      else if (sortKey === 'nombre') { av = a.nombre; bv = b.nombre; }
-      else if (sortKey === 'cn') { av = a.cn; bv = b.cn; }
-      else if (sortKey === 'ubicacion') { av = a.ubicacion ?? ''; bv = b.ubicacion ?? ''; }
-      else if (sortKey === 'puntoPedido') { av = a.puntoPedido ?? 0; bv = b.puntoPedido ?? 0; }
+  const filtered = useMemo(
+    () => filterAndSortMedicamentos(meds, catalogoFilters),
+    [meds, catalogoFilters]
+  );
 
-      if (typeof av === 'number' && typeof bv === 'number') {
-        return sortDir === 'asc' ? av - bv : bv - av;
-      }
-      const cmp = String(av).localeCompare(String(bv), 'es', { sensitivity: 'base' });
-      return sortDir === 'asc' ? cmp : -cmp;
-    });
-  }, [meds, search, filterUbicacion, filterActivo, sortKey, sortDir]);
+  useEffect(() => {
+    const cn = pendingRepositionCn.current;
+    if (!cn) return;
+    const nextPage = pageForCnInList(filtered, cn);
+    if (nextPage == null) {
+      pendingRepositionCn.current = null;
+      return;
+    }
+    setPage(nextPage);
+  }, [filtered]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const pageSafe = Math.min(page, totalPages);
@@ -398,6 +478,15 @@ export default function CatalogoPage() {
     const start = (pageSafe - 1) * PAGE_SIZE;
     return filtered.slice(start, start + PAGE_SIZE);
   }, [filtered, pageSafe]);
+
+  useEffect(() => {
+    const cn = pendingRepositionCn.current;
+    if (!cn || !paginated.some((m) => m.cn === cn)) return;
+    pendingRepositionCn.current = null;
+    requestAnimationFrame(() => {
+      document.getElementById(`catalogo-row-${cn}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    });
+  }, [paginated, pageSafe]);
 
   const handleEnriquecerCima = async (soloVacios = true) => {
     setCimaEnriqueciendo(true);
@@ -508,8 +597,11 @@ export default function CatalogoPage() {
       prev.map((m) => {
         if (m.cn !== cn) return m;
         const updated: Medicamento = { ...m };
-        if (data.nombre !== undefined) updated.nombre = data.nombre;
-        if (data.principioActivo !== undefined) updated.principioActivo = data.principioActivo || null;
+        if (data.nombre !== undefined) updated.nombre = data.nombre.trim();
+        if (data.principioActivo !== undefined) {
+          const trimmed = String(data.principioActivo).trim();
+          updated.principioActivo = trimmed || null;
+        }
         if (data.presentacion !== undefined) updated.presentacion = data.presentacion || null;
         if (data.ubicacion !== undefined) updated.ubicacion = data.ubicacion || null;
         if (data.unidadesPorCaja !== undefined) updated.unidadesPorCaja = Number(data.unidadesPorCaja);
@@ -588,6 +680,7 @@ export default function CatalogoPage() {
     if (res.ok) {
       toast.success('Guardado');
       patchMedicamentoEnLista(cn, editData);
+      pendingRepositionCn.current = cn;
       setEditingCn(null);
     } else {
       toast.error('Error al guardar');
@@ -991,7 +1084,7 @@ export default function CatalogoPage() {
             <tbody className="divide-y divide-slate-100">
               {paginated.map(med => (
                 editingCn === med.cn ? (
-                  <tr key={med.cn} className="bg-teal-50">
+                  <tr key={med.cn} id={`catalogo-row-${med.cn}`} className="bg-teal-50">
                     <td className="px-4 py-2 font-mono text-xs text-slate-500">{med.cn}</td>
                     <td className="px-4 py-2">
                       <input className="w-full rounded border border-slate-300 px-2 py-1 text-xs" value={editData.principioActivo ?? ''} onChange={e => setEditData(p => ({ ...p, principioActivo: e.target.value }))} />
@@ -1036,7 +1129,7 @@ export default function CatalogoPage() {
                     </td>
                   </tr>
                 ) : (
-                  <tr key={med.cn} className={cn('hover:bg-slate-50 transition-colors', !med.activo && 'opacity-50')}>
+                  <tr key={med.cn} id={`catalogo-row-${med.cn}`} className={cn('hover:bg-slate-50 transition-colors', !med.activo && 'opacity-50')}>
                     <td className="px-4 py-3 font-mono text-xs text-slate-500">
                       <span className="inline-flex items-center gap-1.5 flex-wrap">
                         {med.cn}

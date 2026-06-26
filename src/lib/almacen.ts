@@ -67,6 +67,18 @@ export function nombrePropuestaAlmacen(
   return `Propuesta ${ub}`;
 }
 
+/** Etiqueta de propuesta por ubicación (áreas con recuento por pasillo). */
+export function nombrePropuestaUbicacion(ubicacion: string): string {
+  return nombrePropuestaAlmacen(ubicacion);
+}
+
+/** Ubicación legible a partir de la etiqueta «Propuesta …». */
+export function ubicacionDesdeEtiquetaPropuesta(observaciones: string | null | undefined): string | null {
+  const text = observaciones?.trim();
+  if (!text || !text.toLowerCase().startsWith('propuesta ')) return null;
+  return text.slice('Propuesta '.length).trim() || null;
+}
+
 export function isAlmacenArea(area: string | null | undefined): boolean {
   return area === ALMACEN_AREA;
 }

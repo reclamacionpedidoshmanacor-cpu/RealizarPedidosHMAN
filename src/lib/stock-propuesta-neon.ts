@@ -1,6 +1,7 @@
 import { neon } from '@neondatabase/serverless';
-import { calcularCajasPropuestas } from '@/lib/propuesta';
-import { ORIGEN_PEDIDO_ALMACEN, isAlmacenArea, nombrePropuestaAlmacen, grupoLetrasAlmacenFar, grupoLetrasAlmacenFarFromLetter, ubicacionAlmacenUsaLetras, type AlmacenFarGrupoLetras } from '@/lib/almacen';
+import { calcularCajasPropuestas, buildStockTransitoCajasByCn } from '@/lib/propuesta';
+import { loadCantidadTransitoByCn } from '@/lib/pedidos-pendientes';
+import { ORIGEN_PEDIDO_ALMACEN, isAlmacenArea, nombrePropuestaAlmacen, nombrePropuestaUbicacion, grupoLetrasAlmacenFar, grupoLetrasAlmacenFarFromLetter, ubicacionAlmacenUsaLetras, type AlmacenFarGrupoLetras } from '@/lib/almacen';
 import { roundCajas } from '@/lib/utils';
 
 const NUTRICION_AREA = 'nutricion';
@@ -860,13 +861,17 @@ export async function getLineasPropuesta(propuestaId: number): Promise<Propuesta
   }));
 }
 
-export async function getRecuentoConStockParaPropuesta(importacionId: number, area: string) {
+export async function getRecuentoConStockParaPropuesta(
+  importacionId: number,
+  area: string,
+  ubicacion?: string | null
+) {
   await ensureNutricionDecimalSchema(area);
   const sql = getDb();
-  return (await sql`
+  const rows = (await sql`
     SELECT
       sr.cn, sr.stock_cajas,
-      m.nombre, m.unidades_por_caja,
+      m.nombre, m.unidades_por_caja, m.ubicacion,
       so.stock_minimo, so.punto_pedido, so.stock_maximo
     FROM stock_registros sr
     INNER JOIN medicamentos m ON m.cn = sr.cn AND m.area = ${area} AND m.activo = true
@@ -875,18 +880,142 @@ export async function getRecuentoConStockParaPropuesta(importacionId: number, ar
     ORDER BY m.principio_activo ASC NULLS LAST, m.nombre ASC;
   `) as Array<{
     cn: string; stock_cajas: string;
-    nombre: string; unidades_por_caja: number;
+    nombre: string; unidades_por_caja: number; ubicacion: string | null;
     stock_minimo: number | null; punto_pedido: number | null; stock_maximo: number | null;
   }>;
+
+  if (!ubicacion?.trim()) return rows;
+
+  const ubicacionKey = normalizeUbicacionKey(ubicacion);
+  return rows.filter((row) => normalizeUbicacionKey(row.ubicacion) === ubicacionKey);
 }
 
-export async function getRecuentoInactivosParaVisualizacion(importacionId: number, area: string) {
+export async function listUbicacionesConStockEnRecuento(
+  importacionId: number,
+  area: string
+): Promise<string[]> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT DISTINCT trim(m.ubicacion) AS ubicacion
+    FROM stock_registros sr
+    INNER JOIN medicamentos m ON m.cn = sr.cn AND m.area = ${area}
+    WHERE sr.importacion_id = ${importacionId}
+      AND m.ubicacion IS NOT NULL
+      AND trim(m.ubicacion) <> ''
+    ORDER BY ubicacion ASC;
+  `) as Array<{ ubicacion: string }>;
+
+  const map = new Map<string, string>();
+  for (const row of rows) {
+    const trimmed = String(row.ubicacion ?? '').trim();
+    if (!trimmed) continue;
+    const key = normalizeUbicacionKey(trimmed);
+    if (!map.has(key)) map.set(key, trimmed);
+  }
+  return [...map.values()].sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
+}
+
+export async function eliminarBorradorPropuestaSinEtiqueta(
+  area: string,
+  importacionStockId: number
+): Promise<void> {
+  await ensurePropuestasObservacionesSchema();
+  const sql = getDb();
+  await sql`
+    DELETE FROM propuestas_lineas pl
+    USING propuestas p
+    WHERE pl.propuesta_id = p.id
+      AND p.area = ${area}
+      AND p.importacion_stock_id = ${importacionStockId}
+      AND p.estado = 'borrador'
+      AND (p.observaciones IS NULL OR trim(p.observaciones) = '');
+  `;
+  await sql`
+    DELETE FROM propuestas
+    WHERE area = ${area}
+      AND importacion_stock_id = ${importacionStockId}
+      AND estado = 'borrador'
+      AND (observaciones IS NULL OR trim(observaciones) = '');
+  `;
+}
+
+export async function syncPropuestaUbicacionDesdeRecuento(
+  area: string,
+  importacionId: number,
+  ubicacion: string,
+  stockTransitoByCn?: Record<string, number>
+): Promise<number> {
+  if (isAlmacenArea(area)) return 0;
+
+  const etiqueta = nombrePropuestaUbicacion(ubicacion);
+  let propuesta = await getBorradorPropuestaAlmacenPorNombre(area, importacionId, etiqueta);
+  if (!propuesta) {
+    propuesta = await crearPropuesta(area, importacionId, etiqueta);
+  }
+
+  const filas = await getRecuentoConStockParaPropuesta(importacionId, area, ubicacion);
+  let transito = stockTransitoByCn ?? {};
+  if (filas.length > 0 && Object.keys(transito).length === 0) {
+    try {
+      const transitoUnidades = await loadCantidadTransitoByCn(filas.map((r) => r.cn));
+      transito = buildStockTransitoCajasByCn(
+        transitoUnidades,
+        filas.map((r) => ({ cn: r.cn, unidadesPorCaja: Number(r.unidades_por_caja) }))
+      );
+    } catch {
+      transito = {};
+    }
+  }
+
+  return reemplazarLineasPropuestaDesdeRecuento(
+    propuesta.id,
+    importacionId,
+    area,
+    transito,
+    ubicacion
+  );
+}
+
+export async function syncTodasPropuestasUbicacionDesdeRecuento(
+  area: string,
+  importacionId: number
+): Promise<void> {
+  if (isAlmacenArea(area)) return;
+
+  await eliminarBorradorPropuestaSinEtiqueta(area, importacionId);
+  const ubicaciones = await listUbicacionesConStockEnRecuento(importacionId, area);
+  if (ubicaciones.length === 0) return;
+
+  const todasFilas = await getRecuentoConStockParaPropuesta(importacionId, area);
+  let stockTransitoByCn: Record<string, number> = {};
+  if (todasFilas.length > 0) {
+    try {
+      const transitoUnidades = await loadCantidadTransitoByCn(todasFilas.map((r) => r.cn));
+      stockTransitoByCn = buildStockTransitoCajasByCn(
+        transitoUnidades,
+        todasFilas.map((r) => ({ cn: r.cn, unidadesPorCaja: Number(r.unidades_por_caja) }))
+      );
+    } catch {
+      stockTransitoByCn = {};
+    }
+  }
+
+  for (const ubicacion of ubicaciones) {
+    await syncPropuestaUbicacionDesdeRecuento(area, importacionId, ubicacion, stockTransitoByCn);
+  }
+}
+
+export async function getRecuentoInactivosParaVisualizacion(
+  importacionId: number,
+  area: string,
+  ubicacion?: string | null
+) {
   await ensureNutricionDecimalSchema(area);
   const sql = getDb();
-  return (await sql`
+  const rows = (await sql`
     SELECT
       sr.cn, sr.stock_cajas,
-      m.nombre, m.principio_activo, m.unidades_por_caja,
+      m.nombre, m.principio_activo, m.unidades_por_caja, m.ubicacion,
       so.stock_minimo, so.punto_pedido, so.stock_maximo
     FROM stock_registros sr
     INNER JOIN medicamentos m ON m.cn = sr.cn AND m.area = ${area} AND m.activo = false
@@ -895,9 +1024,14 @@ export async function getRecuentoInactivosParaVisualizacion(importacionId: numbe
     ORDER BY m.principio_activo ASC NULLS LAST, m.nombre ASC;
   `) as Array<{
     cn: string; stock_cajas: string;
-    nombre: string; principio_activo: string | null; unidades_por_caja: number;
+    nombre: string; principio_activo: string | null; unidades_por_caja: number; ubicacion: string | null;
     stock_minimo: number | null; punto_pedido: number | null; stock_maximo: number | null;
   }>;
+
+  if (!ubicacion?.trim()) return rows;
+
+  const ubicacionKey = normalizeUbicacionKey(ubicacion);
+  return rows.filter((row) => normalizeUbicacionKey(row.ubicacion) === ubicacionKey);
 }
 
 function sortLineasPropuestaUI(a: PropuestaLineaUI, b: PropuestaLineaUI): number {
@@ -912,10 +1046,11 @@ export async function buildLineasPropuestaParaUi(
   importacionId: number,
   area: string,
   propuestaEstado: string,
-  stockTransitoByCn: Record<string, number>
+  stockTransitoByCn: Record<string, number>,
+  ubicacion?: string | null
 ): Promise<PropuestaLineaUI[]> {
   const activas = await getLineasPropuesta(propuestaId);
-  const inactivas = await getRecuentoInactivosParaVisualizacion(importacionId, area);
+  const inactivas = await getRecuentoInactivosParaVisualizacion(importacionId, area, ubicacion);
 
   const activasUi: PropuestaLineaUI[] = activas.map((linea) => ({
     ...linea,
@@ -998,12 +1133,13 @@ export async function reemplazarLineasPropuestaDesdeRecuento(
   propuestaId: number,
   importacionId: number,
   area: string,
-  stockTransitoByCn: Record<string, number>
+  stockTransitoByCn: Record<string, number>,
+  ubicacion?: string | null
 ): Promise<number> {
   await ensurePropuestasLineasSchema();
   await ensureNutricionDecimalSchema(area);
   const sql = getDb();
-  const filas = await getRecuentoConStockParaPropuesta(importacionId, area);
+  const filas = await getRecuentoConStockParaPropuesta(importacionId, area, ubicacion);
 
   await sql`DELETE FROM propuestas_lineas WHERE propuesta_id = ${propuestaId};`;
   if (filas.length === 0) return 0;
@@ -1190,28 +1326,19 @@ export async function tramitarPropuesta(
     WHERE id = ${propuestaId};
   `;
 
-  if (isAlmacenArea(area)) {
-    const pendientes = (await sql`
-      SELECT COUNT(*)::int AS n
-      FROM propuestas
-      WHERE importacion_stock_id = ${importacionStockId}
-        AND estado = 'borrador';
-    `) as Array<{ n: number }>;
-    if (num(pendientes[0]?.n) === 0) {
-      await sql`
-        UPDATE importaciones_stock
-        SET estado = 'generado', generado_en = now(), propuesta_id = ${propuestaId}
-        WHERE id = ${importacionStockId};
-      `;
-    }
-    return;
+  const pendientes = (await sql`
+    SELECT COUNT(*)::int AS n
+    FROM propuestas
+    WHERE importacion_stock_id = ${importacionStockId}
+      AND estado = 'borrador';
+  `) as Array<{ n: number }>;
+  if (num(pendientes[0]?.n) === 0) {
+    await sql`
+      UPDATE importaciones_stock
+      SET estado = 'generado', generado_en = now(), propuesta_id = ${propuestaId}
+      WHERE id = ${importacionStockId};
+    `;
   }
-
-  await sql`
-    UPDATE importaciones_stock
-    SET estado = 'generado', generado_en = now(), propuesta_id = ${propuestaId}
-    WHERE id = ${importacionStockId};
-  `;
 }
 
 export async function deshacerPropuesta(
@@ -1225,14 +1352,6 @@ export async function deshacerPropuesta(
     SET estado = 'borrador', tramitada_en = null, validada_en = null
     WHERE id = ${propuestaId};
   `;
-  if (isAlmacenArea(area)) {
-    await sql`
-      UPDATE importaciones_stock
-      SET estado = 'pendiente', generado_en = null, propuesta_id = null
-      WHERE id = ${importacionStockId};
-    `;
-    return;
-  }
   await sql`
     UPDATE importaciones_stock
     SET estado = 'pendiente', generado_en = null, propuesta_id = null

@@ -22,6 +22,7 @@ import {
   incorporarFaltantesRecuento,
   recalcularTotalLineasPedidoAlmacen,
   recalcularTotalLineasRecuento,
+  syncPropuestaUbicacionDesdeRecuento,
   upsertLineaRecuento,
 } from '@/lib/stock-propuesta-neon';
 
@@ -580,6 +581,8 @@ export async function POST(req: NextRequest) {
     }
 
     const totalLineas = await recalcularTotalLineasRecuento(importacionId);
+
+    await syncPropuestaUbicacionDesdeRecuento(area, importacionId, ubicacionSeleccionada);
 
     const res = NextResponse.json({
       ok: true,
