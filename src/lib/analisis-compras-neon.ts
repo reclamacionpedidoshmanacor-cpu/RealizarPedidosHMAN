@@ -12,17 +12,23 @@ function getDb() {
 
 export type VistaAnalisisCompras = 'global' | 'medicamento' | 'proveedor';
 
-export type SemanaPedidos = {
+export type SemanaRef = {
   semanaKey: string;
   label: string;
-  nPedidos: number;
+  lunesRef: string;
 };
 
-export type SemanaSap = {
-  semanaKey: string;
-  label: string;
+export type SemanaActividad = SemanaRef & {
+  nPropuestas: number;
+  nPedidosSap: number;
+  cajasSap: number;
+  cajasPropuesta: number;
+};
+
+export type SemanaSap = SemanaRef & {
   emitidos: number;
   recibidos: number;
+  cajasEmitidas: number;
 };
 
 export type TopMedicamentoCompras = {
@@ -30,6 +36,7 @@ export type TopMedicamentoCompras = {
   nombre: string;
   principioActivo: string;
   nPedidos: number;
+  nCajas: number;
   nRecibidos: number;
   nPendientes: number;
   nReclamados: number;
@@ -38,31 +45,23 @@ export type TopMedicamentoCompras = {
 export type TopProveedorCompras = {
   proveedor: string;
   nPedidos: number;
+  nCajas: number;
   nCnsDistintos: number;
   nReclamados: number;
 };
 
-export type PedidoSapDetalle = {
-  id: number;
-  documentoCompras: string;
-  posicion: string;
-  fechaDocumento: string;
-  recibidoAt: string | null;
-  leadTimeDias: number | null;
-  proveedorNombre: string | null;
-  cajas: number;
-  recibido: boolean;
-  anulado: boolean;
-  reclamado: boolean;
-  estadoRespuesta: string | null;
-};
-
-export type SemanaMedicamentoDetalle = {
-  semanaKey: string;
-  label: string;
-  nPedidos: number;
-  cajas: number;
-  pedidos: PedidoSapDetalle[];
+export type SemanaMedicamentoAnalisis = SemanaRef & {
+  nPedidosSap: number;
+  cajasPedidas: number;
+  tienePropuesta: boolean;
+  stockActual: number | null;
+  stockMinimo: number | null;
+  puntoPedido: number | null;
+  stockMaximo: number | null;
+  cajasPropuesta: number | null;
+  bajoMinimo: boolean;
+  enPuntoPedido: boolean;
+  superaMaximo: boolean;
 };
 
 export type IncidenciasMedicamento = {
@@ -74,17 +73,10 @@ export type IncidenciasMedicamento = {
   reclamaciones: number;
 };
 
-export type SemanaProveedorCn = {
-  cn: string;
-  nombre: string;
-  cajas: number;
+export type SemanaProveedorAnalisis = SemanaRef & {
   nPedidos: number;
-};
-
-export type SemanaProveedorDetalle = {
-  semanaKey: string;
-  label: string;
-  porCn: SemanaProveedorCn[];
+  cajas: number;
+  porCn: Array<{ cn: string; nombre: string; nPedidos: number; cajas: number }>;
 };
 
 export type AnalisisComprasDatos = {
@@ -96,25 +88,32 @@ export type AnalisisComprasDatos = {
     pedidosSapPendientes: number;
     pedidosReclamados: number;
     leadTimeMedianoDias: number | null;
+    cajasPedidas: number;
   };
-  semanalPropuestas: SemanaPedidos[];
+  semanalActividad: SemanaActividad[];
   semanalSap: SemanaSap[];
-  topMedicamentos: TopMedicamentoCompras[];
-  topProveedores: TopProveedorCompras[];
+  medicamentos: TopMedicamentoCompras[];
+  proveedores: TopProveedorCompras[];
   medicamentoDetalle?: {
     cn: string;
     nombre: string;
     principioActivo: string;
+    unidadesPorCaja: number;
+    stockMinimo: number;
+    puntoPedido: number;
+    stockMaximo: number | null;
     incidencias: IncidenciasMedicamento;
-    semanas: SemanaMedicamentoDetalle[];
+    semanas: SemanaMedicamentoAnalisis[];
     leadTimeMedianoDias: number | null;
     nPedidos: number;
+    nCajas: number;
   };
   proveedorDetalle?: {
     proveedor: string;
-    semanas: SemanaProveedorDetalle[];
-    topMedicamentos: Array<{ cn: string; nombre: string; nPedidos: number; cajas: number }>;
+    semanas: SemanaProveedorAnalisis[];
+    medicamentos: Array<{ cn: string; nombre: string; nPedidos: number; cajas: number }>;
     nPedidos: number;
+    nCajas: number;
     nReclamados: number;
     leadTimeMedianoDias: number | null;
   };
@@ -128,17 +127,55 @@ function toCn6(raw: string | null | undefined): string | null {
   return digits.padStart(6, '0');
 }
 
-function isoWeekKey(date: Date): { key: string; label: string } {
+function mondayOfDate(date: Date): Date {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() - day + 1);
+  return d;
+}
+
+function fmtLunesRef(monday: Date): string {
+  const y = monday.getUTCFullYear();
+  const m = String(monday.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(monday.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function fmtLabelSemana(monday: Date, week: number, year: number): string {
+  const d = String(monday.getUTCDate()).padStart(2, '0');
+  const m = String(monday.getUTCMonth() + 1).padStart(2, '0');
+  return `${d}/${m} (S${week})`;
+}
+
+function isoWeekKey(date: Date): SemanaRef {
   const tmp = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
   const day = tmp.getUTCDay() || 7;
   tmp.setUTCDate(tmp.getUTCDate() + 4 - day);
   const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
   const week = Math.ceil((((tmp.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
   const year = tmp.getUTCFullYear();
+  const monday = mondayOfDate(date);
+  const lunesRef = fmtLunesRef(monday);
   return {
-    key: `${year}-W${String(week).padStart(2, '0')}`,
-    label: `S${week} ${year}`,
+    semanaKey: `${year}-W${String(week).padStart(2, '0')}`,
+    label: fmtLabelSemana(monday, week, year),
+    lunesRef,
   };
+}
+
+function semanaRefFromKey(semanaKey: string): SemanaRef {
+  const m = semanaKey.match(/^(\d{4})-W(\d{2})$/);
+  if (!m) return { semanaKey, label: semanaKey, lunesRef: '' };
+  const year = Number(m[1]);
+  const week = Number(m[2]);
+  const jan4 = new Date(Date.UTC(year, 0, 4));
+  const jan4Day = jan4.getUTCDay() || 7;
+  const mondayWeek1 = new Date(jan4);
+  mondayWeek1.setUTCDate(jan4.getUTCDate() - jan4Day + 1);
+  const monday = new Date(mondayWeek1);
+  monday.setUTCDate(mondayWeek1.getUTCDate() + (week - 1) * 7);
+  const lunesRef = fmtLunesRef(monday);
+  return { semanaKey, label: fmtLabelSemana(monday, week, year), lunesRef };
 }
 
 function parseDateOnly(value: string): Date | null {
@@ -163,7 +200,15 @@ function median(values: number[]): number | null {
     : sorted[mid]!;
 }
 
-type CatalogoMed = { cn: string; nombre: string; principioActivo: string; unidadesPorCaja: number };
+type CatalogoMed = {
+  cn: string;
+  nombre: string;
+  principioActivo: string;
+  unidadesPorCaja: number;
+  stockMinimo: number;
+  puntoPedido: number;
+  stockMaximo: number | null;
+};
 
 async function loadCatalogoUpe(area: string): Promise<{ cns: string[]; byCn: Map<string, CatalogoMed> }> {
   const rows = await listMedicamentosByArea(area);
@@ -176,6 +221,9 @@ async function loadCatalogoUpe(area: string): Promise<{ cns: string[]; byCn: Map
       nombre: med.nombre,
       principioActivo: med.principioActivo ?? '',
       unidadesPorCaja: Number(med.unidadesPorCaja) > 0 ? Number(med.unidadesPorCaja) : 1,
+      stockMinimo: Number(med.stockMinimo ?? 0),
+      puntoPedido: Number(med.puntoPedido ?? 0),
+      stockMaximo: med.stockMaximo != null ? Number(med.stockMaximo) : null,
     });
   }
   return { cns: [...byCn.keys()], byCn };
@@ -185,6 +233,24 @@ function unidadesACajas(unidades: number, unidadesPorCaja: number): number {
   if (!Number.isFinite(unidades) || unidades <= 0) return 0;
   const upc = unidadesPorCaja > 0 ? unidadesPorCaja : 1;
   return Math.round((unidades / upc) * 10) / 10;
+}
+
+function sapUds(row: SapRow): number {
+  const uds = Number(row.cantidad_pedido ?? 0);
+  return Number.isFinite(uds) && uds > 0 ? uds : 0;
+}
+
+/** SAP guarda cantidad_pedido en uds; el análisis se expresa en cajas. */
+function sapCajas(row: SapRow, unidadesPorCaja: number): number {
+  return unidadesACajas(sapUds(row), unidadesPorCaja);
+}
+
+function roundCajas(n: number): number {
+  return Math.round(n * 10) / 10;
+}
+
+function propuestaCajas(pl: PropuestaLineaRow): number {
+  return roundCajas(Number(pl.cajas_final));
 }
 
 type SapRow = {
@@ -201,6 +267,18 @@ type SapRow = {
   reclamado: boolean;
   en_falta: boolean;
   estado_respuesta: string | null;
+};
+
+type PropuestaLineaRow = {
+  tramitada_en: string;
+  cn: string;
+  stock_actual: string;
+  stock_minimo_snap: number;
+  punto_pedido_snap: number;
+  stock_maximo_snap: number;
+  cajas_final: number;
+  unidades_por_caja: number;
+  unidades_final: number | null;
 };
 
 async function loadPedidosSapRango(
@@ -239,82 +317,108 @@ async function loadPedidosSapRango(
   `) as SapRow[];
 }
 
-async function loadPropuestasTramitadasSemanal(
+async function loadPropuestasLineasTramitadas(
   area: string,
   desde: string,
   hasta: string
-): Promise<SemanaPedidos[]> {
+): Promise<PropuestaLineaRow[]> {
   const sql = getDb();
-  const rows = (await sql`
-    SELECT tramitada_en::text AS tramitada_en
-    FROM propuestas
-    WHERE area = ${area}
-      AND estado = 'tramitada'
-      AND tramitada_en IS NOT NULL
-      AND tramitada_en::date >= ${desde}::date
-      AND tramitada_en::date <= ${hasta}::date
-    ORDER BY tramitada_en ASC;
-  `) as Array<{ tramitada_en: string }>;
+  return (await sql`
+    SELECT
+      p.tramitada_en::text AS tramitada_en,
+      pl.cn,
+      pl.stock_actual::text AS stock_actual,
+      pl.stock_minimo_snap,
+      pl.punto_pedido_snap,
+      pl.stock_maximo_snap,
+      COALESCE(pl.cajas_validadas, pl.cajas_propuestas)::numeric AS cajas_final,
+      pl.unidades_por_caja,
+      pl.unidades_final
+    FROM propuestas p
+    INNER JOIN propuestas_lineas pl ON pl.propuesta_id = p.id
+    WHERE p.area = ${area}
+      AND p.estado = 'tramitada'
+      AND p.tramitada_en IS NOT NULL
+      AND p.tramitada_en::date >= ${desde}::date
+      AND p.tramitada_en::date <= ${hasta}::date
+      AND COALESCE(pl.cajas_validadas, pl.cajas_propuestas) > 0
+    ORDER BY p.tramitada_en ASC;
+  `) as PropuestaLineaRow[];
+}
 
-  const map = new Map<string, SemanaPedidos>();
-  for (const row of rows) {
-    const d = parseDateOnly(row.tramitada_en);
-    if (!d) continue;
-    const { key, label } = isoWeekKey(d);
-    const prev = map.get(key);
-    if (prev) prev.nPedidos += 1;
-    else map.set(key, { semanaKey: key, label, nPedidos: 1 });
+function buildSemanalActividad(
+  sapRows: SapRow[],
+  propLineas: PropuestaLineaRow[],
+  byCn: Map<string, CatalogoMed>,
+  desde: string,
+  hasta: string
+): SemanaActividad[] {
+  const map = new Map<string, SemanaActividad>();
+  const propuestasPorSemana = new Set<string>();
+
+  for (const row of sapRows) {
+    if (row.anulado || !byCn.has(row.cn6)) continue;
+    if (row.fecha_documento < desde || row.fecha_documento > hasta) continue;
+    const fd = parseDateOnly(row.fecha_documento);
+    if (!fd) continue;
+    const { semanaKey, label, lunesRef } = isoWeekKey(fd);
+    const med = byCn.get(row.cn6);
+    if (!med) continue;
+    const cajas = sapCajas(row, med.unidadesPorCaja);
+    let bucket = map.get(semanaKey);
+    if (!bucket) {
+      bucket = { semanaKey, label, lunesRef, nPropuestas: 0, nPedidosSap: 0, cajasSap: 0, cajasPropuesta: 0 };
+      map.set(semanaKey, bucket);
+    }
+    bucket.nPedidosSap += 1;
+    bucket.cajasSap = roundCajas(bucket.cajasSap + cajas);
   }
+
+  for (const pl of propLineas) {
+    const d = parseDateOnly(pl.tramitada_en);
+    if (!d) continue;
+    const { semanaKey, label, lunesRef } = isoWeekKey(d);
+    let bucket = map.get(semanaKey);
+    if (!bucket) {
+      bucket = { semanaKey, label, lunesRef, nPropuestas: 0, nPedidosSap: 0, cajasSap: 0, cajasPropuesta: 0 };
+      map.set(semanaKey, bucket);
+    }
+    bucket.cajasPropuesta = roundCajas(bucket.cajasPropuesta + propuestaCajas(pl));
+    if (!propuestasPorSemana.has(`${semanaKey}:${pl.tramitada_en.slice(0, 10)}`)) {
+      propuestasPorSemana.add(`${semanaKey}:${pl.tramitada_en.slice(0, 10)}`);
+      bucket.nPropuestas += 1;
+    }
+  }
+
   return [...map.values()].sort((a, b) => a.semanaKey.localeCompare(b.semanaKey));
 }
 
-function mapSapToDetalle(row: SapRow, byCn: Map<string, CatalogoMed>): PedidoSapDetalle {
-  const med = byCn.get(row.cn6);
-  const unidades = Number(row.cantidad_pedido ?? 0);
-  const cajas = unidadesACajas(unidades, med?.unidadesPorCaja ?? 1);
-  const recibidoAt = row.recibido_at?.slice(0, 10) ?? null;
-  const leadTimeDias =
-    row.recibido && recibidoAt
-      ? daysBetween(row.fecha_documento, recibidoAt)
-      : null;
-
-  return {
-    id: row.id,
-    documentoCompras: row.documento_compras,
-    posicion: row.posicion,
-    fechaDocumento: row.fecha_documento,
-    recibidoAt,
-    leadTimeDias,
-    proveedorNombre: row.proveedor_nombre,
-    cajas,
-    recibido: row.recibido,
-    anulado: row.anulado,
-    reclamado: row.reclamado,
-    estadoRespuesta: row.estado_respuesta,
-  };
-}
-
-function buildSemanalSap(rows: SapRow[], desde: string, hasta: string): SemanaSap[] {
+function buildSemanalSap(rows: SapRow[], byCn: Map<string, CatalogoMed>, desde: string, hasta: string): SemanaSap[] {
   const emitMap = new Map<string, SemanaSap>();
   const recMap = new Map<string, number>();
 
   for (const row of rows) {
-    if (row.anulado) continue;
+    if (row.anulado || !byCn.has(row.cn6)) continue;
 
     const fd = parseDateOnly(row.fecha_documento);
     if (fd && row.fecha_documento >= desde && row.fecha_documento <= hasta) {
-      const { key, label } = isoWeekKey(fd);
-      const prev = emitMap.get(key);
-      if (prev) prev.emitidos += 1;
-      else emitMap.set(key, { semanaKey: key, label, emitidos: 1, recibidos: 0 });
+      const { semanaKey, label, lunesRef } = isoWeekKey(fd);
+      const prev = emitMap.get(semanaKey);
+      const cajas = sapCajas(row, byCn.get(row.cn6)!.unidadesPorCaja);
+      if (prev) {
+        prev.emitidos += 1;
+        prev.cajasEmitidas = roundCajas(prev.cajasEmitidas + cajas);
+      } else {
+        emitMap.set(semanaKey, { semanaKey, label, lunesRef, emitidos: 1, recibidos: 0, cajasEmitidas: cajas });
+      }
     }
 
     if (row.recibido && row.recibido_at) {
       const rd = parseDateOnly(row.recibido_at);
       const recDate = row.recibido_at.slice(0, 10);
       if (rd && recDate >= desde && recDate <= hasta) {
-        const { key } = isoWeekKey(rd);
-        recMap.set(key, (recMap.get(key) ?? 0) + 1);
+        const { semanaKey } = isoWeekKey(rd);
+        recMap.set(semanaKey, (recMap.get(semanaKey) ?? 0) + 1);
       }
     }
   }
@@ -323,24 +427,27 @@ function buildSemanalSap(rows: SapRow[], desde: string, hasta: string): SemanaSa
     const existing = emitMap.get(key);
     if (existing) existing.recibidos = n;
     else {
-      const d = key.match(/^(\d{4})-W(\d{2})$/);
-      const label = d ? `S${Number(d[2])} ${d[1]}` : key;
-      emitMap.set(key, { semanaKey: key, label, emitidos: 0, recibidos: n });
+      const ref = semanaRefFromKey(key);
+      emitMap.set(key, { ...ref, emitidos: 0, recibidos: n, cajasEmitidas: 0 });
     }
   }
 
   return [...emitMap.values()].sort((a, b) => a.semanaKey.localeCompare(b.semanaKey));
 }
 
-function buildTopMedicamentos(
+function buildMedicamentos(
   rows: SapRow[],
-  byCn: Map<string, CatalogoMed>
+  byCn: Map<string, CatalogoMed>,
+  desde: string,
+  hasta: string
 ): TopMedicamentoCompras[] {
   const map = new Map<string, TopMedicamentoCompras>();
   for (const row of rows) {
     if (row.anulado) continue;
+    if (row.fecha_documento < desde || row.fecha_documento > hasta) continue;
     const med = byCn.get(row.cn6);
     if (!med) continue;
+    const cajas = sapCajas(row, med.unidadesPorCaja);
     let item = map.get(row.cn6);
     if (!item) {
       item = {
@@ -348,6 +455,7 @@ function buildTopMedicamentos(
         nombre: med.nombre,
         principioActivo: med.principioActivo,
         nPedidos: 0,
+        nCajas: 0,
         nRecibidos: 0,
         nPendientes: 0,
         nReclamados: 0,
@@ -355,34 +463,36 @@ function buildTopMedicamentos(
       map.set(row.cn6, item);
     }
     item.nPedidos += 1;
+    item.nCajas = roundCajas(item.nCajas + cajas);
     if (row.recibido) item.nRecibidos += 1;
     else item.nPendientes += 1;
     if (row.reclamado) item.nReclamados += 1;
   }
-  return [...map.values()]
-    .sort((a, b) => b.nPedidos - a.nPedidos || a.cn.localeCompare(b.cn))
-    .slice(0, 10);
+  return [...map.values()].sort((a, b) => b.nPedidos - a.nPedidos || a.cn.localeCompare(b.cn));
 }
 
-function buildTopProveedores(rows: SapRow[], byCn: Map<string, CatalogoMed>): TopProveedorCompras[] {
+function buildProveedores(rows: SapRow[], byCn: Map<string, CatalogoMed>, desde: string, hasta: string): TopProveedorCompras[] {
   const map = new Map<string, TopProveedorCompras & { cns: Set<string> }>();
   for (const row of rows) {
     if (row.anulado) continue;
+    if (row.fecha_documento < desde || row.fecha_documento > hasta) continue;
     if (!byCn.has(row.cn6)) continue;
+    const med = byCn.get(row.cn6)!;
     const proveedor = (row.proveedor_nombre ?? 'Sin proveedor').trim() || 'Sin proveedor';
+    const cajas = sapCajas(row, med.unidadesPorCaja);
     let item = map.get(proveedor);
     if (!item) {
-      item = { proveedor, nPedidos: 0, nCnsDistintos: 0, nReclamados: 0, cns: new Set() };
+      item = { proveedor, nPedidos: 0, nCajas: 0, nCnsDistintos: 0, nReclamados: 0, cns: new Set() };
       map.set(proveedor, item);
     }
     item.nPedidos += 1;
+    item.nCajas = roundCajas(item.nCajas + cajas);
     item.cns.add(row.cn6);
     if (row.reclamado) item.nReclamados += 1;
   }
   return [...map.values()]
     .map(({ cns, ...rest }) => ({ ...rest, nCnsDistintos: cns.size }))
-    .sort((a, b) => b.nPedidos - a.nPedidos || a.proveedor.localeCompare(b.proveedor))
-    .slice(0, 10);
+    .sort((a, b) => b.nPedidos - a.nPedidos || a.proveedor.localeCompare(b.proveedor));
 }
 
 async function buildIncidenciasMedicamento(
@@ -420,6 +530,7 @@ async function buildIncidenciasMedicamento(
 function buildMedicamentoDetalle(
   cn: string,
   rows: SapRow[],
+  propLineas: PropuestaLineaRow[],
   byCn: Map<string, CatalogoMed>,
   desde: string,
   hasta: string
@@ -427,37 +538,112 @@ function buildMedicamentoDetalle(
   const med = byCn.get(cn);
   if (!med) return undefined;
 
-  const cnRows = rows.filter((r) => r.cn6 === cn && !r.anulado);
-  const pedidos = cnRows
-    .filter((r) => r.fecha_documento >= desde && r.fecha_documento <= hasta)
-    .map((r) => mapSapToDetalle(r, byCn));
+  const upc = med.unidadesPorCaja;
+  const stockMinimo = med.stockMinimo;
+  const puntoPedido = med.puntoPedido;
+  const stockMaximo = med.stockMaximo;
 
-  const weekMap = new Map<string, SemanaMedicamentoDetalle>();
-  for (const p of pedidos) {
-    const d = parseDateOnly(p.fechaDocumento);
-    if (!d) continue;
-    const { key, label } = isoWeekKey(d);
-    let bucket = weekMap.get(key);
-    if (!bucket) {
-      bucket = { semanaKey: key, label, nPedidos: 0, cajas: 0, pedidos: [] };
-      weekMap.set(key, bucket);
+  const cnRows = rows.filter(
+    (r) => r.cn6 === cn && !r.anulado && r.fecha_documento >= desde && r.fecha_documento <= hasta
+  );
+
+  const weekMap = new Map<string, SemanaMedicamentoAnalisis>();
+  let totalCajas = 0;
+  const leadTimes: number[] = [];
+
+  for (const row of cnRows) {
+    const fd = parseDateOnly(row.fecha_documento);
+    if (!fd) continue;
+    const { semanaKey, label, lunesRef } = isoWeekKey(fd);
+    const cajas = sapCajas(row, upc);
+    totalCajas = roundCajas(totalCajas + cajas);
+
+    if (row.recibido && row.recibido_at) {
+      const lt = daysBetween(row.fecha_documento, row.recibido_at.slice(0, 10));
+      if (lt != null && lt >= 0) leadTimes.push(lt);
     }
-    bucket.nPedidos += 1;
-    bucket.cajas += p.cajas;
-    bucket.pedidos.push(p);
+
+    let bucket = weekMap.get(semanaKey);
+    if (!bucket) {
+      bucket = {
+        semanaKey,
+        label,
+        lunesRef,
+        nPedidosSap: 0,
+        cajasPedidas: 0,
+        tienePropuesta: false,
+        stockActual: null,
+        stockMinimo: null,
+        puntoPedido: null,
+        stockMaximo: null,
+        cajasPropuesta: null,
+        bajoMinimo: false,
+        enPuntoPedido: false,
+        superaMaximo: false,
+      };
+      weekMap.set(semanaKey, bucket);
+    }
+    bucket.nPedidosSap += 1;
+    bucket.cajasPedidas = roundCajas(bucket.cajasPedidas + cajas);
   }
 
-  const leadTimes = pedidos
-    .map((p) => p.leadTimeDias)
-    .filter((v): v is number => v != null && v >= 0);
+  const cnPropLineas = propLineas.filter((pl) => toCn6(pl.cn) === cn);
+  for (const pl of cnPropLineas) {
+    const d = parseDateOnly(pl.tramitada_en);
+    if (!d) continue;
+    const { semanaKey, label, lunesRef } = isoWeekKey(d);
+    const cajasProp = propuestaCajas(pl);
+    const stockActual = roundCajas(Number(pl.stock_actual));
+    const minCajas = roundCajas(Number(pl.stock_minimo_snap));
+    const ppCajas = roundCajas(Number(pl.punto_pedido_snap));
+    const maxCajas = roundCajas(Number(pl.stock_maximo_snap));
+
+    let bucket = weekMap.get(semanaKey);
+    if (!bucket) {
+      bucket = {
+        semanaKey,
+        label,
+        lunesRef,
+        nPedidosSap: 0,
+        cajasPedidas: 0,
+        tienePropuesta: false,
+        stockActual: null,
+        stockMinimo: null,
+        puntoPedido: null,
+        stockMaximo: null,
+        cajasPropuesta: null,
+        bajoMinimo: false,
+        enPuntoPedido: false,
+        superaMaximo: false,
+      };
+      weekMap.set(semanaKey, bucket);
+    }
+
+    bucket.tienePropuesta = true;
+    bucket.stockActual = stockActual;
+    bucket.stockMinimo = minCajas;
+    bucket.puntoPedido = ppCajas;
+    bucket.stockMaximo = maxCajas;
+    bucket.cajasPropuesta = roundCajas((bucket.cajasPropuesta ?? 0) + cajasProp);
+    bucket.bajoMinimo = stockActual <= minCajas;
+    bucket.enPuntoPedido = stockActual <= ppCajas;
+    bucket.superaMaximo = maxCajas > 0 && stockActual + cajasProp > maxCajas;
+  }
+
+  const semanas = [...weekMap.values()].sort((a, b) => a.semanaKey.localeCompare(b.semanaKey));
 
   return {
     cn,
     nombre: med.nombre,
     principioActivo: med.principioActivo,
-    semanas: [...weekMap.values()].sort((a, b) => a.semanaKey.localeCompare(b.semanaKey)),
+    unidadesPorCaja: upc,
+    stockMinimo,
+    puntoPedido,
+    stockMaximo,
+    semanas,
     leadTimeMedianoDias: median(leadTimes),
-    nPedidos: pedidos.length,
+    nPedidos: cnRows.length,
+    nCajas: totalCajas,
   };
 }
 
@@ -476,32 +662,35 @@ function buildProveedorDetalle(
     return name === provNorm;
   });
 
-  const weekMap = new Map<string, Map<string, SemanaProveedorCn>>();
+  const weekMap = new Map<string, SemanaProveedorAnalisis>();
   const medTotals = new Map<string, { cn: string; nombre: string; nPedidos: number; cajas: number }>();
+  let totalCajas = 0;
 
   for (const row of provRows) {
     if (row.fecha_documento < desde || row.fecha_documento > hasta) continue;
     const med = byCn.get(row.cn6)!;
-    const det = mapSapToDetalle(row, byCn);
+    const cajas = sapCajas(row, med.unidadesPorCaja);
+    totalCajas = roundCajas(totalCajas + cajas);
 
     const fd = parseDateOnly(row.fecha_documento);
     if (!fd) continue;
-    const { key, label } = isoWeekKey(fd);
+    const { semanaKey, label, lunesRef } = isoWeekKey(fd);
 
-    let cnMap = weekMap.get(key);
-    if (!cnMap) {
-      cnMap = new Map();
-      weekMap.set(key, cnMap);
+    let week = weekMap.get(semanaKey);
+    if (!week) {
+      week = { semanaKey, label, lunesRef, nPedidos: 0, cajas: 0, porCn: [] };
+      weekMap.set(semanaKey, week);
     }
-    const cnEntry = cnMap.get(row.cn6) ?? {
-      cn: row.cn6,
-      nombre: med.nombre,
-      cajas: 0,
-      nPedidos: 0,
-    };
-    cnEntry.nPedidos += 1;
-    cnEntry.cajas += det.cajas;
-    cnMap.set(row.cn6, cnEntry);
+    week.nPedidos += 1;
+    week.cajas = roundCajas(week.cajas + cajas);
+
+    const cnIdx = week.porCn.findIndex((c) => c.cn === row.cn6);
+    if (cnIdx >= 0) {
+      week.porCn[cnIdx]!.nPedidos += 1;
+      week.porCn[cnIdx]!.cajas = roundCajas(week.porCn[cnIdx]!.cajas + cajas);
+    } else {
+      week.porCn.push({ cn: row.cn6, nombre: med.nombre, nPedidos: 1, cajas });
+    }
 
     const mt = medTotals.get(row.cn6) ?? {
       cn: row.cn6,
@@ -510,38 +699,58 @@ function buildProveedorDetalle(
       cajas: 0,
     };
     mt.nPedidos += 1;
-    mt.cajas += det.cajas;
+    mt.cajas = roundCajas(mt.cajas + cajas);
     medTotals.set(row.cn6, mt);
   }
 
-  const semanas: SemanaProveedorDetalle[] = [...weekMap.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([semanaKey, cnMap]) => {
-      const first = [...cnMap.values()][0];
-      const d = semanaKey.match(/^(\d{4})-W(\d{2})$/);
-      const label = d ? `S${Number(d[2])} ${d[1]}` : semanaKey;
-      return {
-        semanaKey,
-        label,
-        porCn: [...cnMap.values()].sort((a, b) => b.cajas - a.cajas || a.cn.localeCompare(b.cn)),
-      };
-    });
+  const semanas = [...weekMap.values()]
+    .sort((a, b) => a.semanaKey.localeCompare(b.semanaKey))
+    .map((w) => ({
+      ...w,
+      porCn: [...w.porCn].sort((a, b) => b.cajas - a.cajas || a.cn.localeCompare(b.cn)),
+    }));
 
   const leadTimes = provRows
     .filter((r) => r.recibido && r.recibido_at)
     .map((r) => daysBetween(r.fecha_documento, r.recibido_at!.slice(0, 10)))
     .filter((v): v is number => v != null && v >= 0);
 
+  const enRango = provRows.filter((r) => r.fecha_documento >= desde && r.fecha_documento <= hasta);
+
   return {
     proveedor,
     semanas,
-    topMedicamentos: [...medTotals.values()]
-      .sort((a, b) => b.nPedidos - a.nPedidos)
-      .slice(0, 10),
-    nPedidos: provRows.filter((r) => r.fecha_documento >= desde && r.fecha_documento <= hasta).length,
+    medicamentos: [...medTotals.values()].sort((a, b) => b.cajas - a.cajas || a.cn.localeCompare(b.cn)),
+    nPedidos: enRango.length,
+    nCajas: totalCajas,
     nReclamados: provRows.filter((r) => r.reclamado).length,
     leadTimeMedianoDias: median(leadTimes),
   };
+}
+
+function mergeMedicamentosConPropuestas(
+  meds: TopMedicamentoCompras[],
+  propLineas: PropuestaLineaRow[],
+  byCn: Map<string, CatalogoMed>
+): TopMedicamentoCompras[] {
+  const map = new Map(meds.map((m) => [m.cn, m]));
+  for (const pl of propLineas) {
+    const cn = toCn6(pl.cn);
+    if (!cn || map.has(cn)) continue;
+    const med = byCn.get(cn);
+    if (!med) continue;
+    map.set(cn, {
+      cn,
+      nombre: med.nombre,
+      principioActivo: med.principioActivo,
+      nPedidos: 0,
+      nCajas: propuestaCajas(pl),
+      nRecibidos: 0,
+      nPendientes: 0,
+      nReclamados: 0,
+    });
+  }
+  return [...map.values()].sort((a, b) => b.nPedidos - a.nPedidos || b.nCajas - a.nCajas || a.cn.localeCompare(b.cn));
 }
 
 export async function getAnalisisComprasDatos(
@@ -553,8 +762,8 @@ export async function getAnalisisComprasDatos(
   proveedorFiltro?: string | null
 ): Promise<AnalisisComprasDatos> {
   const { cns, byCn } = await loadCatalogoUpe(area);
-  const [semanalPropuestas, sapRows] = await Promise.all([
-    loadPropuestasTramitadasSemanal(area, desde, hasta),
+  const [propLineas, sapRows] = await Promise.all([
+    loadPropuestasLineasTramitadas(area, desde, hasta),
     loadPedidosSapRango(cns, desde, hasta),
   ]);
 
@@ -570,6 +779,11 @@ export async function getAnalisisComprasDatos(
     .filter((r) => r.recibido_at)
     .map((r) => daysBetween(r.fecha_documento, r.recibido_at!.slice(0, 10)))
     .filter((v): v is number => v != null && v >= 0);
+
+  const cajasPedidas = enRangoEmit.reduce(
+    (acc, r) => acc + sapCajas(r, byCn.get(r.cn6)!.unidadesPorCaja),
+    0
+  );
 
   const sql = getDb();
   const propCountRows = (await sql`
@@ -593,16 +807,21 @@ export async function getAnalisisComprasDatos(
       pedidosSapPendientes: pendientes.length,
       pedidosReclamados: reclamados.length,
       leadTimeMedianoDias: median(leadTimes),
+      cajasPedidas: roundCajas(cajasPedidas),
     },
-    semanalPropuestas,
-    semanalSap: buildSemanalSap(sapRows, desde, hasta),
-    topMedicamentos: buildTopMedicamentos(sapRows, byCn),
-    topProveedores: buildTopProveedores(sapRows, byCn),
+    semanalActividad: buildSemanalActividad(sapRows, propLineas, byCn, desde, hasta),
+    semanalSap: buildSemanalSap(sapRows, byCn, desde, hasta),
+    medicamentos: mergeMedicamentosConPropuestas(
+      buildMedicamentos(sapRows, byCn, desde, hasta),
+      propLineas,
+      byCn
+    ),
+    proveedores: buildProveedores(sapRows, byCn, desde, hasta),
   };
 
   const cn = toCn6(cnFiltro);
   if (vista === 'medicamento' && cn && byCn.has(cn)) {
-    const detalle = buildMedicamentoDetalle(cn, sapRows, byCn, desde, hasta);
+    const detalle = buildMedicamentoDetalle(cn, sapRows, propLineas, byCn, desde, hasta);
     if (detalle) {
       base.medicamentoDetalle = {
         ...detalle,
