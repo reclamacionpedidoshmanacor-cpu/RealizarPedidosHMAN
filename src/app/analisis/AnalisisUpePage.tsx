@@ -202,7 +202,7 @@ export default function AnalisisUpePage() {
           <div>
             <h1 className="text-xl font-bold text-slate-800">Análisis de compras</h1>
             <p className="text-xs text-slate-500 mt-0.5">
-              Pacientes Externos · cantidades en cajas (SAP en uds, convertidas con uds/caja)
+              Pacientes Externos · cajas (uds SAP convertidas; cantidad recibida / por entregar)
             </p>
           </div>
           <button
@@ -287,11 +287,12 @@ export default function AnalisisUpePage() {
 
       {datos && vista === 'global' && (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-8 gap-3">
             {[
               { label: 'Propuestas tramitadas', value: datos.kpis.propuestasTramitadas },
               { label: 'Pedidos SAP emitidos', value: datos.kpis.pedidosSapEmitidos },
-              { label: 'Cajas pedidas (SAP)', value: datos.kpis.cajasPedidas },
+              { label: 'Cajas emitidas', value: datos.kpis.cajasPedidas },
+              { label: 'Cajas recibidas', value: datos.kpis.cajasRecibidas },
               { label: 'Pedidos recibidos', value: datos.kpis.pedidosSapRecibidos },
               { label: 'Pedidos pendientes', value: datos.kpis.pedidosSapPendientes },
               { label: 'Con reclamación', value: datos.kpis.pedidosReclamados },
@@ -346,6 +347,7 @@ export default function AnalisisUpePage() {
                     <Bar yAxisId="left" dataKey="emitidos" name="Emitidos" fill="#0369a1" radius={[4, 4, 0, 0]} />
                     <Line yAxisId="left" type="monotone" dataKey="recibidos" name="Recibidos" stroke="#7c3aed" strokeWidth={2} dot={false} />
                     <Line yAxisId="right" type="monotone" dataKey="cajasEmitidas" name="Cajas emitidas" stroke="#0d9488" strokeWidth={2} dot={false} />
+                    <Line yAxisId="right" type="monotone" dataKey="cajasRecibidas" name="Cajas recibidas" stroke="#ea580c" strokeWidth={2} dot={false} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
@@ -373,6 +375,8 @@ export default function AnalisisUpePage() {
                       <th className="px-3 py-2 text-left">Medicamento</th>
                       <th className="px-3 py-2 text-center">Pedidos</th>
                       <th className="px-3 py-2 text-center">Cajas</th>
+                      <th className="px-3 py-2 text-center">Recl.</th>
+                      <th className="px-3 py-2 text-left">Alerta</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -391,6 +395,16 @@ export default function AnalisisUpePage() {
                         </td>
                         <td className="px-3 py-2 text-center tabular-nums">{m.nPedidos}</td>
                         <td className="px-3 py-2 text-center tabular-nums">{m.nCajas}</td>
+                        <td className="px-3 py-2 text-center tabular-nums">{m.nReclamados || '—'}</td>
+                        <td className="px-3 py-2 text-xs text-slate-600">
+                          {m.alerta ? (
+                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800" title={m.alerta.detalle ?? undefined}>
+                              {m.alerta.etiqueta}
+                            </span>
+                          ) : (
+                            '—'
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -409,6 +423,8 @@ export default function AnalisisUpePage() {
                       <th className="px-3 py-2 text-left">Proveedor</th>
                       <th className="px-3 py-2 text-center">Pedidos</th>
                       <th className="px-3 py-2 text-center">Cajas</th>
+                      <th className="px-3 py-2 text-center">Recl.</th>
+                      <th className="px-3 py-2 text-left">Alerta</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -424,6 +440,19 @@ export default function AnalisisUpePage() {
                         <td className="px-3 py-2 font-medium text-slate-800">{p.proveedor}</td>
                         <td className="px-3 py-2 text-center tabular-nums">{p.nPedidos}</td>
                         <td className="px-3 py-2 text-center tabular-nums">{p.nCajas}</td>
+                        <td className="px-3 py-2 text-center tabular-nums">{p.nReclamados || '—'}</td>
+                        <td className="px-3 py-2 text-xs text-slate-600">
+                          {p.nCnsConAlerta > 0 ? (
+                            <span
+                              className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800"
+                              title={p.alertasResumen.join(' · ')}
+                            >
+                              {p.nCnsConAlerta} CN
+                            </span>
+                          ) : (
+                            '—'
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

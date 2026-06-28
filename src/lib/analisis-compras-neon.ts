@@ -2,7 +2,8 @@ import { neon } from '@neondatabase/serverless';
 import 'server-only';
 import { listMedicamentosByArea } from '@/lib/catalogo-neon';
 import { loadAlertasSuministroPorCnsSafe } from '@/lib/alertas-suministro';
-import { getPedidosReadonlyClient } from '@/lib/pedidos-pendientes';
+import { cantidadUdsDesdePedido, getPedidosReadonlyClient } from '@/lib/pedidos-pendientes';
+import type { AlertaSuministroCn } from '@/lib/pedidos-pendientes';
 
 function getDb() {
   const url = process.env.REALIZAR_PEDIDOS_DATABASE_URL ?? process.env.DATABASE_URL;
@@ -29,6 +30,7 @@ export type SemanaSap = SemanaRef & {
   emitidos: number;
   recibidos: number;
   cajasEmitidas: number;
+  cajasRecibidas: number;
 };
 
 export type TopMedicamentoCompras = {
@@ -40,6 +42,7 @@ export type TopMedicamentoCompras = {
   nRecibidos: number;
   nPendientes: number;
   nReclamados: number;
+  alerta: AlertaSuministroCn | null;
 };
 
 export type TopProveedorCompras = {
@@ -48,6 +51,8 @@ export type TopProveedorCompras = {
   nCajas: number;
   nCnsDistintos: number;
   nReclamados: number;
+  nCnsConAlerta: number;
+  alertasResumen: string[];
 };
 
 export type SemanaMedicamentoAnalisis = SemanaRef & {
@@ -89,6 +94,7 @@ export type AnalisisComprasDatos = {
     pedidosReclamados: number;
     leadTimeMedianoDias: number | null;
     cajasPedidas: number;
+    cajasRecibidas: number;
   };
   semanalActividad: SemanaActividad[];
   semanalSap: SemanaSap[];
@@ -236,8 +242,7 @@ function unidadesACajas(unidades: number, unidadesPorCaja: number): number {
 }
 
 function sapUds(row: SapRow): number {
-  const uds = Number(row.cantidad_pedido ?? 0);
-  return Number.isFinite(uds) && uds > 0 ? uds : 0;
+  return cantidadUdsDesdePedido(row);
 }
 
 /** SAP guarda cantidad_pedido en uds; el análisis se expresa en cajas. */
@@ -261,6 +266,8 @@ type SapRow = {
   fecha_documento: string;
   recibido_at: string | null;
   proveedor_nombre: string | null;
+  por_entregar_cantidad: string | null;
+  cantidad_recibida: string | null;
   cantidad_pedido: string | null;
   recibido: boolean;
   anulado: boolean;
@@ -297,6 +304,8 @@ async function loadPedidosSapRango(
       o.fecha_documento::text AS fecha_documento,
       o.recibido_at::text AS recibido_at,
       o.proveedor_nombre,
+      o.por_entregar_cantidad::text AS por_entregar_cantidad,
+      o.cantidad_recibida::text AS cantidad_recibida,
       o.cantidad_pedido::text AS cantidad_pedido,
       o.recibido,
       o.anulado,
@@ -395,21 +404,22 @@ function buildSemanalActividad(
 
 function buildSemanalSap(rows: SapRow[], byCn: Map<string, CatalogoMed>, desde: string, hasta: string): SemanaSap[] {
   const emitMap = new Map<string, SemanaSap>();
-  const recMap = new Map<string, number>();
+  const recMap = new Map<string, { n: number; cajas: number }>();
 
   for (const row of rows) {
     if (row.anulado || !byCn.has(row.cn6)) continue;
+    const upc = byCn.get(row.cn6)!.unidadesPorCaja;
+    const cajas = sapCajas(row, upc);
 
     const fd = parseDateOnly(row.fecha_documento);
     if (fd && row.fecha_documento >= desde && row.fecha_documento <= hasta) {
       const { semanaKey, label, lunesRef } = isoWeekKey(fd);
       const prev = emitMap.get(semanaKey);
-      const cajas = sapCajas(row, byCn.get(row.cn6)!.unidadesPorCaja);
       if (prev) {
         prev.emitidos += 1;
         prev.cajasEmitidas = roundCajas(prev.cajasEmitidas + cajas);
       } else {
-        emitMap.set(semanaKey, { semanaKey, label, lunesRef, emitidos: 1, recibidos: 0, cajasEmitidas: cajas });
+        emitMap.set(semanaKey, { semanaKey, label, lunesRef, emitidos: 1, recibidos: 0, cajasEmitidas: cajas, cajasRecibidas: 0 });
       }
     }
 
@@ -418,17 +428,22 @@ function buildSemanalSap(rows: SapRow[], byCn: Map<string, CatalogoMed>, desde: 
       const recDate = row.recibido_at.slice(0, 10);
       if (rd && recDate >= desde && recDate <= hasta) {
         const { semanaKey } = isoWeekKey(rd);
-        recMap.set(semanaKey, (recMap.get(semanaKey) ?? 0) + 1);
+        const prev = recMap.get(semanaKey) ?? { n: 0, cajas: 0 };
+        prev.n += 1;
+        prev.cajas = roundCajas(prev.cajas + cajas);
+        recMap.set(semanaKey, prev);
       }
     }
   }
 
-  for (const [key, n] of recMap) {
+  for (const [key, { n, cajas }] of recMap) {
     const existing = emitMap.get(key);
-    if (existing) existing.recibidos = n;
-    else {
+    if (existing) {
+      existing.recibidos = n;
+      existing.cajasRecibidas = cajas;
+    } else {
       const ref = semanaRefFromKey(key);
-      emitMap.set(key, { ...ref, emitidos: 0, recibidos: n, cajasEmitidas: 0 });
+      emitMap.set(key, { ...ref, emitidos: 0, recibidos: n, cajasEmitidas: 0, cajasRecibidas: cajas });
     }
   }
 
@@ -459,6 +474,7 @@ function buildMedicamentos(
         nRecibidos: 0,
         nPendientes: 0,
         nReclamados: 0,
+        alerta: null,
       };
       map.set(row.cn6, item);
     }
@@ -482,7 +498,16 @@ function buildProveedores(rows: SapRow[], byCn: Map<string, CatalogoMed>, desde:
     const cajas = sapCajas(row, med.unidadesPorCaja);
     let item = map.get(proveedor);
     if (!item) {
-      item = { proveedor, nPedidos: 0, nCajas: 0, nCnsDistintos: 0, nReclamados: 0, cns: new Set() };
+      item = {
+        proveedor,
+        nPedidos: 0,
+        nCajas: 0,
+        nCnsDistintos: 0,
+        nReclamados: 0,
+        nCnsConAlerta: 0,
+        alertasResumen: [],
+        cns: new Set(),
+      };
       map.set(proveedor, item);
     }
     item.nPedidos += 1;
@@ -491,8 +516,46 @@ function buildProveedores(rows: SapRow[], byCn: Map<string, CatalogoMed>, desde:
     if (row.reclamado) item.nReclamados += 1;
   }
   return [...map.values()]
-    .map(({ cns, ...rest }) => ({ ...rest, nCnsDistintos: cns.size }))
+    .map(({ cns, ...rest }) => ({
+      ...rest,
+      nCnsDistintos: cns.size,
+      nCnsConAlerta: 0,
+      alertasResumen: [] as string[],
+      _cns: cns,
+    }))
     .sort((a, b) => b.nPedidos - a.nPedidos || a.proveedor.localeCompare(b.proveedor));
+}
+
+async function enrichMedicamentosConAlertas(
+  meds: TopMedicamentoCompras[]
+): Promise<TopMedicamentoCompras[]> {
+  if (meds.length === 0) return meds;
+  const alertas = await loadAlertasSuministroPorCnsSafe(meds.map((m) => m.cn));
+  return meds.map((m) => ({ ...m, alerta: alertas[m.cn] ?? null }));
+}
+
+type ProveedorConCns = TopProveedorCompras & { _cns: Set<string> };
+
+async function enrichProveedoresConAlertas(proveedores: ProveedorConCns[]): Promise<TopProveedorCompras[]> {
+  const allCns = [...new Set(proveedores.flatMap((p) => [...p._cns]))];
+  const alertas = await loadAlertasSuministroPorCnsSafe(allCns);
+
+  return proveedores.map(({ _cns, ...p }) => {
+    const etiquetas = new Set<string>();
+    let nCnsConAlerta = 0;
+    for (const cn of _cns) {
+      const alerta = alertas[cn];
+      if (alerta) {
+        nCnsConAlerta += 1;
+        etiquetas.add(alerta.etiqueta);
+      }
+    }
+    return {
+      ...p,
+      nCnsConAlerta,
+      alertasResumen: [...etiquetas].sort(),
+    };
+  });
 }
 
 async function buildIncidenciasMedicamento(
@@ -748,6 +811,7 @@ function mergeMedicamentosConPropuestas(
       nRecibidos: 0,
       nPendientes: 0,
       nReclamados: 0,
+      alerta: null,
     });
   }
   return [...map.values()].sort((a, b) => b.nPedidos - a.nPedidos || b.nCajas - a.nCajas || a.cn.localeCompare(b.cn));
@@ -784,6 +848,12 @@ export async function getAnalisisComprasDatos(
     (acc, r) => acc + sapCajas(r, byCn.get(r.cn6)!.unidadesPorCaja),
     0
   );
+  const cajasRecibidas = recibidos
+    .filter((r) => {
+      const rec = r.recibido_at?.slice(0, 10);
+      return rec && rec >= desde && rec <= hasta;
+    })
+    .reduce((acc, r) => acc + sapCajas(r, byCn.get(r.cn6)!.unidadesPorCaja), 0);
 
   const sql = getDb();
   const propCountRows = (await sql`
@@ -808,15 +878,20 @@ export async function getAnalisisComprasDatos(
       pedidosReclamados: reclamados.length,
       leadTimeMedianoDias: median(leadTimes),
       cajasPedidas: roundCajas(cajasPedidas),
+      cajasRecibidas: roundCajas(cajasRecibidas),
     },
     semanalActividad: buildSemanalActividad(sapRows, propLineas, byCn, desde, hasta),
     semanalSap: buildSemanalSap(sapRows, byCn, desde, hasta),
-    medicamentos: mergeMedicamentosConPropuestas(
-      buildMedicamentos(sapRows, byCn, desde, hasta),
-      propLineas,
-      byCn
+    medicamentos: await enrichMedicamentosConAlertas(
+      mergeMedicamentosConPropuestas(
+        buildMedicamentos(sapRows, byCn, desde, hasta),
+        propLineas,
+        byCn
+      )
     ),
-    proveedores: buildProveedores(sapRows, byCn, desde, hasta),
+    proveedores: await enrichProveedoresConAlertas(
+      buildProveedores(sapRows, byCn, desde, hasta) as ProveedorConCns[]
+    ),
   };
 
   const cn = toCn6(cnFiltro);

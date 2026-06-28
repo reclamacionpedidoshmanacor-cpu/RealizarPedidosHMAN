@@ -50,7 +50,7 @@ export function cnClavePedidos(cn: string): string | null {
   return toCn6(cn);
 }
 
-function parseNumberMaybe(raw: string | null): number | null {
+export function parseNumberMaybe(raw: string | null): number | null {
   if (raw == null) return null;
   const compact = String(raw).trim().replace(/\s/g, '');
   if (!compact) return null;
@@ -382,6 +382,24 @@ function cantidadPedidoOrder(row: {
     parseNumberMaybe(row.cantidad_recibida) ??
     0
   );
+}
+
+/** Uds de un pedido SAP: recibido → por_entregar/cantidad_recibida; pendiente → por_entregar/cantidad_pedido. */
+export function cantidadUdsDesdePedido(row: {
+  recibido: boolean;
+  por_entregar_cantidad: string | null;
+  cantidad_recibida: string | null;
+  cantidad_pedido: string | null;
+}): number {
+  if (row.recibido) {
+    return (
+      parseNumberMaybe(row.por_entregar_cantidad) ??
+      parseNumberMaybe(row.cantidad_recibida) ??
+      parseNumberMaybe(row.cantidad_pedido) ??
+      0
+    );
+  }
+  return parseNumberMaybe(row.por_entregar_cantidad) ?? parseNumberMaybe(row.cantidad_pedido) ?? 0;
 }
 
 /** Resumen de pedidos recibidos (últimas 2 semanas) y pendientes por CN — recuento almacén. */
