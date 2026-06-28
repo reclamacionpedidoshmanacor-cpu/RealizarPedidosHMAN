@@ -118,6 +118,21 @@ function getAreaFromCookie(): string {
   return document.cookie.split(';').find(c => c.trim().startsWith('area_session='))?.split('=')[1] ?? '';
 }
 
+const AREAS_PROPUESTA_LAYOUT_COMPACTO = new Set(['oncologia', 'iv', 'nutricion']);
+
+function usaPropuestaLayoutCompacto(area: string): boolean {
+  return AREAS_PROPUESTA_LAYOUT_COMPACTO.has(area);
+}
+
+function stockActualDestacadoBajoMinimo(linea: Linea, layoutCompacto: boolean): boolean {
+  if (esLineaInactiva(linea)) return false;
+  if (layoutCompacto) {
+    return Number(linea.stockActual) <= Number(linea.stockMinimoSnap);
+  }
+  const stockDisponible = Number(linea.stockActual) + Number(linea.stockTransito ?? 0);
+  return stockDisponible <= Number(linea.puntoPedidoSnap);
+}
+
 // ---------------------------------------------------------------------------
 // Página principal
 // ---------------------------------------------------------------------------
@@ -139,6 +154,7 @@ export default function PropuestaPage() {
   const [propuestaSeleccionadaId, setPropuestaSeleccionadaId] = useState<number | null>(null);
 
   const esAlmacen = getAreaFromCookie() === 'almacen';
+  const layoutCompacto = usaPropuestaLayoutCompacto(getAreaFromCookie());
   const usaBorradoresPorUbicacion =
     esAlmacen || data?.modo === 'por-ubicacion' || (data?.borradores?.length ?? 0) > 0;
 
@@ -526,32 +542,63 @@ export default function PropuestaPage() {
                 <thead>
                   <tr className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
                     <th className="px-4 py-3 text-left">Ppio activo / marca</th>
-                    <th className="px-4 py-3 text-center">Stock objetivo</th>
-                    <th className="px-4 py-3 text-center">Stock actual (uds)</th>
-                    <th className="px-4 py-3 text-center">
-                      <span>Stock actual</span>
-                      <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
-                    </th>
-                    <th className="px-4 py-3 text-center">En tránsito</th>
-                    <th className="px-4 py-3 text-center">
-                      <span>Calculado</span>
-                      <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
-                    </th>
-                    {!esAlmacen && (
-                      <th className="px-4 py-3 text-center">
-                        <span>Calculado</span>
-                        <span className="ml-1 normal-case text-[10px] text-slate-400">(comprimidos)</span>
-                      </th>
+                    {layoutCompacto ? (
+                      <>
+                        <th className="px-4 py-3 text-center">Punto de pedido</th>
+                        <th className="px-4 py-3 text-center">
+                          <span>Stock actual</span>
+                          <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
+                        </th>
+                        <th className="px-4 py-3 text-center">Stock máximo</th>
+                        <th className="px-4 py-3 text-center">En tránsito</th>
+                        <th className="px-4 py-3 text-center">
+                          <span>Calculado</span>
+                          <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
+                        </th>
+                        <th className="px-4 py-3 text-center">
+                          <span>Calculado</span>
+                          <span className="ml-1 normal-case text-[10px] text-slate-400">(comprimidos)</span>
+                        </th>
+                        <th className="px-4 py-3 text-center">
+                          <span>Validado</span>
+                          <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
+                        </th>
+                        <th className="px-4 py-3 text-center">
+                          <span>Validado</span>
+                          <span className="ml-1 normal-case text-[10px] text-slate-400">(comprimidos)</span>
+                        </th>
+                        <th className="px-4 py-3 text-left">Motivo ajuste</th>
+                      </>
+                    ) : (
+                      <>
+                        <th className="px-4 py-3 text-center">Stock objetivo</th>
+                        <th className="px-4 py-3 text-center">Stock actual (uds)</th>
+                        <th className="px-4 py-3 text-center">
+                          <span>Stock actual</span>
+                          <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
+                        </th>
+                        <th className="px-4 py-3 text-center">En tránsito</th>
+                        <th className="px-4 py-3 text-center">
+                          <span>Calculado</span>
+                          <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
+                        </th>
+                        {!esAlmacen && (
+                          <th className="px-4 py-3 text-center">
+                            <span>Calculado</span>
+                            <span className="ml-1 normal-case text-[10px] text-slate-400">(comprimidos)</span>
+                          </th>
+                        )}
+                        <th className="px-4 py-3 text-center">
+                          <span>Validado</span>
+                          <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
+                        </th>
+                        <th className="px-4 py-3 text-center">
+                          <span>Validado</span>
+                          <span className="ml-1 normal-case text-[10px] text-slate-400">(comprimidos)</span>
+                        </th>
+                        <th className="px-4 py-3 text-left">Motivo ajuste</th>
+                      </>
                     )}
-                    <th className="px-4 py-3 text-center">
-                      <span>Validado</span>
-                      <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
-                    </th>
-                    <th className="px-4 py-3 text-center">
-                      <span>Validado</span>
-                      <span className="ml-1 normal-case text-[10px] text-slate-400">(comprimidos)</span>
-                    </th>
-                    <th className="px-4 py-3 text-left">Motivo ajuste</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -563,8 +610,7 @@ export default function PropuestaPage() {
                     const diff       = cajasVal - linea.cajasPropuestas;
                     const aumentado  = diff > 0;
                     const reducido   = diff < 0;
-                    const stockDisponible = linea.stockActual + (linea.stockTransito ?? 0);
-                    const bajoMinimo = !inactiva && stockDisponible <= linea.puntoPedidoSnap;
+                    const bajoMinimo = stockActualDestacadoBajoMinimo(linea, layoutCompacto);
 
                     return (
                       <tr
@@ -582,7 +628,7 @@ export default function PropuestaPage() {
                         <td className="px-4 py-3">
                           <div className="flex items-start gap-2">
                             {bajoMinimo && (
-                              <span className="mt-[5px] h-2 w-2 shrink-0 rounded-full bg-rose-400 not-italic" title="Stock por debajo del punto de pedido" />
+                              <span className="mt-[5px] h-2 w-2 shrink-0 rounded-full bg-rose-400 not-italic" title={layoutCompacto ? 'Stock por debajo del stock mínimo' : 'Stock por debajo del punto de pedido'} />
                             )}
                             <div>
                               <div className="flex flex-wrap items-center gap-1.5 mb-0.5 not-italic">
@@ -613,38 +659,66 @@ export default function PropuestaPage() {
                           </div>
                         </td>
 
-                        {/* Stock objetivo */}
-                        <td className="px-4 py-3 text-center">
-                          <span className={`text-sm font-medium tabular-nums not-italic ${inactiva ? 'text-slate-400' : 'text-slate-600'}`}>
-                            Min:&nbsp;<strong className={inactiva ? 'text-slate-500' : 'text-slate-800'}>{linea.stockMinimoSnap}</strong>
-                            &nbsp;·&nbsp;
-                            Máx:&nbsp;<strong className={inactiva ? 'text-slate-500' : 'text-slate-800'}>{linea.stockMaximoSnap}</strong>
-                          </span>
-                        </td>
+                        {layoutCompacto ? (
+                          <>
+                            <td className="px-4 py-3 text-center">
+                              <span className={`text-sm font-semibold tabular-nums not-italic ${inactiva ? 'text-slate-400' : 'text-slate-700'}`}>
+                                {linea.puntoPedidoSnap}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              <span className={`inline-block rounded-md px-3 py-1 text-base font-semibold tabular-nums ring-1 not-italic ${
+                                inactiva
+                                  ? 'bg-slate-200/60 text-slate-500 ring-slate-200'
+                                  : bajoMinimo
+                                    ? 'bg-rose-50 text-rose-800 ring-rose-200'
+                                    : 'bg-sky-50 text-sky-800 ring-sky-200'
+                              }`}>
+                                {Number(linea.stockActual).toFixed(1)}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-center">
+                              <span className={`text-sm font-semibold tabular-nums not-italic ${inactiva ? 'text-slate-400' : 'text-slate-700'}`}>
+                                {linea.stockMaximoSnap}
+                              </span>
+                            </td>
+                          </>
+                        ) : (
+                          <>
+                            {/* Stock objetivo */}
+                            <td className="px-4 py-3 text-center">
+                              <span className={`text-sm font-medium tabular-nums not-italic ${inactiva ? 'text-slate-400' : 'text-slate-600'}`}>
+                                Min:&nbsp;<strong className={inactiva ? 'text-slate-500' : 'text-slate-800'}>{linea.stockMinimoSnap}</strong>
+                                &nbsp;·&nbsp;
+                                Máx:&nbsp;<strong className={inactiva ? 'text-slate-500' : 'text-slate-800'}>{linea.stockMaximoSnap}</strong>
+                              </span>
+                            </td>
 
-                        {/* Stock actual en unidades (informativo) */}
-                        <td className="px-4 py-3 text-center">
-                          <span className={`inline-block rounded-md px-3 py-1 text-base font-semibold tabular-nums ring-1 not-italic ${
-                            inactiva
-                              ? 'bg-slate-200/60 text-slate-500 ring-slate-200'
-                              : 'bg-slate-100 text-slate-700 ring-slate-200'
-                          }`}>
-                            {fmtUnidades(Number(linea.stockActual) * Number(linea.unidadesPorCaja))}
-                          </span>
-                        </td>
+                            {/* Stock actual en unidades (informativo) */}
+                            <td className="px-4 py-3 text-center">
+                              <span className={`inline-block rounded-md px-3 py-1 text-base font-semibold tabular-nums ring-1 not-italic ${
+                                inactiva
+                                  ? 'bg-slate-200/60 text-slate-500 ring-slate-200'
+                                  : 'bg-slate-100 text-slate-700 ring-slate-200'
+                              }`}>
+                                {fmtUnidades(Number(linea.stockActual) * Number(linea.unidadesPorCaja))}
+                              </span>
+                            </td>
 
-                        {/* Stock actual (nº cajas) */}
-                        <td className="px-4 py-3 text-center">
-                          <span className={`inline-block rounded-md px-3 py-1 text-base font-semibold tabular-nums ring-1 not-italic ${
-                            inactiva
-                              ? 'bg-slate-200/60 text-slate-500 ring-slate-200'
-                              : bajoMinimo
-                                ? 'bg-rose-50 text-rose-800 ring-rose-200'
-                                : 'bg-sky-50 text-sky-800 ring-sky-200'
-                          }`}>
-                            {Number(linea.stockActual).toFixed(1)}
-                          </span>
-                        </td>
+                            {/* Stock actual (nº cajas) */}
+                            <td className="px-4 py-3 text-center">
+                              <span className={`inline-block rounded-md px-3 py-1 text-base font-semibold tabular-nums ring-1 not-italic ${
+                                inactiva
+                                  ? 'bg-slate-200/60 text-slate-500 ring-slate-200'
+                                  : bajoMinimo
+                                    ? 'bg-rose-50 text-rose-800 ring-rose-200'
+                                    : 'bg-sky-50 text-sky-800 ring-sky-200'
+                              }`}>
+                                {Number(linea.stockActual).toFixed(1)}
+                              </span>
+                            </td>
+                          </>
+                        )}
 
                         {/* En tránsito */}
                         <td className="px-4 py-3 text-center">
@@ -946,36 +1020,68 @@ export default function PropuestaPage() {
                                   <tr className="border-b border-slate-200 bg-slate-50 text-[11px] uppercase tracking-wide text-slate-500">
                                     <th className="px-3 py-2 text-left">CN</th>
                                     <th className="px-3 py-2 text-left">Ppio activo / marca</th>
-                                    <th className="px-3 py-2 text-center">Stock (uds)</th>
-                                    <th className="px-3 py-2 text-center">
-                                      <span>Stock</span>
-                                      <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
-                                    </th>
-                                    <th className="px-3 py-2 text-center">En tránsito</th>
-                                    <th className="px-3 py-2 text-center">
-                                      <span>Calculado</span>
-                                      <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
-                                    </th>
-                                    {!esAlmacen && (
-                                      <th className="px-3 py-2 text-center">
-                                        <span>Calculado</span>
-                                        <span className="ml-1 normal-case text-[10px] text-slate-400">(uds)</span>
-                                      </th>
+                                    {layoutCompacto ? (
+                                      <>
+                                        <th className="px-3 py-2 text-center">Punto de pedido</th>
+                                        <th className="px-3 py-2 text-center">
+                                          <span>Stock</span>
+                                          <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
+                                        </th>
+                                        <th className="px-3 py-2 text-center">Stock máximo</th>
+                                        <th className="px-3 py-2 text-center">En tránsito</th>
+                                        <th className="px-3 py-2 text-center">
+                                          <span>Calculado</span>
+                                          <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
+                                        </th>
+                                        <th className="px-3 py-2 text-center">
+                                          <span>Calculado</span>
+                                          <span className="ml-1 normal-case text-[10px] text-slate-400">(uds)</span>
+                                        </th>
+                                        <th className="px-3 py-2 text-center">
+                                          <span>Validado</span>
+                                          <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
+                                        </th>
+                                        <th className="px-3 py-2 text-center">
+                                          <span>Validado</span>
+                                          <span className="ml-1 normal-case text-[10px] text-slate-400">(uds)</span>
+                                        </th>
+                                        <th className="px-3 py-2 text-left">Motivo</th>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <th className="px-3 py-2 text-center">Stock (uds)</th>
+                                        <th className="px-3 py-2 text-center">
+                                          <span>Stock</span>
+                                          <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
+                                        </th>
+                                        <th className="px-3 py-2 text-center">En tránsito</th>
+                                        <th className="px-3 py-2 text-center">
+                                          <span>Calculado</span>
+                                          <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
+                                        </th>
+                                        {!esAlmacen && (
+                                          <th className="px-3 py-2 text-center">
+                                            <span>Calculado</span>
+                                            <span className="ml-1 normal-case text-[10px] text-slate-400">(uds)</span>
+                                          </th>
+                                        )}
+                                        <th className="px-3 py-2 text-center">
+                                          <span>Validado</span>
+                                          <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
+                                        </th>
+                                        <th className="px-3 py-2 text-center">
+                                          <span>Validado</span>
+                                          <span className="ml-1 normal-case text-[10px] text-slate-400">(uds)</span>
+                                        </th>
+                                        <th className="px-3 py-2 text-left">Motivo</th>
+                                      </>
                                     )}
-                                    <th className="px-3 py-2 text-center">
-                                      <span>Validado</span>
-                                      <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
-                                    </th>
-                                    <th className="px-3 py-2 text-center">
-                                      <span>Validado</span>
-                                      <span className="ml-1 normal-case text-[10px] text-slate-400">(uds)</span>
-                                    </th>
-                                    <th className="px-3 py-2 text-left">Motivo</th>
                                   </tr>
                                 </thead>
                                 <tbody>
                                   {detalleByPropuesta[p.id].lineas.map((linea, lineIdx) => {
                                     const inactiva = esLineaInactiva(linea);
+                                    const bajoMinimoHist = stockActualDestacadoBajoMinimo(linea, layoutCompacto);
                                     return (
                                     <tr
                                       key={inactiva ? `hist-inactivo-${linea.cn}` : linea.id}
@@ -1003,10 +1109,34 @@ export default function PropuestaPage() {
                                           <p className="text-[11px] italic text-slate-400">{linea.nombreMedicamento}</p>
                                         )}
                                       </td>
-                                      <td className="px-3 py-2 text-center tabular-nums not-italic">
-                                        {fmtUnidades(Number(linea.stockActual) * Number(linea.unidadesPorCaja))}
-                                      </td>
-                                      <td className="px-3 py-2 text-center tabular-nums not-italic">{Number(linea.stockActual).toFixed(1)}</td>
+                                      {layoutCompacto ? (
+                                        <>
+                                          <td className="px-3 py-2 text-center tabular-nums not-italic">
+                                            {inactiva ? '—' : linea.puntoPedidoSnap}
+                                          </td>
+                                          <td className="px-3 py-2 text-center tabular-nums not-italic">
+                                            <span className={
+                                              inactiva
+                                                ? ''
+                                                : bajoMinimoHist
+                                                  ? 'inline-block rounded-md bg-rose-50 px-2 py-0.5 text-rose-800 ring-1 ring-rose-200'
+                                                  : ''
+                                            }>
+                                              {Number(linea.stockActual).toFixed(1)}
+                                            </span>
+                                          </td>
+                                          <td className="px-3 py-2 text-center tabular-nums not-italic">
+                                            {inactiva ? '—' : linea.stockMaximoSnap}
+                                          </td>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <td className="px-3 py-2 text-center tabular-nums not-italic">
+                                            {fmtUnidades(Number(linea.stockActual) * Number(linea.unidadesPorCaja))}
+                                          </td>
+                                          <td className="px-3 py-2 text-center tabular-nums not-italic">{Number(linea.stockActual).toFixed(1)}</td>
+                                        </>
+                                      )}
                                       <td className="px-3 py-2 text-center tabular-nums not-italic">
                                         {inactiva ? '—' : Number(linea.stockTransito ?? 0).toFixed(1)}
                                       </td>
