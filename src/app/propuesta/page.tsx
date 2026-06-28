@@ -118,7 +118,7 @@ function getAreaFromCookie(): string {
   return document.cookie.split(';').find(c => c.trim().startsWith('area_session='))?.split('=')[1] ?? '';
 }
 
-const AREAS_PROPUESTA_LAYOUT_COMPACTO = new Set(['oncologia', 'iv', 'nutricion']);
+const AREAS_PROPUESTA_LAYOUT_COMPACTO = new Set(['oncologia', 'upe', 'iv', 'nutricion']);
 
 function usaPropuestaLayoutCompacto(area: string): boolean {
   return AREAS_PROPUESTA_LAYOUT_COMPACTO.has(area);
@@ -556,10 +556,6 @@ export default function PropuestaPage() {
                           <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
                         </th>
                         <th className="px-4 py-3 text-center">
-                          <span>Calculado</span>
-                          <span className="ml-1 normal-case text-[10px] text-slate-400">(comprimidos)</span>
-                        </th>
-                        <th className="px-4 py-3 text-center">
                           <span>Validado</span>
                           <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
                         </th>
@@ -742,7 +738,7 @@ export default function PropuestaPage() {
                           )}
                         </td>
 
-                        {!esAlmacen && (
+                        {!esAlmacen && !layoutCompacto && (
                           /* Calculado (comprimidos) */
                           <td className="px-4 py-3 text-center">
                             {inactiva ? (
@@ -1034,10 +1030,6 @@ export default function PropuestaPage() {
                                           <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
                                         </th>
                                         <th className="px-3 py-2 text-center">
-                                          <span>Calculado</span>
-                                          <span className="ml-1 normal-case text-[10px] text-slate-400">(uds)</span>
-                                        </th>
-                                        <th className="px-3 py-2 text-center">
                                           <span>Validado</span>
                                           <span className="ml-1 normal-case text-[10px] text-slate-400">(nº cajas)</span>
                                         </th>
@@ -1143,7 +1135,7 @@ export default function PropuestaPage() {
                                       <td className="px-3 py-2 text-center tabular-nums not-italic">
                                         {inactiva ? '—' : linea.cajasPropuestas}
                                       </td>
-                                      {!esAlmacen && (
+                                      {!esAlmacen && !layoutCompacto && (
                                         <td className="px-3 py-2 text-center tabular-nums not-italic">
                                           {inactiva ? '—' : fmtUnidades(cajasAUnidades(linea.cajasPropuestas, linea.unidadesPorCaja))}
                                         </td>
