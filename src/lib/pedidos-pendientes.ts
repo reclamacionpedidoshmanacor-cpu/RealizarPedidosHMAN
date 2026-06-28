@@ -73,7 +73,7 @@ function parseNumberMaybe(raw: string | null): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
-function getPedidosReadonlyClient() {
+export function getPedidosReadonlyClient() {
   const connectionString = process.env.PEDIDOS_PENDIENTES_DATABASE_URL;
   if (!connectionString) {
     throw new Error('Falta PEDIDOS_PENDIENTES_DATABASE_URL para leer PedidosPendientes.');
