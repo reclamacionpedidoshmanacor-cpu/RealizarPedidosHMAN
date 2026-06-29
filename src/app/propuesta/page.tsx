@@ -140,6 +140,7 @@ export default function PropuestaPage() {
   const [loading,     setLoading]     = useState(true);
   const [saving,      setSaving]      = useState(false);
   const [tramiting,   setTramiting]   = useState(false);
+  const [actualizandoCatalogo, setActualizandoCatalogo] = useState(false);
   const [deshaciendo, setDeshaciendo] = useState(false);
   const [error,       setError]       = useState<string | null>(null);
   const [data,        setData]        = useState<ApiResponse | null>(null);
@@ -268,6 +269,38 @@ export default function PropuestaPage() {
       await load();
     } catch { toast.error('Error al guardar.'); }
     finally { setSaving(false); }
+  };
+
+  const handleActualizarDesdeCatalogo = async () => {
+    if (!data?.propuesta) return;
+    const err = validateEdits(data.lineas);
+    if (err) { toast.error(err); return; }
+    setActualizandoCatalogo(true);
+    try {
+      await saveAll(data.lineas);
+      const res = await fetch('/api/propuestas/sincronizar-catalogo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ propuestaId: data.propuesta.id }),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo actualizar desde catálogo.');
+
+      const cambios = Number(payload.cambiosUdsCaja ?? 0);
+      const lineas = Number(payload.lineas ?? 0);
+      if (cambios > 0) {
+        toast.success(
+          `Actualizado: ${cambios} artículo${cambios !== 1 ? 's' : ''} con uds/caja nueva · comprimidos recalculados (${lineas} líneas).`
+        );
+      } else {
+        toast.success(`Comprimidos recalculados con el catálogo actual (${lineas} líneas).`);
+      }
+      await load(data.propuesta.id);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado.');
+    } finally {
+      setActualizandoCatalogo(false);
+    }
   };
 
   const abrirBorrador = async (propuestaId: number) => {
@@ -872,20 +905,36 @@ export default function PropuestaPage() {
 
             {/* Acciones al pie */}
             {propuestaActiva.estado === 'borrador' && (
-              <div className="flex items-center justify-end gap-3 border-t border-slate-100 pt-4 mt-2">
+              <div className="flex items-center justify-end gap-3 border-t border-slate-100 pt-4 mt-2 flex-wrap">
                 <p className="text-xs text-slate-400 mr-auto">
                   {data.lineas.length} artículo{data.lineas.length !== 1 ? 's' : ''} en la propuesta
+                  {esAlmacen && (
+                    <span className="block text-[11px] text-slate-400 mt-0.5">
+                      Si corriges uds/caja en catálogo, usa «Actualizar» para recalcular comprimidos sin cambiar las cajas.
+                    </span>
+                  )}
                 </p>
+                {esAlmacen && (
+                  <button
+                    type="button"
+                    onClick={() => void handleActualizarDesdeCatalogo()}
+                    disabled={saving || tramiting || actualizandoCatalogo}
+                    className="rounded-lg border border-violet-300 px-4 py-2 text-sm font-medium text-violet-800 hover:bg-violet-50 disabled:opacity-50 transition-colors"
+                    title="Relee uds/caja del catálogo y recalcula comprimidos (las cajas validadas no cambian)"
+                  >
+                    {actualizandoCatalogo ? 'Actualizando…' : 'Actualizar desde catálogo'}
+                  </button>
+                )}
                 <button
                   onClick={handleGuardarBorrador}
-                  disabled={saving || tramiting}
+                  disabled={saving || tramiting || actualizandoCatalogo}
                   className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition-colors"
                 >
                   {saving ? 'Guardando…' : 'Guardar borrador'}
                 </button>
                 <button
                   onClick={handleTramitar}
-                  disabled={saving || tramiting}
+                  disabled={saving || tramiting || actualizandoCatalogo}
                   className="rounded-lg bg-teal-700 px-5 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-50 transition-colors"
                 >
                   {tramiting ? 'Tramitando…' : 'Tramitar propuesta'}

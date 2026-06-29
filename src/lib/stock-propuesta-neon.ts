@@ -1295,6 +1295,81 @@ export async function getPropuestaById(propuestaId: number): Promise<{
   };
 }
 
+export type SincronizarCatalogoPropuestaResult = {
+  lineas: number;
+  cambiosUdsCaja: number;
+  omitidas: number;
+};
+
+/** Relee uds/caja y nombre del catálogo; recalcula unidades_final sin cambiar cajas. */
+export async function sincronizarPropuestaDesdeCatalogoAlmacen(
+  propuestaId: number,
+  area: string
+): Promise<SincronizarCatalogoPropuestaResult> {
+  await ensurePropuestasLineasSchema();
+  const propuesta = await getPropuestaById(propuestaId);
+  if (!propuesta) {
+    throw new Error('Propuesta no encontrada.');
+  }
+  if (propuesta.area !== area) {
+    throw new Error('No autorizado para esta propuesta.');
+  }
+  if (propuesta.estado !== 'borrador') {
+    throw new Error('Solo se puede actualizar desde catálogo en propuestas en borrador.');
+  }
+
+  const lineas = await getLineasPropuesta(propuestaId);
+  if (lineas.length === 0) {
+    return { lineas: 0, cambiosUdsCaja: 0, omitidas: 0 };
+  }
+
+  const sql = getDb();
+  const cns = lineas.map((l) => l.cn);
+  const meds = (await sql`
+    SELECT cn, nombre, unidades_por_caja
+    FROM medicamentos
+    WHERE area = ${area} AND cn = ANY(${cns});
+  `) as Array<{ cn: string; nombre: string; unidades_por_caja: number }>;
+
+  const medByCn = new Map(
+    meds.map((m) => [m.cn, { nombre: m.nombre?.trim() || '', unidadesPorCaja: Math.max(1, num(m.unidades_por_caja)) }])
+  );
+
+  let cambiosUdsCaja = 0;
+  let omitidas = 0;
+
+  for (const linea of lineas) {
+    const med = medByCn.get(linea.cn);
+    if (!med) {
+      omitidas += 1;
+      continue;
+    }
+
+    const cajas = linea.cajasValidadas ?? linea.cajasPropuestas;
+    const unidadesFinal = Math.round(cajas * med.unidadesPorCaja);
+    const nombre = med.nombre || linea.nombreMedicamento;
+
+    if (med.unidadesPorCaja !== linea.unidadesPorCaja) {
+      cambiosUdsCaja += 1;
+    }
+
+    await sql`
+      UPDATE propuestas_lineas
+      SET
+        unidades_por_caja = ${med.unidadesPorCaja},
+        nombre_medicamento = ${nombre},
+        unidades_final = ${unidadesFinal}
+      WHERE id = ${linea.id} AND propuesta_id = ${propuestaId};
+    `;
+  }
+
+  return {
+    lineas: lineas.length - omitidas,
+    cambiosUdsCaja,
+    omitidas,
+  };
+}
+
 export async function tramitarPropuesta(
   propuestaId: number,
   importacionStockId: number,
