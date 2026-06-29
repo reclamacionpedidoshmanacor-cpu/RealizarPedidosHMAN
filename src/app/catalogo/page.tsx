@@ -16,6 +16,7 @@ interface Medicamento {
   mse: boolean; tipoMse: string | null;
   precioUnidad: number | null; precioCaja: number | null;
   stockMinimo: number | null; puntoPedido: number | null; stockMaximo: number | null;
+  consumoMedio?: number | null;
   ppioActivoCima: boolean; cimaConsultado: boolean;
   alertaSuministro?: AlertaSuministroCn | null;
 }
@@ -36,10 +37,11 @@ type RevisionPendiente = {
   creadoEn: string;
 };
 
-type EditForm = Omit<Partial<Medicamento>, 'stockMinimo' | 'puntoPedido' | 'stockMaximo'> & {
+type EditForm = Omit<Partial<Medicamento>, 'stockMinimo' | 'puntoPedido' | 'stockMaximo' | 'consumoMedio'> & {
   stockMinimo?: number | '' | null;
   puntoPedido?: number | '' | null;
   stockMaximo?: number | '' | null;
+  consumoMedio?: number | '' | null;
   clearStockObjetivo?: boolean;
 };
 
@@ -190,6 +192,8 @@ export default function CatalogoPage() {
   const [revisionPendiente, setRevisionPendiente] = useState<RevisionPendiente[]>([]);
   const [revisionLoading, setRevisionLoading] = useState(false);
   const [marcandoRevisionId, setMarcandoRevisionId] = useState<number | null>(null);
+  const [sustitucionMed, setSustitucionMed] = useState<Medicamento | null>(null);
+  const [sustituyendo, setSustituyendo] = useState(false);
   const [area, setArea] = useState('');
   const [page, setPage] = useState(1);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -225,6 +229,17 @@ export default function CatalogoPage() {
   const normalizeStockNumber = (value: number | '' | null | undefined): number | null => {
     if (value === '' || value == null) return null;
     return esNutricion ? roundCajas(Number(value)) : Math.round(Number(value));
+  };
+
+  const formatConsumoMedio = (value: number | null | undefined) => {
+    if (value == null) return '—';
+    return new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 }).format(value);
+  };
+
+  const parseConsumoMedioField = (value: string): number | '' => {
+    if (value === '') return '';
+    const n = Number(value.replace(',', '.'));
+    return Number.isFinite(n) && n >= 0 ? n : '';
   };
 
   const fetchMeds = useCallback(async (opts?: { silent?: boolean }) => {
@@ -577,6 +592,7 @@ export default function CatalogoPage() {
       stockMinimo: med.stockMinimo ?? (esAlmacen ? '' : 0),
       puntoPedido: med.puntoPedido ?? (esAlmacen ? '' : 0),
       stockMaximo: med.stockMaximo != null ? med.stockMaximo : (esAlmacen ? '' : undefined),
+      consumoMedio: med.consumoMedio != null ? med.consumoMedio : (esAlmacen ? '' : undefined),
       clearStockObjetivo: false,
     });
   };
@@ -607,6 +623,9 @@ export default function CatalogoPage() {
         if (data.unidadesPorCaja !== undefined) updated.unidadesPorCaja = Number(data.unidadesPorCaja);
         if (data.comprable !== undefined) updated.comprable = data.comprable;
         if (data.tipoMse !== undefined) updated.tipoMse = data.tipoMse ? String(data.tipoMse) : null;
+        if (data.consumoMedio !== undefined) {
+          updated.consumoMedio = data.consumoMedio === '' ? null : Number(data.consumoMedio);
+        }
 
         if (esAlmacen) {
           const sinStock =
@@ -661,6 +680,7 @@ export default function CatalogoPage() {
         if (payload.puntoPedido === '') payload.puntoPedido = 0;
         if (payload.stockMaximo === '') payload.stockMaximo = null;
       }
+      if (payload.consumoMedio === '') payload.consumoMedio = null;
     } else if (esNutricion) {
       if (payload.stockMinimo !== '' && payload.stockMinimo != null) {
         payload.stockMinimo = normalizeStockNumber(payload.stockMinimo as number);
@@ -731,6 +751,36 @@ export default function CatalogoPage() {
       fetchMeds({ silent: true });
     } catch { toast.error('Error de conexión'); }
     finally { setSavingNuevo(false); }
+  };
+
+  const handleConfirmarSustitucionCatalogo = async (cnNuevo: string) => {
+    if (!sustitucionMed?.ubicacion) return;
+    setSustituyendo(true);
+    try {
+      const res = await fetch('/api/catalogo/sustituir', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          cnViejo: sustitucionMed.cn,
+          cnNuevo,
+          ubicacion: sustitucionMed.ubicacion,
+        }),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo sustituir.');
+
+      toast.success(`Sustituido CN ${sustitucionMed.cn} → ${payload.cnNuevo}`);
+      setSustitucionMed(null);
+      await fetchMeds({ silent: true });
+      if (payload.cnNuevo) {
+        pendingRepositionCn.current = payload.cnNuevo;
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setSustituyendo(false);
+    }
   };
 
   const activos = meds.filter(m => m.activo).length;
@@ -1069,6 +1119,9 @@ export default function CatalogoPage() {
                 {esAlmacen && (
                   <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Presentación</th>
                 )}
+                {esAlmacen && (
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">Consumo medio</th>
+                )}
                 <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">
                   Mín{esAlmacen ? ' (opt.)' : ''}
                 </th>
@@ -1108,6 +1161,19 @@ export default function CatalogoPage() {
                     {esAlmacen && (
                       <td className="px-4 py-2">
                         <input className="w-full rounded border border-slate-300 px-2 py-1 text-xs" value={String(editData.presentacion ?? '')} onChange={e => setEditData(p => ({ ...p, presentacion: e.target.value }))} />
+                      </td>
+                    )}
+                    {esAlmacen && (
+                      <td className="px-4 py-2 text-center">
+                        <input
+                          type="number"
+                          step="0.01"
+                          min={0}
+                          className="w-20 rounded border border-slate-300 px-2 py-1 text-xs text-center"
+                          placeholder="—"
+                          value={editData.consumoMedio === '' ? '' : (editData.consumoMedio ?? '')}
+                          onChange={e => setEditData(p => ({ ...p, consumoMedio: parseConsumoMedioField(e.target.value) }))}
+                        />
                       </td>
                     )}
                     <td className="px-4 py-2 text-center">
@@ -1170,6 +1236,11 @@ export default function CatalogoPage() {
                         {med.presentacion ?? '—'}
                       </td>
                     )}
+                    {esAlmacen && (
+                      <td className="px-4 py-3 text-center text-sm font-mono text-slate-600">
+                        {formatConsumoMedio(med.consumoMedio)}
+                      </td>
+                    )}
                     <td className="px-4 py-3 text-center text-sm font-mono text-slate-600">{formatStockCell(med.stockMinimo)}</td>
                     <td className="px-4 py-3 text-center text-sm font-mono text-amber-700 font-semibold">{formatStockCell(med.puntoPedido)}</td>
                     <td className="px-4 py-3 text-center text-sm font-mono text-slate-600">{formatStockCell(med.stockMaximo)}</td>
@@ -1190,6 +1261,17 @@ export default function CatalogoPage() {
                     </td>
                     <td className="px-4 py-3 text-center">
                       <div className="flex items-center justify-center gap-1">
+                        {esAlmacen && med.activo && med.ubicacion && (
+                          <button
+                            onClick={() => setSustitucionMed(med)}
+                            className="rounded-lg border border-violet-200 p-1.5 text-violet-500 hover:text-violet-800 hover:border-violet-400 transition-colors"
+                            title="Sustituir por otro CN"
+                          >
+                            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
+                            </svg>
+                          </button>
+                        )}
                         <button
                           onClick={() => startEdit(med)}
                           className="rounded-lg border border-slate-200 p-1.5 text-slate-400 hover:text-teal-700 hover:border-teal-300 transition-colors"
@@ -1376,6 +1458,15 @@ export default function CatalogoPage() {
         </div>
       )}
 
+      {sustitucionMed && (
+        <SustituirCatalogoModal
+          med={sustitucionMed}
+          busy={sustituyendo}
+          onCancelar={() => setSustitucionMed(null)}
+          onConfirmar={handleConfirmarSustitucionCatalogo}
+        />
+      )}
+
       <style>{`
         .field-input {
           width: 100%;
@@ -1399,6 +1490,130 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div>
       <label className="block text-xs font-medium text-slate-600 mb-1">{label}</label>
       {children}
+    </div>
+  );
+}
+
+type CimaPreviewCatalogo = {
+  cn: string;
+  nombre: string;
+  principioActivo: string;
+  presentacion: string;
+  unidadesPorCajaInferidas: number | null;
+};
+
+function SustituirCatalogoModal({
+  med,
+  busy,
+  onCancelar,
+  onConfirmar,
+}: {
+  med: Medicamento;
+  busy: boolean;
+  onCancelar: () => void;
+  onConfirmar: (cnNuevo: string) => void;
+}) {
+  const [cnNuevo, setCnNuevo] = useState('');
+  const [cima, setCima] = useState<CimaPreviewCatalogo | null>(null);
+  const [buscandoCima, setBuscandoCima] = useState(false);
+
+  const consultarCima = async (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      toast.error('Introduce el CN nuevo.');
+      return;
+    }
+    setBuscandoCima(true);
+    setCima(null);
+    try {
+      const res = await fetch(`/api/catalogo/cima?cn=${encodeURIComponent(trimmed)}`, {
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? 'CN no encontrado en CIMA');
+        return;
+      }
+      setCnNuevo(data.cn ?? trimmed);
+      setCima({
+        cn: data.cn,
+        nombre: data.nombre,
+        principioActivo: data.principioActivo,
+        presentacion: data.presentacion,
+        unidadesPorCajaInferidas: data.unidadesPorCajaInferidas,
+      });
+    } catch {
+      toast.error('Error al consultar CIMA');
+    } finally {
+      setBuscandoCima(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
+          <h2 className="text-base font-semibold text-violet-800">Sustituir CN en catálogo</h2>
+          <button onClick={onCancelar} className="text-slate-400 hover:text-slate-600" disabled={busy}>
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <div className="px-6 py-4 space-y-4">
+          <p className="text-sm text-slate-600">
+            CN <span className="font-mono font-semibold">{med.cn}</span> · {med.principioActivo ?? med.nombre}
+            {med.ubicacion ? ` · ${med.ubicacion}` : ''}
+          </p>
+          <p className="text-xs text-violet-700 bg-violet-50 border border-violet-100 rounded-lg px-3 py-2">
+            El CN actual quedará inactivo. El nuevo se creará o reactivará en la misma ubicación, copiando stock objetivo y consumo medio si existen.
+          </p>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              inputMode="numeric"
+              placeholder="CN nuevo o código SAP"
+              value={cnNuevo}
+              onChange={(e) => { setCnNuevo(e.target.value.trim()); setCima(null); }}
+              onBlur={() => { if (cnNuevo.trim()) void consultarCima(cnNuevo); }}
+              className="field-input flex-1 font-mono"
+              disabled={busy}
+            />
+            <button
+              type="button"
+              onClick={() => void consultarCima(cnNuevo)}
+              disabled={buscandoCima || !cnNuevo.trim() || busy}
+              className="shrink-0 rounded-lg border border-violet-300 px-3 text-xs font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-50"
+            >
+              {buscandoCima ? '…' : 'CIMA'}
+            </button>
+          </div>
+          {cima && (
+            <div className="rounded-xl bg-violet-50 border border-violet-200 px-4 py-3 text-sm space-y-1">
+              <p className="font-bold text-slate-800">{cima.principioActivo || cima.nombre}</p>
+              <p className="text-slate-500 italic">{cima.nombre}</p>
+              {cima.presentacion && <p className="text-slate-600">{cima.presentacion}</p>}
+              <p className="font-mono text-violet-700">CN {cima.cn}</p>
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end gap-2 px-6 py-4 border-t border-slate-100">
+          <button
+            onClick={onCancelar}
+            disabled={busy}
+            className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={() => onConfirmar(cnNuevo)}
+            disabled={busy || !cima || !cnNuevo.trim()}
+            className="rounded-lg bg-violet-700 px-4 py-2 text-sm font-medium text-white hover:bg-violet-800 disabled:opacity-50"
+          >
+            {busy ? 'Sustituyendo…' : 'Confirmar sustitución'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

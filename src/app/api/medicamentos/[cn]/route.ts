@@ -8,6 +8,7 @@ import {
   getMedicamentoByCn,
   getStockObjetivoByCn,
   updateMedicamento,
+  updateMedicamentoConsumoMedio,
   upsertStockObjetivo,
 } from '@/lib/catalogo-neon';
 import { isAlmacenArea } from '@/lib/almacen';
@@ -50,6 +51,7 @@ export async function PATCH(
   const medFields = ['nombre','principioActivo','presentacion','via','area','ubicacion','unidadesPorCaja','activo','comprable','tipoMse'];
   const objFields = ['stockMinimo','puntoPedido','stockMaximo'];
   const clearStockObjetivo = body.clearStockObjetivo === true;
+  const consumoMedioProvided = 'consumoMedio' in body;
 
   for (const f of medFields) if (f in body) medUpdate[f] = body[f];
   for (const f of objFields) if (f in body) objUpdate[f] = body[f];
@@ -96,6 +98,17 @@ export async function PATCH(
         (objUpdate.stockMaximo as number | null | undefined) ?? current?.stockMaximo ?? null
       )
     );
+  }
+
+  if (consumoMedioProvided && isAlmacenArea(existing.area)) {
+    const raw = body.consumoMedio;
+    const consumoMedio =
+      raw === '' || raw == null
+        ? null
+        : Number.isFinite(Number(raw))
+          ? Number(raw)
+          : null;
+    await updateMedicamentoConsumoMedio(cn, consumoMedio);
   }
 
   return NextResponse.json({ ok: true });

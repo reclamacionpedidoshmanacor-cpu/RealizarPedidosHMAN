@@ -1,15 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isAlmacenArea } from '@/lib/almacen';
-import { buscarMedicamentoPorCN } from '@/lib/cima';
-import {
-  getMedicamentoByCn,
-  getStockObjetivoByCn,
-  insertMedicamento,
-  updateMedicamento,
-  upsertStockObjetivo,
-} from '@/lib/catalogo-neon';
 import { requireApiSessionOrArea } from '@/lib/api-auth';
-import { isMSE, normalizarCnParaCima } from '@/lib/utils';
+import { registrarRevisionPendiente } from '@/lib/catalogo-revision-neon';
+import { getStockObjetivoByCn } from '@/lib/catalogo-neon';
+import { sustituirCnEnCatalogoAlmacen } from '@/lib/sustitucion-cn-almacen';
 import {
   ensureSesionPedidoAlmacen,
   eliminarLineaPedidoAlmacenPorCnEnSesion,
@@ -18,7 +12,6 @@ import {
   recalcularTotalLineasPedidoAlmacen,
   upsertLineasPedidoAlmacen,
 } from '@/lib/stock-propuesta-neon';
-import { registrarRevisionPendiente } from '@/lib/catalogo-revision-neon';
 
 export const runtime = 'nodejs';
 
@@ -51,111 +44,36 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'CN anterior, CN nuevo y ubicación son obligatorios.' }, { status: 400 });
   }
 
-  const cnNuevo = normalizarCnParaCima(cnNuevoRaw);
-  if (!cnNuevo) {
-    return NextResponse.json({ error: 'CN nuevo no válido.' }, { status: 400 });
-  }
-  if (cnViejo === cnNuevo) {
-    return NextResponse.json({ error: 'El CN nuevo debe ser distinto del anterior.' }, { status: 400 });
-  }
-
-  const viejo = await getMedicamentoByCn(cnViejo);
-  if (!viejo || viejo.area !== session.area) {
-    return NextResponse.json({ error: `CN ${cnViejo} no encontrado en el catálogo de Almacén.` }, { status: 404 });
-  }
-  if ((viejo.ubicacion ?? '').trim() !== ubicacion) {
-    return NextResponse.json({ error: 'El medicamento anterior no pertenece a esta ubicación.' }, { status: 400 });
-  }
-
-  const cima = await buscarMedicamentoPorCN(cnNuevoRaw);
-  if (!cima) {
-    return NextResponse.json(
-      { error: `CN ${cnNuevo} no encontrado en CIMA (AEMPS).` },
-      { status: 404 }
-    );
-  }
-
-  const existenteNuevo = await getMedicamentoByCn(cnNuevo);
-  if (existenteNuevo && existenteNuevo.area !== session.area) {
-    return NextResponse.json(
-      { error: `El CN ${cnNuevo} ya existe en el área ${existenteNuevo.area}.` },
-      { status: 409 }
-    );
-  }
-
-  const unidadesPorCaja = cima.unidadesPorCaja && cima.unidadesPorCaja > 0
-    ? cima.unidadesPorCaja
-    : 1;
-
-  if (!existenteNuevo) {
-    await insertMedicamento({
-      cn: cnNuevo,
-      nombre: cima.nombre,
-      principioActivo: cima.principioActivo || null,
-      presentacion: cima.presentacion || null,
-      via: 'OTRO',
-      area: session.area,
-      ubicacion,
-      unidadesPorCaja,
-      activo: true,
-      comprable: true,
-      mse: isMSE(cnNuevo),
-      tipoMse: null,
-      precioUnidad: null,
-      precioCaja: null,
-    });
-  } else {
-    await updateMedicamento({
-      cn: cnNuevo,
-      nombre: cima.nombre,
-      principioActivo: cima.principioActivo || existenteNuevo.principioActivo,
-      presentacion: cima.presentacion || existenteNuevo.presentacion || null,
-      via: existenteNuevo.via ?? 'OTRO',
-      area: session.area,
-      ubicacion,
-      unidadesPorCaja,
-      activo: true,
-      comprable: existenteNuevo.comprable,
-      mse: isMSE(cnNuevo),
-      tipoMse: existenteNuevo.tipoMse,
-      precioUnidad: existenteNuevo.precioUnidad,
-      precioCaja: existenteNuevo.precioCaja,
-    });
-  }
-
-  const stockViejo = await getStockObjetivoByCn(cnViejo);
-  const stockNuevo = await getStockObjetivoByCn(cnNuevo);
-  if (stockViejo && !stockNuevo) {
-    await upsertStockObjetivo(
-      cnNuevo,
-      stockViejo.stockMinimo,
-      stockViejo.puntoPedido,
-      stockViejo.stockMaximo
-    );
-  }
-
-  await updateMedicamento({
-    ...viejo,
-    activo: false,
+  const outcome = await sustituirCnEnCatalogoAlmacen({
+    area: session.area,
+    cnViejo,
+    cnNuevoRaw,
+    ubicacion,
   });
+
+  if (!outcome.ok) {
+    return NextResponse.json({ error: outcome.err.error }, { status: outcome.err.status });
+  }
+
+  const { result } = outcome;
 
   const { importacionId } = await ensureSesionPedidoAlmacen(session.area);
   await eliminarLineaPedidoAlmacenPorCnEnSesion(importacionId, cnViejo);
 
   let propuestaId: number | null = null;
   if (cajasPedidas > 0) {
-    const stockNuevoFinal = await getStockObjetivoByCn(cnNuevo);
+    const stockNuevoFinal = await getStockObjetivoByCn(result.cnNuevo);
     propuestaId = await getOrCreatePropuestaAlmacenGrupo(
       session.area,
       importacionId,
       ubicacion,
-      cima.principioActivo,
-      cima.nombre
+      result.principioActivo,
+      result.nombre
     );
     await upsertLineasPedidoAlmacen(propuestaId, [{
-      cn: cnNuevo,
-      nombre: cima.nombre,
-      unidadesPorCaja,
+      cn: result.cnNuevo,
+      nombre: result.nombre,
+      unidadesPorCaja: result.unidadesPorCaja,
       cajasPedidas,
       stockMinimo: stockNuevoFinal?.stockMinimo ?? null,
       puntoPedido: stockNuevoFinal?.puntoPedido ?? null,
@@ -168,39 +86,38 @@ export async function POST(req: NextRequest) {
     ? await getCantidadesPedidoAlmacen(propuestaId)
     : {};
 
-  const stockFinal = await getStockObjetivoByCn(cnNuevo);
-
   await registrarRevisionPendiente({
     area: session.area,
-    cn: cnNuevo,
+    cn: result.cnNuevo,
     cnAnterior: cnViejo,
     origen: 'sustitucion-pasillo',
     ubicacion,
-    nombreCima: cima.nombre,
-    principioActivoCima: cima.principioActivo,
-    presentacionCima: cima.presentacion,
-    unidadesPorCaja,
+    nombreCima: result.nombre,
+    principioActivoCima: result.principioActivo,
+    presentacionCima: result.presentacion,
+    unidadesPorCaja: result.unidadesPorCaja,
   });
 
   return NextResponse.json({
     ok: true,
     cnViejo,
-    cnNuevo,
+    cnNuevo: result.cnNuevo,
     cajasPedidas,
     totalLineas,
     cantidades,
     medicamento: {
-      cn: cnNuevo,
-      nombre: cima.nombre,
-      principioActivo: cima.principioActivo,
-      presentacion: cima.presentacion,
-      unidadesPorCaja,
+      cn: result.cnNuevo,
+      nombre: result.nombre,
+      principioActivo: result.principioActivo,
+      presentacion: result.presentacion,
+      unidadesPorCaja: result.unidadesPorCaja,
       ubicacion,
       activo: true,
-      stockMinimo: stockFinal?.stockMinimo ?? null,
-      puntoPedido: stockFinal?.puntoPedido ?? null,
-      stockMaximo: stockFinal?.stockMaximo ?? null,
-      cajasPedidas: cantidades[cnNuevo] ?? cajasPedidas,
+      stockMinimo: result.stockMinimo,
+      puntoPedido: result.puntoPedido,
+      stockMaximo: result.stockMaximo,
+      consumoMedio: result.consumoMedio,
+      cajasPedidas: cantidades[result.cnNuevo] ?? cajasPedidas,
     },
   });
 }

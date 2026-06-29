@@ -188,6 +188,7 @@ export async function GET(req: NextRequest) {
           ultimoRecibidoFecha: pedidos.ultimoRecibidoFecha,
           ultimoRecibidoUnidades: pedidos.ultimoRecibidoUnidades,
           alertaSuministro: alertaSuministroParaCn(alertasPorCn, med.cn),
+          consumoMedio: med.consumoMedio,
         };
       });
 

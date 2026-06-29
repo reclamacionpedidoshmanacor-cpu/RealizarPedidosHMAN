@@ -35,6 +35,7 @@ type MedicamentoManual = {
   unidadesPendientes?: number;
   ultimoRecibidoFecha?: string | null;
   ultimoRecibidoUnidades?: number;
+  consumoMedio?: number | null;
   alertaSuministro?: AlertaSuministroCn | null;
 };
 
@@ -113,6 +114,11 @@ function formatFechaPedido(iso: string): string {
     month: '2-digit',
     year: 'numeric',
   }).format(d);
+}
+
+function formatConsumoMedio(value: number | null | undefined): string {
+  if (value == null) return '—';
+  return new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 }).format(value);
 }
 
 function textoRecibidoAlmacen(med: MedicamentoManual): string {
@@ -1898,6 +1904,10 @@ function AlmacenMedCard({
           {pendientes} pedido{pendientes !== 1 ? 's' : ''}, {formatUnidadesPedido(udsPendientes)} uds
         </p>
       </div>
+
+      <p className="text-xs text-indigo-800 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2 mb-3">
+        <span className="font-semibold">Consumo medio:</span> {formatConsumoMedio(med.consumoMedio)}
+      </p>
 
       {hints.length > 0 && (
         <p className="text-xs text-teal-700 bg-teal-50 border border-teal-100 rounded-lg px-3 py-2 mb-3">

@@ -19,6 +19,7 @@ export type CatalogoMedicamento = {
   stockMinimo: number | null;
   puntoPedido: number | null;
   stockMaximo: number | null;
+  consumoMedio: number | null;
   ppioActivoCima: boolean;
   cimaConsultado: boolean;
 };
@@ -38,6 +39,7 @@ export type MedicamentoBase = {
   tipoMse: string | null;
   precioUnidad: number | null;
   precioCaja: number | null;
+  consumoMedio?: number | null;
   ppioActivoCima?: boolean | null;
   cimaConsultado?: boolean;
 };
@@ -100,6 +102,7 @@ export async function ensureMedicamentosSchema(): Promise<void> {
       await sql`ALTER TABLE public.medicamentos ADD COLUMN IF NOT EXISTS presentacion TEXT;`;
       await sql`ALTER TABLE public.medicamentos ADD COLUMN IF NOT EXISTS ppio_activo_cima TEXT;`;
       await sql`ALTER TABLE public.medicamentos ADD COLUMN IF NOT EXISTS cima_consultado BOOLEAN DEFAULT FALSE;`;
+      await sql`ALTER TABLE public.medicamentos ADD COLUMN IF NOT EXISTS consumo_medio NUMERIC(12,2);`;
 
       const col = (await sql`
         SELECT data_type
@@ -160,6 +163,7 @@ export async function listMedicamentosByArea(area: string): Promise<CatalogoMedi
       so.stock_minimo,
       so.punto_pedido,
       so.stock_maximo,
+      m.consumo_medio,
       COALESCE(m.ppio_activo_cima, FALSE) AS ppio_activo_cima,
       COALESCE(m.cima_consultado, FALSE)  AS cima_consultado
     FROM public.medicamentos m
@@ -184,6 +188,7 @@ export async function listMedicamentosByArea(area: string): Promise<CatalogoMedi
     stock_minimo: number | null;
     punto_pedido: number | null;
     stock_maximo: number | null;
+    consumo_medio: number | string | null;
     ppio_activo_cima: boolean;
     cima_consultado: boolean;
   }>;
@@ -206,6 +211,7 @@ export async function listMedicamentosByArea(area: string): Promise<CatalogoMedi
     stockMinimo: row.stock_minimo == null ? null : Number(row.stock_minimo),
     puntoPedido: row.punto_pedido == null ? null : Number(row.punto_pedido),
     stockMaximo: row.stock_maximo == null ? null : Number(row.stock_maximo),
+    consumoMedio: numOrNull(row.consumo_medio),
     ppioActivoCima: row.ppio_activo_cima ?? false,
     cimaConsultado: row.cima_consultado ?? false,
   }));
@@ -217,7 +223,8 @@ export async function getMedicamentoByCn(cn: string): Promise<MedicamentoBase | 
   const rows = (await sql`
     SELECT
       cn, nombre, principio_activo, presentacion, via, area, ubicacion,
-      unidades_por_caja, activo, comprable, mse, tipo_mse, precio_unidad, precio_caja
+      unidades_por_caja, activo, comprable, mse, tipo_mse, precio_unidad, precio_caja,
+      consumo_medio
     FROM public.medicamentos
     WHERE cn = ${cn}
     LIMIT 1;
@@ -236,6 +243,7 @@ export async function getMedicamentoByCn(cn: string): Promise<MedicamentoBase | 
     tipo_mse: string | null;
     precio_unidad: string | number | null;
     precio_caja: string | number | null;
+    consumo_medio: number | string | null;
   }>;
 
   const row = rows[0];
@@ -255,6 +263,7 @@ export async function getMedicamentoByCn(cn: string): Promise<MedicamentoBase | 
     tipoMse: row.tipo_mse?.trim() || null,
     precioUnidad: numOrNull(row.precio_unidad),
     precioCaja: numOrNull(row.precio_caja),
+    consumoMedio: numOrNull(row.consumo_medio),
   };
 }
 
@@ -288,15 +297,16 @@ export async function insertMedicamento(row: MedicamentoBase) {
   const mse = isMSE(row.cn);
   const ppioActivoCima = row.ppioActivoCima ?? false;
   const cimaConsultado = row.cimaConsultado ?? false;
+  const consumoMedio = row.consumoMedio ?? null;
   await sql`
     INSERT INTO public.medicamentos (
       cn, nombre, principio_activo, presentacion, via, area, ubicacion,
       unidades_por_caja, activo, comprable, mse, tipo_mse, precio_unidad, precio_caja,
-      ppio_activo_cima, cima_consultado, actualizado_en
+      ppio_activo_cima, cima_consultado, consumo_medio, actualizado_en
     ) VALUES (
       ${row.cn}, ${row.nombre}, ${row.principioActivo}, ${row.presentacion ?? null}, ${row.via}, ${row.area}, ${row.ubicacion},
       ${row.unidadesPorCaja}, ${row.activo}, ${row.comprable}, ${mse}, ${row.tipoMse}, ${row.precioUnidad}, ${row.precioCaja},
-      ${ppioActivoCima}, ${cimaConsultado}, now()
+      ${ppioActivoCima}, ${cimaConsultado}, ${consumoMedio}, now()
     );
   `;
 }
@@ -366,6 +376,16 @@ export async function upsertStockObjetivo(cn: string, stockMinimo: number, punto
         punto_pedido = EXCLUDED.punto_pedido,
         stock_maximo = EXCLUDED.stock_maximo,
         actualizado_en = now();
+  `;
+}
+
+export async function updateMedicamentoConsumoMedio(cn: string, consumoMedio: number | null): Promise<void> {
+  await ensureMedicamentosSchema();
+  const sql = getCatalogoClient();
+  await sql`
+    UPDATE public.medicamentos
+    SET consumo_medio = ${consumoMedio}, actualizado_en = now()
+    WHERE cn = ${cn};
   `;
 }
 
