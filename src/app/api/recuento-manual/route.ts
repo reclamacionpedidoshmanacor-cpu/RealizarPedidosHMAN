@@ -225,7 +225,17 @@ export async function GET(req: NextRequest) {
 
     const medicamentos = ubicacionSeleccionada
       ? catalogo
-          .filter((med) => med.activo && normalizeText(med.ubicacion) === selectedKey)
+          .filter((med) => normalizeText(med.ubicacion) === selectedKey)
+          .sort((a, b) => {
+            if (a.activo !== b.activo) return a.activo ? -1 : 1;
+            const pa = (a.principioActivo ?? a.nombre).localeCompare(
+              b.principioActivo ?? b.nombre,
+              'es',
+              { sensitivity: 'base' }
+            );
+            if (pa !== 0) return pa;
+            return a.nombre.localeCompare(b.nombre, 'es', { sensitivity: 'base' });
+          })
           .map((med) => {
             const unidadesPorCaja = Number(med.unidadesPorCaja) > 0 ? Number(med.unidadesPorCaja) : 1;
             const linea = lineasByCn.get(med.cn);
@@ -245,9 +255,19 @@ export async function GET(req: NextRequest) {
               unidadesSueltas,
               registradoEnRecuento: Boolean(linea),
               stockMaximo: med.stockMaximo ?? null,
+              comprable: med.comprable,
             };
           })
       : [];
+
+    const faltantesInactivosUbicacion = ubicacionSeleccionada
+      ? catalogo.filter(
+          (med) =>
+            !med.activo &&
+            normalizeText(med.ubicacion) === selectedKey &&
+            !lineasCn.has(med.cn)
+        ).length
+      : 0;
 
     const res = NextResponse.json({
       area,
@@ -258,6 +278,7 @@ export async function GET(req: NextRequest) {
       medicamentos,
       faltantesActivosArea,
       faltantesActivosUbicacion,
+      faltantesInactivosUbicacion,
     });
     return withAreaCookie(res, area);
   } catch (err) {

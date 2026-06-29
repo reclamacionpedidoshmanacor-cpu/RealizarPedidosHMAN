@@ -19,6 +19,7 @@ type MedicamentoManual = {
   presentacion?: string | null;
   ubicacion?: string | null;
   activo: boolean;
+  comprable?: boolean;
   unidadesPorCaja: number;
   cajas?: number;
   unidadesSueltas?: number;
@@ -51,6 +52,7 @@ type ApiResponse = {
   medicamentos: MedicamentoManual[];
   faltantesActivosArea?: number;
   faltantesActivosUbicacion?: number;
+  faltantesInactivosUbicacion?: number;
 };
 
 /* ─── tipos reposición (solo UPE) ─── */
@@ -1257,6 +1259,8 @@ export default function RecuentoManualPage() {
   /* ── PASO 3: Recuento de medicamentos ── */
   if (step === 'recuento') {
     const medicamentos = data?.medicamentos ?? [];
+    const nActivos = medicamentos.filter((m) => m.activo).length;
+    const nInactivos = medicamentos.length - nActivos;
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col pb-36" ref={tableRef}>
         <div className="sticky top-0 z-20 bg-white border-b-2 border-slate-200 shadow-sm px-4 py-3 flex items-center gap-3 flex-wrap">
@@ -1288,7 +1292,13 @@ export default function RecuentoManualPage() {
             <>
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-base text-slate-500 font-semibold">
-                  {medicamentos.length} medicamento{medicamentos.length !== 1 ? 's' : ''} activo{medicamentos.length !== 1 ? 's' : ''}
+                  {nActivos} activo{nActivos !== 1 ? 's' : ''}
+                  {nInactivos > 0 && (
+                    <span className="text-slate-400">
+                      {' '}
+                      · {nInactivos} inactivo{nInactivos !== 1 ? 's' : ''} (solo stock)
+                    </span>
+                  )}
                 </p>
                 {(data?.faltantesActivosUbicacion ?? 0) > 0 && (
                   <button
@@ -1477,12 +1487,43 @@ function MedCard({
   med: MedicamentoManual; val: DraftLinea; changed: boolean;
   index: number; total: number; onChange: (patch: Partial<DraftLinea>) => void;
 }) {
+  const inactivo = med.activo === false;
   return (
-    <div className={`rounded-2xl border-2 bg-white px-5 py-4 shadow-sm transition-all ${changed ? 'border-amber-400 bg-amber-50' : 'border-slate-200'}`}>
+    <div
+      className={`rounded-2xl border-2 px-5 py-4 shadow-sm transition-all ${
+        inactivo
+          ? changed
+            ? 'border-slate-400 bg-slate-100 opacity-90'
+            : 'border-slate-200 bg-slate-50 opacity-75'
+          : changed
+            ? 'border-amber-400 bg-amber-50'
+            : 'border-slate-200 bg-white'
+      }`}
+    >
       <div className="flex items-start justify-between gap-2 mb-4">
         <div className="flex-1 min-w-0">
-          <p className="text-2xl font-extrabold text-slate-800 leading-tight">{med.principioActivo ?? med.nombre}</p>
-          {med.principioActivo && <p className="text-lg italic text-slate-400 leading-tight mt-0.5 truncate">{med.nombre}</p>}
+          <p
+            className={`text-2xl font-extrabold leading-tight ${
+              inactivo ? 'text-slate-500' : 'text-slate-800'
+            }`}
+          >
+            {med.principioActivo ?? med.nombre}
+          </p>
+          {med.principioActivo && (
+            <p
+              className={`text-lg italic leading-tight mt-0.5 truncate ${
+                inactivo ? 'text-slate-400' : 'text-slate-400'
+              }`}
+            >
+              {med.nombre}
+            </p>
+          )}
+          {inactivo && (
+            <p className="mt-2 text-sm font-semibold text-slate-500">
+              Inactivo — solo recuento de stock
+              {med.comprable === false ? ' · no comprable' : ''}
+            </p>
+          )}
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
           <span className="font-mono text-base bg-slate-100 text-slate-500 rounded-lg px-2 py-1">CN {med.cn}</span>
@@ -1521,7 +1562,11 @@ function MedCard({
           </div>
         </div>
       )}
-      {changed && <p className="mt-3 text-sm font-semibold text-amber-600">✏ Modificado</p>}
+      {changed && (
+        <p className={`mt-3 text-sm font-semibold ${inactivo ? 'text-slate-500' : 'text-amber-600'}`}>
+          ✏ Modificado
+        </p>
+      )}
     </div>
   );
 }
