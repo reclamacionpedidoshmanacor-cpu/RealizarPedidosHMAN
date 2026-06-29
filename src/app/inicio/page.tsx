@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
+import { formatCajas } from '@/lib/utils';
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -36,10 +37,15 @@ type MovimientoConsumo = {
   direccion: DireccionMovimiento;
   periodoReciente: number;
   periodoAnterior: number;
+  periodoRecienteCajas: number;
+  periodoAnteriorCajas: number;
   promedioSemanalReciente: number;
   promedioSemanalAnterior: number;
+  promedioSemanalRecienteCajas: number;
+  promedioSemanalAnteriorCajas: number;
   variacionPct: number | null;
   deltaVialesPeriodo: number;
+  deltaCajasPeriodo: number;
   semanasSeries: { semana: number; anio: number; label: string; viales: number; recepciones: number }[];
 };
 
@@ -89,7 +95,10 @@ type AlertaCompra = {
   stockMaximo: number;
   consumoReciente: number;
   consumoAnterior: number;
+  consumoRecienteCajas: number;
+  consumoAnteriorCajas: number;
   promedioSemanal: number;
+  promedioSemanalCajas: number;
   variacionPct: number | null;
   tendenciaCreciente: boolean;
   tendenciaRelevante: boolean;
@@ -160,7 +169,15 @@ const DIRECCION_CFG = {
   parado: { label: 'PARADO', bg: 'bg-slate-50 border-slate-300',    badge: 'bg-slate-200 text-slate-700',    text: 'text-slate-600' },
 } as const;
 
-function fmtViales(n: number): string {
+function fmtCajasN(n: number): string {
+  return formatCajas(n);
+}
+
+function fmtCajasSem(n: number): string {
+  return `${formatCajas(n)}/sem`;
+}
+
+function fmtUds(n: number): string {
   return new Intl.NumberFormat('es-ES', { maximumFractionDigits: 0 }).format(n);
 }
 
@@ -177,21 +194,30 @@ function fmtCobertura(c: number | null): string {
 // Componente: curva semanal recharts (barras consumo + línea recepciones)
 // ---------------------------------------------------------------------------
 function CurvaSemanalAlertas({
-  series, promedioSemanal
+  series,
+  promedioSemanalCajas,
+  unidadesPorCaja,
 }: {
   series: AlertaCompra['semanasSeries'];
-  promedioSemanal: number;
+  promedioSemanalCajas: number;
+  unidadesPorCaja: number;
 }) {
   if (series.length === 0) return null;
+  const upx = Math.max(1, unidadesPorCaja);
+  const chartData = series.map((s) => ({
+    ...s,
+    cajas: s.viales / upx,
+    recepcionesCajas: s.recepciones / upx,
+  }));
   const hasRecepciones = series.some(s => s.recepciones > 0);
 
   return (
     <div className="mt-4">
       <p className="text-[10px] text-slate-400 mb-2 uppercase tracking-wide font-medium">
-        Últimas 8 semanas — Dispensaciones vs Recepciones
+        Últimas 8 semanas — Dispensaciones vs Recepciones (cajas)
       </p>
       <ResponsiveContainer width="100%" height={180}>
-        <ComposedChart data={series} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+        <ComposedChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
           <XAxis
             dataKey="label"
@@ -203,14 +229,14 @@ function CurvaSemanalAlertas({
             tick={{ fontSize: 10, fill: '#94a3b8' }}
             tickLine={false}
             axisLine={false}
-            width={30}
-            allowDecimals={false}
+            width={36}
+            allowDecimals
           />
           <Tooltip
             contentStyle={{ fontSize: 11, borderRadius: 8, border: '1px solid #e2e8f0' }}
             labelStyle={{ fontWeight: 600, color: '#334155', marginBottom: 4 }}
             formatter={(value: unknown, name: unknown) => [
-              `${Number(value ?? 0).toFixed(0)} uds`,
+              `${formatCajas(Number(value ?? 0))} cajas`,
               String(name ?? ''),
             ]}
           />
@@ -220,7 +246,7 @@ function CurvaSemanalAlertas({
             wrapperStyle={{ fontSize: 11, paddingTop: 4 }}
           />
           <Bar
-            dataKey="viales"
+            dataKey="cajas"
             name="Dispensado"
             fill="#0d9488"
             fillOpacity={0.85}
@@ -229,7 +255,7 @@ function CurvaSemanalAlertas({
           />
           {hasRecepciones && (
             <Bar
-              dataKey="recepciones"
+              dataKey="recepcionesCajas"
               name="Recepcionado"
               fill="#6366f1"
               fillOpacity={0.7}
@@ -237,13 +263,13 @@ function CurvaSemanalAlertas({
               maxBarSize={28}
             />
           )}
-          {promedioSemanal > 0 && (
+          {promedioSemanalCajas > 0 && (
             <ReferenceLine
-              y={promedioSemanal}
+              y={promedioSemanalCajas}
               stroke="#6366f1"
               strokeDasharray="4 2"
               strokeWidth={1.5}
-              label={{ value: `prom. ${promedioSemanal.toFixed(1)}`, position: 'insideTopRight', fontSize: 9, fill: '#6366f1' }}
+              label={{ value: `prom. ${formatCajas(promedioSemanalCajas)}`, position: 'insideTopRight', fontSize: 9, fill: '#6366f1' }}
             />
           )}
         </ComposedChart>
@@ -261,7 +287,6 @@ function AlertaCard({ alerta, expanded, onToggle }: {
   onToggle: () => void;
 }) {
   const cfg = SEMAFORO_CFG[alerta.semaforo];
-  const fmtN = (n: number) => new Intl.NumberFormat('es-ES', { maximumFractionDigits: 1 }).format(n);
 
   return (
     <div className={`rounded-xl border ${cfg.bg} overflow-hidden`}>
@@ -284,7 +309,7 @@ function AlertaCard({ alerta, expanded, onToggle }: {
         </div>
         <div className="flex-shrink-0 text-right text-xs">
           <div className={`font-bold ${cfg.text}`}>{fmtCobertura(alerta.coberturaSemanas)}</div>
-          <div className="text-slate-500">Stock: {fmtN(alerta.stockActualUnidades)} uds</div>
+          <div className="text-slate-500">Stock: {fmtCajasN(alerta.stockActualCajas)} cajas</div>
           {alerta.tendenciaRelevante && (
             <div className={`font-semibold mt-0.5 ${alerta.tendenciaCreciente ? 'text-orange-600' : 'text-sky-600'}`}>
               {alerta.tendenciaCreciente ? '↑' : '↓'}
@@ -310,13 +335,13 @@ function AlertaCard({ alerta, expanded, onToggle }: {
             </div>
             <div>
               <p className="text-slate-400 uppercase tracking-wide text-[10px]">Stock actual</p>
-              <p className="font-semibold text-slate-700">{fmtN(alerta.stockActualUnidades)} uds</p>
-              <p className="text-slate-400 text-[10px]">{fmtN(alerta.stockActualCajas)} cajas</p>
+              <p className="font-semibold text-slate-700">{fmtCajasN(alerta.stockActualCajas)} cajas</p>
+              <p className="text-slate-400 text-[10px]">{fmtUds(alerta.stockActualUnidades)} uds · {alerta.unidadesPorCaja} uds/caja</p>
             </div>
             <div>
               <p className="text-slate-400 uppercase tracking-wide text-[10px]">Consumo (8 sem)</p>
-              <p className="font-semibold text-slate-700">{fmtN(alerta.consumoReciente)} viales</p>
-              <p className="text-slate-400 text-[10px]">Prom. {fmtN(alerta.promedioSemanal)}/sem</p>
+              <p className="font-semibold text-slate-700">{fmtCajasN(alerta.consumoRecienteCajas)} cajas</p>
+              <p className="text-slate-400 text-[10px]">Prom. {fmtCajasSem(alerta.promedioSemanalCajas)}</p>
             </div>
             <div>
               <p className="text-slate-400 uppercase tracking-wide text-[10px]">Tendencia</p>
@@ -326,7 +351,7 @@ function AlertaCard({ alerta, expanded, onToggle }: {
                     {alerta.tendenciaCreciente ? '+' : ''}{alerta.variacionPct.toFixed(1)}%
                   </p>
                   <p className="text-slate-400 text-[10px]">
-                    {alerta.consumoAnterior.toFixed(0)} → {alerta.consumoReciente.toFixed(0)} viales
+                    {fmtCajasN(alerta.consumoAnteriorCajas)} → {fmtCajasN(alerta.consumoRecienteCajas)} cajas
                   </p>
                 </>
               ) : (
@@ -335,8 +360,8 @@ function AlertaCard({ alerta, expanded, onToggle }: {
             </div>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mt-3 text-xs text-slate-500">
-            <div>Stock mínimo: <span className="font-medium text-slate-700">{fmtN(alerta.stockMinimo)} uds</span></div>
-            <div>Stock máximo: <span className="font-medium text-slate-700">{fmtN(alerta.stockMaximo)} uds</span></div>
+            <div>Stock mínimo: <span className="font-medium text-slate-700">{fmtCajasN(alerta.stockMinimo)} cajas</span></div>
+            <div>Stock máximo: <span className="font-medium text-slate-700">{fmtCajasN(alerta.stockMaximo)} cajas</span></div>
             <div>Múltiplo: <span className="font-medium text-slate-700">{alerta.unidadesPorCaja} uds/caja</span></div>
           </div>
 
@@ -356,18 +381,22 @@ function AlertaCard({ alerta, expanded, onToggle }: {
                     : 'Sobrestock — considera reducir los parámetros de stock'}
                 </p>
                 <p className={`mt-1 ${alerta.sugerenciaAjuste.tipo === 'aumentar' ? 'text-red-700' : 'text-sky-700'}`}>
-                  Mín. sugerido: <span className="font-medium">{fmtN(alerta.sugerenciaAjuste.stockMinimoSugerido)} uds</span>
-                  {' '}(2 sem) · actual: {fmtN(alerta.sugerenciaAjuste.stockMinimoActual)} uds
+                  Mín. sugerido: <span className="font-medium">{fmtCajasN(alerta.sugerenciaAjuste.stockMinimoSugerido)} cajas</span>
+                  {' '}(2 sem) · actual: {fmtCajasN(alerta.sugerenciaAjuste.stockMinimoActual)} cajas
                 </p>
                 <p className={`${alerta.sugerenciaAjuste.tipo === 'aumentar' ? 'text-red-700' : 'text-sky-700'}`}>
-                  Máx. sugerido: <span className="font-medium">{fmtN(alerta.sugerenciaAjuste.stockMaximoSugerido)} uds</span>
-                  {' '}(4 sem) · actual: {fmtN(alerta.sugerenciaAjuste.stockMaximoActual)} uds
+                  Máx. sugerido: <span className="font-medium">{fmtCajasN(alerta.sugerenciaAjuste.stockMaximoSugerido)} cajas</span>
+                  {' '}(4 sem) · actual: {fmtCajasN(alerta.sugerenciaAjuste.stockMaximoActual)} cajas
                 </p>
               </div>
             </div>
           )}
 
-          <CurvaSemanalAlertas series={alerta.semanasSeries} promedioSemanal={alerta.promedioSemanal} />
+          <CurvaSemanalAlertas
+            series={alerta.semanasSeries}
+            promedioSemanalCajas={alerta.promedioSemanalCajas}
+            unidadesPorCaja={alerta.unidadesPorCaja}
+          />
         </div>
       )}
     </div>
@@ -511,8 +540,8 @@ function MovimientoCard({
         <div className="flex-shrink-0 text-right text-xs">
           <div className="text-slate-500 mb-0.5">8 sem ant. → 8 sem rec.</div>
           <div className="text-sm font-semibold text-slate-700 tabular-nums">
-            {fmtViales(mov.periodoAnterior)} → {fmtViales(mov.periodoReciente)}
-            <span className="ml-1 text-xs font-normal text-slate-400">viales</span>
+            {fmtCajasN(mov.periodoAnteriorCajas)} → {fmtCajasN(mov.periodoRecienteCajas)}
+            <span className="ml-1 text-xs font-normal text-slate-400">cajas</span>
           </div>
           {mov.variacionPct !== null ? (
             <div className={`mt-0.5 font-bold ${mov.direccion === 'sube' || mov.direccion === 'nuevo' ? 'text-orange-600' : 'text-sky-600'}`}>
@@ -535,18 +564,18 @@ function MovimientoCard({
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3 text-xs">
             <div>
               <p className="text-slate-400 uppercase tracking-wide text-[10px]">8 sem recientes</p>
-              <p className="font-semibold text-slate-700">{fmtViales(mov.periodoReciente)} viales</p>
-              <p className="text-slate-400 text-[10px]">Prom. {fmtViales(mov.promedioSemanalReciente)}/sem</p>
+              <p className="font-semibold text-slate-700">{fmtCajasN(mov.periodoRecienteCajas)} cajas</p>
+              <p className="text-slate-400 text-[10px]">Prom. {fmtCajasSem(mov.promedioSemanalRecienteCajas)}</p>
             </div>
             <div>
               <p className="text-slate-400 uppercase tracking-wide text-[10px]">8 sem anteriores</p>
-              <p className="font-semibold text-slate-700">{fmtViales(mov.periodoAnterior)} viales</p>
-              <p className="text-slate-400 text-[10px]">Prom. {fmtViales(mov.promedioSemanalAnterior)}/sem</p>
+              <p className="font-semibold text-slate-700">{fmtCajasN(mov.periodoAnteriorCajas)} cajas</p>
+              <p className="text-slate-400 text-[10px]">Prom. {fmtCajasSem(mov.promedioSemanalAnteriorCajas)}</p>
             </div>
             <div>
               <p className="text-slate-400 uppercase tracking-wide text-[10px]">Cambio período</p>
-              <p className={`font-semibold ${mov.deltaVialesPeriodo >= 0 ? 'text-orange-600' : 'text-sky-600'}`}>
-                {mov.deltaVialesPeriodo >= 0 ? '+' : ''}{fmtViales(mov.deltaVialesPeriodo)} viales
+              <p className={`font-semibold ${mov.deltaCajasPeriodo >= 0 ? 'text-orange-600' : 'text-sky-600'}`}>
+                {mov.deltaCajasPeriodo >= 0 ? '+' : ''}{fmtCajasN(mov.deltaCajasPeriodo)} cajas
               </p>
             </div>
             <div>
@@ -554,7 +583,11 @@ function MovimientoCard({
               <p className="font-semibold text-slate-700">{mov.unidadesPorCaja} uds/caja</p>
             </div>
           </div>
-          <CurvaSemanalAlertas series={mov.semanasSeries} promedioSemanal={mov.promedioSemanalReciente} />
+          <CurvaSemanalAlertas
+            series={mov.semanasSeries}
+            promedioSemanalCajas={mov.promedioSemanalRecienteCajas}
+            unidadesPorCaja={mov.unidadesPorCaja}
+          />
         </div>
       )}
     </div>
@@ -845,6 +878,7 @@ export default function InicioPage() {
         </div>
         <p className="text-xs text-slate-400 mb-3">
           Cobertura = stock actual / consumo promedio semanal (últimas 8 semanas), calculado por presentación (CN).
+          Cantidades en cajas (uds ÷ uds/caja del catálogo).
           Agrupado por principio activo CIMA para comparar presentaciones sin sumar cantidades.
           Rango óptimo: 2.5-4 semanas (almacén limitado, pedidos semanales).
         </p>
@@ -930,8 +964,8 @@ export default function InicioPage() {
         </h2>
         <p className="text-xs text-slate-400 mb-3">
           Compara las últimas 8 semanas frente a las 8 anteriores (misma ventana que alertas de compra).
-          Agrupado por principio activo CIMA; cada presentación mantiene sus propias cifras.
-          Umbral relevante: variación &gt;25% con cambio ≥2 viales/sem o ≥1 caja/sem.
+          Cantidades en cajas. Agrupado por principio activo CIMA; cada presentación mantiene sus propias cifras.
+          Umbral relevante: variación &gt;25% con cambio ≥2 uds/sem o ≥1 caja/sem.
         </p>
 
         {movimientos && !loadingMov && (

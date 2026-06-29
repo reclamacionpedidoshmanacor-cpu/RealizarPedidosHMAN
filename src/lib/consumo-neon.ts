@@ -1,5 +1,6 @@
 import { neon } from '@neondatabase/serverless';
 import type { ConsumoRow } from './consumo-parser';
+import { roundCajas } from './utils';
 
 function getDb() {
   const url = process.env.REALIZAR_PEDIDOS_DATABASE_URL ?? process.env.DATABASE_URL;
@@ -8,6 +9,10 @@ function getDb() {
 }
 
 function num(v: unknown): number { return Number(v ?? 0); }
+
+function udsACajas(uds: number, upx: number): number {
+  return roundCajas(uds / Math.max(1, upx));
+}
 
 // ---------------------------------------------------------------------------
 // Auto-creación de tablas (se llama desde el endpoint de importación)
@@ -307,10 +312,15 @@ export type MovimientoConsumo = {
   direccion: DireccionMovimiento;
   periodoReciente: number;
   periodoAnterior: number;
+  periodoRecienteCajas: number;
+  periodoAnteriorCajas: number;
   promedioSemanalReciente: number;
   promedioSemanalAnterior: number;
+  promedioSemanalRecienteCajas: number;
+  promedioSemanalAnteriorCajas: number;
   variacionPct: number | null;
   deltaVialesPeriodo: number;
+  deltaCajasPeriodo: number;
   semanasSeries: { semana: number; anio: number; label: string; viales: number; recepciones: number }[];
 };
 
@@ -503,10 +513,15 @@ export async function getMovimientosConsumo(area: string): Promise<MovimientosCo
       direccion,
       periodoReciente: rec,
       periodoAnterior: ant,
+      periodoRecienteCajas: udsACajas(rec, upx),
+      periodoAnteriorCajas: udsACajas(ant, upx),
       promedioSemanalReciente: rec / 8,
       promedioSemanalAnterior: ant / 8,
+      promedioSemanalRecienteCajas: udsACajas(rec / 8, upx),
+      promedioSemanalAnteriorCajas: udsACajas(ant / 8, upx),
       variacionPct: ant > 0 ? ((rec - ant) / ant) * 100 : null,
       deltaVialesPeriodo: rec - ant,
+      deltaCajasPeriodo: udsACajas(rec - ant, upx),
       semanasSeries: [],
     });
   }
@@ -735,14 +750,14 @@ export async function getResumenConsumoArea(
 //       naranja 1.5–2.5 sem   O tendencia creciente relevante
 //       verde   2.5–4 sem     → rango óptimo
 //       azul    > 4 semanas   → sobrestock
-//   - sugerenciaAjuste: stock mínimo sugerido = prom × 2, máximo = prom × 4
+//   - sugerenciaAjuste: stock mínimo sugerido = prom × 2 sem (cajas), máximo = prom × 4 sem (cajas)
 // ---------------------------------------------------------------------------
 export type SugerenciaAjuste = {
   tipo: 'aumentar' | 'reducir' | 'ok';
-  stockMinimoSugerido: number;   // promedio × 2 sem (redondeado a múltiplo de caja)
-  stockMaximoSugerido: number;   // promedio × 4 sem (redondeado a múltiplo de caja)
-  stockMinimoActual: number;
-  stockMaximoActual: number;
+  stockMinimoSugerido: number;   // cajas
+  stockMaximoSugerido: number;   // cajas
+  stockMinimoActual: number;     // cajas (catálogo)
+  stockMaximoActual: number;     // cajas (catálogo)
 };
 
 export type AlertaCompra = {
@@ -753,11 +768,14 @@ export type AlertaCompra = {
   unidadesPorCaja: number;
   stockActualUnidades: number;
   stockActualCajas: number;
-  stockMinimo: number;
-  stockMaximo: number;
+  stockMinimo: number;           // cajas (catálogo)
+  stockMaximo: number;           // cajas (catálogo)
   consumoReciente: number;
   consumoAnterior: number;
+  consumoRecienteCajas: number;
+  consumoAnteriorCajas: number;
   promedioSemanal: number;
+  promedioSemanalCajas: number;
   variacionPct: number | null;
   tendenciaCreciente: boolean;
   tendenciaRelevante: boolean;
@@ -871,6 +889,7 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
       -- Último recuento disponible para el área
       SELECT DISTINCT ON (sr.cn)
              sr.cn,
+             sr.stock_cajas,
              sr.stock_unidades
       FROM stock_registros sr
       JOIN importaciones_stock si ON si.id = sr.importacion_id
@@ -898,6 +917,7 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
       m.unidades_por_caja,
       m.stock_minimo,
       m.stock_maximo,
+      COALESCE(sa.stock_cajas, 0)::float     AS stock_cajas,
       COALESCE(sa.stock_unidades, 0)::float  AS stock_unidades,
       COALESCE(cp.reciente,  0)::float AS consumo_reciente,
       COALESCE(cp.anterior,  0)::float AS consumo_anterior
@@ -905,12 +925,13 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
     LEFT JOIN stock_actual sa    ON sa.cn = m.cn
     LEFT JOIN consumo_periodos cp ON cp.cn = m.cn
     WHERE COALESCE(cp.reciente, 0) > 0
+       OR COALESCE(sa.stock_cajas, 0) > 0
        OR COALESCE(sa.stock_unidades, 0) > 0
     ORDER BY m.principio_activo, m.nombre;
   `) as Array<{
     cn: string; componente: string; medicamento: string; ppio_activo_cima: boolean;
     unidades_por_caja: number; stock_minimo: number; stock_maximo: number;
-    stock_unidades: number; consumo_reciente: number; consumo_anterior: number;
+    stock_cajas: number; stock_unidades: number; consumo_reciente: number; consumo_anterior: number;
   }>;
 
   if (agrupado.length === 0) return [];
@@ -936,11 +957,14 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
   // Construimos el resultado con semáforo
   return agrupado.map(r => {
     const upx   = Math.max(1, num(r.unidades_por_caja));
-    const stockU = num(r.stock_unidades);
-    const stockC = stockU / upx;
+    const stockC = num(r.stock_cajas) > 0
+      ? roundCajas(num(r.stock_cajas))
+      : udsACajas(num(r.stock_unidades), upx);
+    const stockU = stockC * upx;
     const rec    = num(r.consumo_reciente);
     const ant    = num(r.consumo_anterior);
     const promSem = rec / 8;
+    const promSemCajas = udsACajas(promSem, upx);
     const cobertura = promSem > 0 ? stockU / promSem : null;
 
     let variacionPct: number | null = null;
@@ -975,17 +999,17 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
       semaforo = 'azul'; // sobrestock
     }
 
-    // Sugerencia de ajuste de stock objetivo (min = 2 sem, max = 4 sem)
+    // Sugerencia de ajuste de stock objetivo (min = 2 sem, max = 4 sem) en cajas
     let sugerenciaAjuste: SugerenciaAjuste | null = null;
     if (promSem > 0) {
-      const stockMinimoSugerido = Math.ceil(promSem * 2 / upx) * upx;
-      const stockMaximoSugerido = Math.ceil(promSem * 4 / upx) * upx;
-      const stockMinimoActual = num(r.stock_minimo);
-      const stockMaximoActual = num(r.stock_maximo);
+      const stockMinimoSugerido = Math.ceil(promSem * 2 / upx);
+      const stockMaximoSugerido = Math.ceil(promSem * 4 / upx);
+      const stockMinimoActual = roundCajas(num(r.stock_minimo));
+      const stockMaximoActual = roundCajas(num(r.stock_maximo));
       let tipo: SugerenciaAjuste['tipo'] = 'ok';
-      if (stockU < promSem * 1.5) {
+      if (stockC < promSemCajas * 1.5) {
         tipo = 'aumentar';
-      } else if (stockU > promSem * 4) {
+      } else if (stockC > promSemCajas * 4) {
         tipo = 'reducir';
       }
       sugerenciaAjuste = { tipo, stockMinimoSugerido, stockMaximoSugerido, stockMinimoActual, stockMaximoActual };
@@ -1031,11 +1055,14 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
       unidadesPorCaja: upx,
       stockActualUnidades: stockU,
       stockActualCajas: stockC,
-      stockMinimo: num(r.stock_minimo),
-      stockMaximo: num(r.stock_maximo),
+      stockMinimo: roundCajas(num(r.stock_minimo)),
+      stockMaximo: roundCajas(num(r.stock_maximo)),
       consumoReciente: rec,
       consumoAnterior: ant,
+      consumoRecienteCajas: udsACajas(rec, upx),
+      consumoAnteriorCajas: udsACajas(ant, upx),
       promedioSemanal: promSem,
+      promedioSemanalCajas: promSemCajas,
       variacionPct,
       tendenciaCreciente,
       tendenciaRelevante,
