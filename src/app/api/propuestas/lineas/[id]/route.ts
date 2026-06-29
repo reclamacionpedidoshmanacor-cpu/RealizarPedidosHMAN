@@ -25,6 +25,8 @@ export async function PATCH(
       session.area === 'nutricion' ? roundCajas(cajasRaw) : Math.round(cajasRaw);
     const motivoAjuste = body.motivoAjuste ? String(body.motivoAjuste) : null;
     const motivoAjusteOtro = body.motivoAjusteOtro ? String(body.motivoAjusteOtro).trim() : null;
+    const proveedorLocal =
+      body.proveedorLocal !== undefined ? Boolean(body.proveedorLocal) : undefined;
 
     if (!Number.isFinite(cajasValidadas) || cajasValidadas < 0) {
       return NextResponse.json({ error: 'Cantidad validada no valida.' }, { status: 400 });
@@ -53,7 +55,8 @@ export async function PATCH(
       Math.round(cajasValidadas * linea.unidadesPorCaja),
       ajustado ? motivoAjuste : null,
       ajustado && motivoAjuste === 'Otro' ? motivoAjusteOtro : null,
-      ajustado
+      ajustado,
+      proveedorLocal,
     );
 
     return NextResponse.json({ ok: true });

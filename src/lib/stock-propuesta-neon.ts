@@ -47,6 +47,10 @@ async function ensurePropuestasLineasSchema(): Promise<void> {
         ALTER TABLE propuestas_lineas
         ADD COLUMN IF NOT EXISTS stock_transito_snap REAL NOT NULL DEFAULT 0;
       `;
+      await sql`
+        ALTER TABLE propuestas_lineas
+        ADD COLUMN IF NOT EXISTS proveedor_local BOOLEAN DEFAULT FALSE;
+      `;
     })();
   }
   await ensurePropuestasLineasSchemaPromise;
@@ -175,6 +179,7 @@ export type PropuestaLinea = {
   motivoAjuste: string | null;
   motivoAjusteOtro: string | null;
   ajustado: boolean;
+  proveedorLocal: boolean;
 };
 
 export type PropuestaLineaUI = PropuestaLinea & {
@@ -838,7 +843,8 @@ export async function getLineasPropuesta(propuestaId: number): Promise<Propuesta
     SELECT pl.id, pl.cn, pl.nombre_medicamento, pl.unidades_por_caja,
            m.principio_activo,
            stock_actual, stock_transito_snap, stock_minimo_snap, punto_pedido_snap, stock_maximo_snap,
-           cajas_propuestas, cajas_validadas, motivo_ajuste, motivo_ajuste_otro, ajustado
+           cajas_propuestas, cajas_validadas, motivo_ajuste, motivo_ajuste_otro, ajustado,
+           pl.proveedor_local
     FROM propuestas_lineas pl
     LEFT JOIN medicamentos m ON m.cn = pl.cn
     WHERE pl.propuesta_id = ${propuestaId}
@@ -849,6 +855,7 @@ export async function getLineasPropuesta(propuestaId: number): Promise<Propuesta
     stock_actual: string; stock_transito_snap: string; stock_minimo_snap: number; punto_pedido_snap: number; stock_maximo_snap: number;
     cajas_propuestas: number; cajas_validadas: number | null;
     motivo_ajuste: string | null; motivo_ajuste_otro: string | null; ajustado: boolean;
+    proveedor_local: boolean | null;
   }>;
 
   return rows.map((r) => ({
@@ -858,6 +865,7 @@ export async function getLineasPropuesta(propuestaId: number): Promise<Propuesta
     stockMaximoSnap: num(r.stock_maximo_snap), cajasPropuestas: num(r.cajas_propuestas),
     cajasValidadas: r.cajas_validadas != null ? num(r.cajas_validadas) : null,
     motivoAjuste: r.motivo_ajuste, motivoAjusteOtro: r.motivo_ajuste_otro, ajustado: r.ajustado,
+    proveedorLocal: r.proveedor_local === true,
   }));
 }
 
@@ -1080,6 +1088,7 @@ export async function buildLineasPropuestaParaUi(
       motivoAjuste: null,
       motivoAjusteOtro: null,
       ajustado: false,
+      proveedorLocal: false,
       activo: false,
       editable: false,
     };
@@ -1230,20 +1239,34 @@ export async function actualizarLineaPropuesta(
   unidadesFinal: number,
   motivoAjuste: string | null,
   motivoAjusteOtro: string | null,
-  ajustado: boolean
+  ajustado: boolean,
+  proveedorLocal?: boolean,
 ): Promise<void> {
   await ensureNutricionDecimalSchema(area);
   const sql = getDb();
   const cajas = normalizeCajasSnap(area, cajasValidadas);
-  await sql`
-    UPDATE propuestas_lineas
-    SET cajas_validadas = ${cajas},
-        motivo_ajuste = ${motivoAjuste},
-        motivo_ajuste_otro = ${motivoAjusteOtro},
-        ajustado = ${ajustado},
-        unidades_final = ${unidadesFinal}
-    WHERE id = ${lineaId} AND propuesta_id = ${propuestaId};
-  `;
+  if (proveedorLocal !== undefined) {
+    await sql`
+      UPDATE propuestas_lineas
+      SET cajas_validadas = ${cajas},
+          motivo_ajuste = ${motivoAjuste},
+          motivo_ajuste_otro = ${motivoAjusteOtro},
+          ajustado = ${ajustado},
+          unidades_final = ${unidadesFinal},
+          proveedor_local = ${proveedorLocal}
+      WHERE id = ${lineaId} AND propuesta_id = ${propuestaId};
+    `;
+  } else {
+    await sql`
+      UPDATE propuestas_lineas
+      SET cajas_validadas = ${cajas},
+          motivo_ajuste = ${motivoAjuste},
+          motivo_ajuste_otro = ${motivoAjusteOtro},
+          ajustado = ${ajustado},
+          unidades_final = ${unidadesFinal}
+      WHERE id = ${lineaId} AND propuesta_id = ${propuestaId};
+    `;
+  }
 }
 
 export async function actualizarCalculoAutomaticoLineaPropuesta(
@@ -1477,11 +1500,14 @@ export async function eliminarPropuestaById(
 export async function getLineasParaExcel(propuestaId: number): Promise<Array<{
   cn: string; nombreMedicamento: string | null; principioActivo: string | null;
   cajasPropuestas: number; cajasValidadas: number | null; unidadesPorCaja: number;
+  proveedorLocal: boolean;
 }>> {
+  await ensurePropuestasLineasSchema();
   const sql = getDb();
   const rows = (await sql`
     SELECT
       pl.cn, pl.nombre_medicamento, pl.cajas_propuestas, pl.cajas_validadas, pl.unidades_por_caja,
+      pl.proveedor_local,
       m.principio_activo
     FROM propuestas_lineas pl
     LEFT JOIN medicamentos m ON m.cn = pl.cn
@@ -1489,12 +1515,14 @@ export async function getLineasParaExcel(propuestaId: number): Promise<Array<{
   `) as Array<{
     cn: string; nombre_medicamento: string | null; principio_activo: string | null;
     cajas_propuestas: number; cajas_validadas: number | null; unidades_por_caja: number;
+    proveedor_local: boolean | null;
   }>;
   return rows.map((r) => ({
     cn: r.cn, nombreMedicamento: r.nombre_medicamento, principioActivo: r.principio_activo,
     cajasPropuestas: num(r.cajas_propuestas),
     cajasValidadas: r.cajas_validadas != null ? num(r.cajas_validadas) : null,
     unidadesPorCaja: num(r.unidades_por_caja),
+    proveedorLocal: r.proveedor_local === true,
   }));
 }
 

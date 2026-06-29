@@ -6,6 +6,15 @@ import { toSapCode } from '@/lib/propuesta';
 
 export const runtime = 'nodejs';
 
+function unidadesFinales(linea: {
+  cajasPropuestas: number;
+  cajasValidadas: number | null;
+  unidadesPorCaja: number;
+}): number {
+  const cajasFinales = linea.cajasValidadas ?? linea.cajasPropuestas;
+  return Math.round(cajasFinales * linea.unidadesPorCaja);
+}
+
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -28,6 +37,8 @@ export async function GET(
     }
 
     const lineas = await getLineasParaExcel(propuestaId);
+    const lineasSap = lineas.filter((l) => !l.proveedorLocal);
+    const lineasLocal = lineas.filter((l) => l.proveedorLocal);
 
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Propuesta');
@@ -39,16 +50,42 @@ export async function GET(
       { header: 'Principio Activo', key: 'principioActivo', width: 40 },
     ];
 
-    for (const linea of lineas) {
-      const cajasFinales = linea.cajasValidadas ?? linea.cajasPropuestas;
-      const unidadesFinales = Math.round(cajasFinales * linea.unidadesPorCaja);
-      if (unidadesFinales <= 0) continue;
+    for (const linea of lineasSap) {
+      const unidades = unidadesFinales(linea);
+      if (unidades <= 0) continue;
       sheet.addRow({
         sap: toSapCode(linea.cn),
-        cantidad: unidadesFinales,
+        cantidad: unidades,
         descripcion: linea.nombreMedicamento ?? linea.cn,
         principioActivo: linea.principioActivo ?? '',
       });
+    }
+
+    if (lineasLocal.length > 0) {
+      sheet.addRow({});
+      const titleRow = sheet.addRow({
+        sap: 'Comprar a proveedor local',
+        cantidad: '',
+        descripcion: '',
+        principioActivo: '',
+      });
+      titleRow.font = { bold: true };
+      sheet.addRow({
+        sap: 'Codigo',
+        cantidad: 'Cantidad (unidades)',
+        descripcion: 'Nombre',
+        principioActivo: '',
+      });
+      for (const linea of lineasLocal) {
+        const unidades = unidadesFinales(linea);
+        if (unidades <= 0) continue;
+        sheet.addRow({
+          sap: linea.cn,
+          cantidad: unidades,
+          descripcion: linea.nombreMedicamento ?? linea.cn,
+          principioActivo: '',
+        });
+      }
     }
 
     const buffer = await workbook.xlsx.writeBuffer();

@@ -50,6 +50,7 @@ type Linea = {
   motivoAjuste: string | null;
   motivoAjusteOtro: string | null;
   ajustado: boolean;
+  proveedorLocal?: boolean;
   activo?: boolean;
   editable?: boolean;
   alertaSuministro?: AlertaSuministroCn | null;
@@ -67,6 +68,7 @@ type DraftEdit = {
   cajasValidadas: number;
   motivoAjuste: string;
   motivoAjusteOtro: string;
+  proveedorLocal: boolean;
 };
 
 type PropuestaResumen = {
@@ -203,6 +205,7 @@ export default function PropuestaPage() {
           cajasValidadas:   linea.cajasValidadas ?? linea.cajasPropuestas,
           motivoAjuste:     linea.motivoAjuste ?? '',
           motivoAjusteOtro: linea.motivoAjusteOtro ?? '',
+          proveedorLocal:   linea.proveedorLocal === true,
         };
       }
       setEdits(nextEdits);
@@ -597,6 +600,11 @@ export default function PropuestaPage() {
                           <span className="ml-1 normal-case text-[10px] text-slate-400">(comprimidos)</span>
                         </th>
                         <th className="px-4 py-3 text-left">Motivo ajuste</th>
+                        {esAlmacen && (
+                          <th className="px-4 py-3 text-center" title="Comprar a proveedor local (solo en Excel, bloque separado)">
+                            Prov. local
+                          </th>
+                        )}
                       </>
                     ) : (
                       <>
@@ -626,6 +634,11 @@ export default function PropuestaPage() {
                           <span className="ml-1 normal-case text-[10px] text-slate-400">(comprimidos)</span>
                         </th>
                         <th className="px-4 py-3 text-left">Motivo ajuste</th>
+                        {esAlmacen && (
+                          <th className="px-4 py-3 text-center" title="Comprar a proveedor local (solo en Excel, bloque separado)">
+                            Prov. local
+                          </th>
+                        )}
                       </>
                     )}
                   </tr>
@@ -640,6 +653,7 @@ export default function PropuestaPage() {
                     const aumentado  = diff > 0;
                     const reducido   = diff < 0;
                     const bajoMinimo = stockActualDestacadoBajoMinimo(linea, layoutCompacto);
+                    const proveedorLocal = !inactiva && (draft?.proveedorLocal ?? linea.proveedorLocal === true);
 
                     return (
                       <tr
@@ -647,9 +661,11 @@ export default function PropuestaPage() {
                         className={`${
                           inactiva
                             ? 'bg-slate-100/90 text-slate-400 italic'
-                            : idx % 2 === 0
-                              ? 'bg-white'
-                              : 'bg-slate-50/50'
+                            : proveedorLocal
+                              ? 'bg-violet-50/80'
+                              : idx % 2 === 0
+                                ? 'bg-white'
+                                : 'bg-slate-50/50'
                         }`}
                       >
 
@@ -896,6 +912,32 @@ export default function PropuestaPage() {
                             </span>
                           )}
                         </td>
+
+                        {esAlmacen && (
+                          <td className="px-4 py-3 text-center not-italic">
+                            {inactiva ? (
+                              <span className="text-slate-400">—</span>
+                            ) : editable ? (
+                              <label
+                                className="inline-flex items-center justify-center cursor-pointer"
+                                title="Comprar a proveedor local (no aparecerá en el bloque SAP del Excel)"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={draft?.proveedorLocal ?? false}
+                                  onChange={(e) => setLinea(linea.id, { proveedorLocal: e.target.checked })}
+                                  className="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                                />
+                              </label>
+                            ) : proveedorLocal ? (
+                              <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-700">
+                                Sí
+                              </span>
+                            ) : (
+                              <span className="text-slate-400">—</span>
+                            )}
+                          </td>
+                        )}
                       </tr>
                     );
                   })}
@@ -910,7 +952,7 @@ export default function PropuestaPage() {
                   {data.lineas.length} artículo{data.lineas.length !== 1 ? 's' : ''} en la propuesta
                   {esAlmacen && (
                     <span className="block text-[11px] text-slate-400 mt-0.5">
-                      Si corriges uds/caja en catálogo, usa «Actualizar» para recalcular comprimidos sin cambiar las cajas.
+                      Marca «Prov. local» para artículos que comprarás fuera de SAP. Si corriges uds/caja en catálogo, usa «Actualizar» para recalcular comprimidos sin cambiar las cajas.
                     </span>
                   )}
                 </p>
