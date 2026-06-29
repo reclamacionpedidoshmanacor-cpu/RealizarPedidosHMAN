@@ -753,7 +753,13 @@ export default function CatalogoPage() {
     finally { setSavingNuevo(false); }
   };
 
-  const handleConfirmarSustitucionCatalogo = async (cnNuevo: string) => {
+  const handleConfirmarSustitucionCatalogo = async (confirmacion: {
+    cnNuevo: string;
+    nombre: string;
+    principioActivo: string;
+    presentacion: string;
+    unidadesPorCaja: number;
+  }) => {
     if (!sustitucionMed?.ubicacion) return;
     setSustituyendo(true);
     try {
@@ -763,18 +769,22 @@ export default function CatalogoPage() {
         credentials: 'include',
         body: JSON.stringify({
           cnViejo: sustitucionMed.cn,
-          cnNuevo,
+          cnNuevo: confirmacion.cnNuevo,
           ubicacion: sustitucionMed.ubicacion,
+          nombre: confirmacion.nombre,
+          principioActivo: confirmacion.principioActivo,
+          presentacion: confirmacion.presentacion,
+          unidadesPorCaja: confirmacion.unidadesPorCaja,
         }),
       });
-      const payload = await res.json();
-      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo sustituir.');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? 'No se pudo sustituir.');
 
-      toast.success(`Sustituido CN ${sustitucionMed.cn} → ${payload.cnNuevo}`);
+      toast.success(`Sustituido CN ${sustitucionMed.cn} → ${data.cnNuevo}`);
       setSustitucionMed(null);
       await fetchMeds({ silent: true });
-      if (payload.cnNuevo) {
-        pendingRepositionCn.current = payload.cnNuevo;
+      if (data.cnNuevo) {
+        pendingRepositionCn.current = data.cnNuevo;
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
@@ -1502,6 +1512,14 @@ type CimaPreviewCatalogo = {
   unidadesPorCajaInferidas: number | null;
 };
 
+type SustitucionCatalogoConfirm = {
+  cnNuevo: string;
+  nombre: string;
+  principioActivo: string;
+  presentacion: string;
+  unidadesPorCaja: number;
+};
+
 function SustituirCatalogoModal({
   med,
   busy,
@@ -1511,11 +1529,29 @@ function SustituirCatalogoModal({
   med: Medicamento;
   busy: boolean;
   onCancelar: () => void;
-  onConfirmar: (cnNuevo: string) => void;
+  onConfirmar: (payload: SustitucionCatalogoConfirm) => void;
 }) {
   const [cnNuevo, setCnNuevo] = useState('');
   const [cima, setCima] = useState<CimaPreviewCatalogo | null>(null);
   const [buscandoCima, setBuscandoCima] = useState(false);
+  const [nombre, setNombre] = useState('');
+  const [principioActivo, setPrincipioActivo] = useState('');
+  const [presentacion, setPresentacion] = useState('');
+  const [udsCaja, setUdsCaja] = useState('1');
+
+  const resetDatosEditables = () => {
+    setNombre('');
+    setPrincipioActivo('');
+    setPresentacion('');
+    setUdsCaja('1');
+  };
+
+  const aplicarDatosCima = (data: CimaPreviewCatalogo) => {
+    setNombre(data.nombre ?? '');
+    setPrincipioActivo(data.principioActivo ?? '');
+    setPresentacion(data.presentacion ?? '');
+    setUdsCaja(String(data.unidadesPorCajaInferidas && data.unidadesPorCajaInferidas > 0 ? data.unidadesPorCajaInferidas : 1));
+  };
 
   const consultarCima = async (raw: string) => {
     const trimmed = raw.trim();
@@ -1525,6 +1561,7 @@ function SustituirCatalogoModal({
     }
     setBuscandoCima(true);
     setCima(null);
+    resetDatosEditables();
     try {
       const res = await fetch(`/api/catalogo/cima?cn=${encodeURIComponent(trimmed)}`, {
         credentials: 'include',
@@ -1534,14 +1571,16 @@ function SustituirCatalogoModal({
         toast.error(data.error ?? 'CN no encontrado en CIMA');
         return;
       }
-      setCnNuevo(data.cn ?? trimmed);
-      setCima({
+      const preview: CimaPreviewCatalogo = {
         cn: data.cn,
         nombre: data.nombre,
         principioActivo: data.principioActivo,
         presentacion: data.presentacion,
         unidadesPorCajaInferidas: data.unidadesPorCajaInferidas,
-      });
+      };
+      setCnNuevo(data.cn ?? trimmed);
+      setCima(preview);
+      aplicarDatosCima(preview);
     } catch {
       toast.error('Error al consultar CIMA');
     } finally {
@@ -1574,7 +1613,7 @@ function SustituirCatalogoModal({
               inputMode="numeric"
               placeholder="CN nuevo o código SAP"
               value={cnNuevo}
-              onChange={(e) => { setCnNuevo(e.target.value.trim()); setCima(null); }}
+              onChange={(e) => { setCnNuevo(e.target.value.trim()); setCima(null); resetDatosEditables(); }}
               onBlur={() => { if (cnNuevo.trim()) void consultarCima(cnNuevo); }}
               className="field-input flex-1 font-mono"
               disabled={busy}
@@ -1589,11 +1628,45 @@ function SustituirCatalogoModal({
             </button>
           </div>
           {cima && (
-            <div className="rounded-xl bg-violet-50 border border-violet-200 px-4 py-3 text-sm space-y-1">
-              <p className="font-bold text-slate-800">{cima.principioActivo || cima.nombre}</p>
-              <p className="text-slate-500 italic">{cima.nombre}</p>
-              {cima.presentacion && <p className="text-slate-600">{cima.presentacion}</p>}
-              <p className="font-mono text-violet-700">CN {cima.cn}</p>
+            <div className="rounded-xl bg-violet-50 border border-violet-200 px-4 py-4 space-y-3">
+              <p className="text-xs font-semibold text-violet-800 uppercase tracking-wide">
+                Datos del nuevo CN — revisa y corrige antes de confirmar
+              </p>
+              <p className="text-xs text-violet-700 font-mono">CN {cima.cn}</p>
+              <Field label="Principio activo">
+                <input
+                  className="field-input"
+                  value={principioActivo}
+                  onChange={(e) => setPrincipioActivo(e.target.value)}
+                  disabled={busy}
+                />
+              </Field>
+              <Field label="Nombre / Marca *">
+                <input
+                  className="field-input"
+                  value={nombre}
+                  onChange={(e) => setNombre(e.target.value)}
+                  disabled={busy}
+                />
+              </Field>
+              <Field label="Presentación">
+                <input
+                  className="field-input"
+                  value={presentacion}
+                  onChange={(e) => setPresentacion(e.target.value)}
+                  disabled={busy}
+                />
+              </Field>
+              <Field label="Uds/caja">
+                <input
+                  type="number"
+                  min={1}
+                  className="field-input text-center w-24"
+                  value={udsCaja}
+                  onChange={(e) => setUdsCaja(e.target.value)}
+                  disabled={busy}
+                />
+              </Field>
             </div>
           )}
         </div>
@@ -1606,8 +1679,21 @@ function SustituirCatalogoModal({
             Cancelar
           </button>
           <button
-            onClick={() => onConfirmar(cnNuevo)}
-            disabled={busy || !cima || !cnNuevo.trim()}
+            onClick={() => {
+              if (!cima || !nombre.trim()) {
+                toast.error('El nombre del medicamento es obligatorio.');
+                return;
+              }
+              const uds = Number(udsCaja);
+              onConfirmar({
+                cnNuevo: cima.cn,
+                nombre: nombre.trim(),
+                principioActivo: principioActivo.trim(),
+                presentacion: presentacion.trim(),
+                unidadesPorCaja: Number.isFinite(uds) && uds > 0 ? Math.round(uds) : 1,
+              });
+            }}
+            disabled={busy || !cima || !cnNuevo.trim() || !nombre.trim()}
             className="rounded-lg bg-violet-700 px-4 py-2 text-sm font-medium text-white hover:bg-violet-800 disabled:opacity-50"
           >
             {busy ? 'Sustituyendo…' : 'Confirmar sustitución'}

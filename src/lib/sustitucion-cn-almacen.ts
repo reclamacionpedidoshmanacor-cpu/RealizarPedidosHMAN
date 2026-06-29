@@ -9,6 +9,13 @@ import {
 } from './catalogo-neon';
 import { isMSE, normalizarCnParaCima } from './utils';
 
+export type DatosNuevoSustitucion = {
+  nombre: string;
+  principioActivo?: string | null;
+  presentacion?: string | null;
+  unidadesPorCaja?: number;
+};
+
 export type SustitucionCnAlmacenError = {
   status: number;
   error: string;
@@ -28,13 +35,35 @@ export type SustitucionCnAlmacenResult = {
   consumoMedio: number | null;
 };
 
+function resolverDatosNuevo(
+  cima: { nombre: string; principioActivo: string; presentacion: string; unidadesPorCaja: number | null },
+  datos?: DatosNuevoSustitucion
+): { ok: true; datos: { nombre: string; principioActivo: string | null; presentacion: string | null; unidadesPorCaja: number } } | { ok: false; err: SustitucionCnAlmacenError } {
+  const nombre = (datos?.nombre ?? cima.nombre).trim();
+  if (!nombre) {
+    return { ok: false, err: { status: 400, error: 'El nombre del medicamento es obligatorio.' } };
+  }
+  const principioActivo =
+    datos?.principioActivo !== undefined
+      ? (String(datos.principioActivo).trim() || null)
+      : (cima.principioActivo?.trim() || null);
+  const presentacion =
+    datos?.presentacion !== undefined
+      ? (String(datos.presentacion).trim() || null)
+      : (cima.presentacion?.trim() || null);
+  const udsRaw = datos?.unidadesPorCaja ?? cima.unidadesPorCaja;
+  const unidadesPorCaja = udsRaw != null && Number(udsRaw) > 0 ? Number(udsRaw) : 1;
+  return { ok: true, datos: { nombre, principioActivo, presentacion, unidadesPorCaja } };
+}
+
 export async function sustituirCnEnCatalogoAlmacen(params: {
   area: string;
   cnViejo: string;
   cnNuevoRaw: string;
   ubicacion: string;
+  datosNuevo?: DatosNuevoSustitucion;
 }): Promise<{ ok: true; result: SustitucionCnAlmacenResult } | { ok: false; err: SustitucionCnAlmacenError }> {
-  const { area, cnViejo, cnNuevoRaw, ubicacion } = params;
+  const { area, cnViejo, cnNuevoRaw, ubicacion, datosNuevo } = params;
 
   const cnNuevo = normalizarCnParaCima(cnNuevoRaw);
   if (!cnNuevo) {
@@ -57,6 +86,10 @@ export async function sustituirCnEnCatalogoAlmacen(params: {
     return { ok: false, err: { status: 404, error: `CN ${cnNuevo} no encontrado en CIMA (AEMPS).` } };
   }
 
+  const datosResueltos = resolverDatosNuevo(cima, datosNuevo);
+  if (!datosResueltos.ok) return datosResueltos;
+  const { nombre, principioActivo, presentacion, unidadesPorCaja } = datosResueltos.datos;
+
   const existenteNuevo = await getMedicamentoByCn(cnNuevo);
   if (existenteNuevo && existenteNuevo.area !== area) {
     return {
@@ -65,15 +98,12 @@ export async function sustituirCnEnCatalogoAlmacen(params: {
     };
   }
 
-  const unidadesPorCaja =
-    cima.unidadesPorCaja && cima.unidadesPorCaja > 0 ? cima.unidadesPorCaja : 1;
-
   if (!existenteNuevo) {
     await insertMedicamento({
       cn: cnNuevo,
-      nombre: cima.nombre,
-      principioActivo: cima.principioActivo || null,
-      presentacion: cima.presentacion || null,
+      nombre,
+      principioActivo,
+      presentacion,
       via: 'OTRO',
       area,
       ubicacion,
@@ -88,9 +118,9 @@ export async function sustituirCnEnCatalogoAlmacen(params: {
   } else {
     await updateMedicamento({
       cn: cnNuevo,
-      nombre: cima.nombre,
-      principioActivo: cima.principioActivo || existenteNuevo.principioActivo,
-      presentacion: cima.presentacion || existenteNuevo.presentacion || null,
+      nombre,
+      principioActivo: principioActivo || existenteNuevo.principioActivo,
+      presentacion: presentacion || existenteNuevo.presentacion || null,
       via: existenteNuevo.via ?? 'OTRO',
       area,
       ubicacion,
@@ -136,9 +166,9 @@ export async function sustituirCnEnCatalogoAlmacen(params: {
     result: {
       cnViejo,
       cnNuevo,
-      nombre: cima.nombre,
-      principioActivo: cima.principioActivo,
-      presentacion: cima.presentacion,
+      nombre,
+      principioActivo: principioActivo ?? '',
+      presentacion: presentacion ?? '',
       unidadesPorCaja,
       ubicacion,
       stockMinimo: stockFinal?.stockMinimo ?? null,

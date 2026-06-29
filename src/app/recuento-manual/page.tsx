@@ -506,8 +506,14 @@ export default function RecuentoManualPage() {
 
   const handleConfirmarSustitucion = async (
     cnViejo: string,
-    cnNuevo: string,
-    cajasPedidas: number,
+    payload: {
+      cnNuevo: string;
+      nombre: string;
+      principioActivo: string;
+      presentacion: string;
+      unidadesPorCaja: number;
+      cajasPedidas: number;
+    },
   ) => {
     if (!ubicacion) return;
     setSustituyendo(true);
@@ -516,13 +522,22 @@ export default function RecuentoManualPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ cnViejo, cnNuevo, ubicacion, cajasPedidas }),
+        body: JSON.stringify({
+          cnViejo,
+          cnNuevo: payload.cnNuevo,
+          ubicacion,
+          cajasPedidas: payload.cajasPedidas,
+          nombre: payload.nombre,
+          principioActivo: payload.principioActivo,
+          presentacion: payload.presentacion,
+          unidadesPorCaja: payload.unidadesPorCaja,
+        }),
       });
-      const payload = await res.json();
-      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo sustituir.');
+      const responsePayload = await res.json();
+      if (!res.ok) throw new Error(responsePayload?.error ?? 'No se pudo sustituir.');
 
-      const nuevo = payload.medicamento as MedicamentoManual;
-      const cajas = Number(nuevo.cajasPedidas ?? cajasPedidas);
+      const nuevo = responsePayload.medicamento as MedicamentoManual;
+      const cajas = Number(nuevo.cajasPedidas ?? payload.cajasPedidas);
 
       setExtrasAlmacen((prev) => {
         const filtrados = prev.filter((m) => m.cn !== cnViejo && m.cn !== nuevo.cn);
@@ -1226,7 +1241,7 @@ export default function RecuentoManualPage() {
                             nombreViejo={med.principioActivo ?? med.nombre}
                             busy={sustituyendo}
                             onCancelar={() => setSustitucionCnViejo(null)}
-                            onConfirmar={(cnNuevo, cajas) => void handleConfirmarSustitucion(med.cn, cnNuevo, cajas)}
+                            onConfirmar={(datos) => void handleConfirmarSustitucion(med.cn, datos)}
                           />
                         )}
                       </div>
@@ -1704,6 +1719,15 @@ function EditarPasilloPanel({
   );
 }
 
+type SustitucionPasilloConfirm = {
+  cnNuevo: string;
+  nombre: string;
+  principioActivo: string;
+  presentacion: string;
+  unidadesPorCaja: number;
+  cajasPedidas: number;
+};
+
 /* ════════════════ Panel sustituir por — solo almacén ════════════════ */
 function SustituirPorPanel({
   cnViejo,
@@ -1716,12 +1740,30 @@ function SustituirPorPanel({
   nombreViejo: string;
   busy: boolean;
   onCancelar: () => void;
-  onConfirmar: (cnNuevo: string, cajasPedidas: number) => void;
+  onConfirmar: (payload: SustitucionPasilloConfirm) => void;
 }) {
   const [cnNuevo, setCnNuevo] = useState('');
   const [cajas, setCajas] = useState(0);
   const [cima, setCima] = useState<CimaPreview | null>(null);
   const [buscandoCima, setBuscandoCima] = useState(false);
+  const [nombre, setNombre] = useState('');
+  const [principioActivo, setPrincipioActivo] = useState('');
+  const [presentacion, setPresentacion] = useState('');
+  const [udsCaja, setUdsCaja] = useState('1');
+
+  const resetDatosEditables = () => {
+    setNombre('');
+    setPrincipioActivo('');
+    setPresentacion('');
+    setUdsCaja('1');
+  };
+
+  const aplicarDatosCima = (data: CimaPreview) => {
+    setNombre(data.nombre ?? '');
+    setPrincipioActivo(data.principioActivo ?? '');
+    setPresentacion(data.presentacion ?? '');
+    setUdsCaja(String(data.unidadesPorCajaInferidas && data.unidadesPorCajaInferidas > 0 ? data.unidadesPorCajaInferidas : 1));
+  };
 
   const consultarCima = async (raw: string) => {
     const trimmed = raw.trim();
@@ -1731,6 +1773,7 @@ function SustituirPorPanel({
     }
     setBuscandoCima(true);
     setCima(null);
+    resetDatosEditables();
     try {
       const res = await fetch(`/api/catalogo/cima?cn=${encodeURIComponent(trimmed)}`, {
         credentials: 'include',
@@ -1740,14 +1783,16 @@ function SustituirPorPanel({
         toast.error(data.error ?? 'CN no encontrado en CIMA');
         return;
       }
-      setCnNuevo(data.cn ?? trimmed);
-      setCima({
+      const preview: CimaPreview = {
         cn: data.cn,
         nombre: data.nombre,
         principioActivo: data.principioActivo,
         presentacion: data.presentacion,
         unidadesPorCajaInferidas: data.unidadesPorCajaInferidas,
-      });
+      };
+      setCnNuevo(data.cn ?? trimmed);
+      setCima(preview);
+      aplicarDatosCima(preview);
     } catch {
       toast.error('Error al consultar CIMA');
     } finally {
@@ -1769,7 +1814,7 @@ function SustituirPorPanel({
           inputMode="numeric"
           placeholder="CN nuevo o código SAP"
           value={cnNuevo}
-          onChange={(e) => { setCnNuevo(e.target.value.trim()); setCima(null); }}
+          onChange={(e) => { setCnNuevo(e.target.value.trim()); setCima(null); resetDatosEditables(); }}
           onBlur={() => { if (cnNuevo.trim()) void consultarCima(cnNuevo); }}
           className="flex-1 rounded-xl border-2 border-violet-200 px-4 py-3 text-lg font-mono focus:border-violet-500 focus:outline-none"
         />
@@ -1783,14 +1828,49 @@ function SustituirPorPanel({
         </button>
       </div>
       {cima && (
-        <div className="rounded-xl bg-white border border-violet-200 px-4 py-3 text-sm space-y-1">
-          <p className="font-bold text-slate-800">{cima.principioActivo || cima.nombre}</p>
-          <p className="text-slate-500 italic">{cima.nombre}</p>
-          {cima.presentacion && <p className="text-slate-600">{cima.presentacion}</p>}
-          <p className="font-mono text-violet-700">CN {cima.cn}</p>
-          {cima.unidadesPorCajaInferidas != null && (
-            <p className="text-slate-500">Uds/caja: {cima.unidadesPorCajaInferidas}</p>
-          )}
+        <div className="rounded-xl bg-white border border-violet-200 px-4 py-4 space-y-3">
+          <p className="text-xs font-bold text-violet-800 uppercase tracking-wide">
+            Datos del nuevo CN — revisa y corrige antes de confirmar
+          </p>
+          <p className="text-xs text-violet-700 font-mono">CN {cima.cn}</p>
+          <label className="block space-y-1">
+            <span className="text-xs font-semibold text-slate-600">Principio activo</span>
+            <input
+              className="w-full rounded-xl border-2 border-violet-200 px-4 py-2 text-sm focus:border-violet-500 focus:outline-none"
+              value={principioActivo}
+              onChange={(e) => setPrincipioActivo(e.target.value)}
+              disabled={busy}
+            />
+          </label>
+          <label className="block space-y-1">
+            <span className="text-xs font-semibold text-slate-600">Nombre / Marca *</span>
+            <input
+              className="w-full rounded-xl border-2 border-violet-200 px-4 py-2 text-sm focus:border-violet-500 focus:outline-none"
+              value={nombre}
+              onChange={(e) => setNombre(e.target.value)}
+              disabled={busy}
+            />
+          </label>
+          <label className="block space-y-1">
+            <span className="text-xs font-semibold text-slate-600">Presentación</span>
+            <input
+              className="w-full rounded-xl border-2 border-violet-200 px-4 py-2 text-sm focus:border-violet-500 focus:outline-none"
+              value={presentacion}
+              onChange={(e) => setPresentacion(e.target.value)}
+              disabled={busy}
+            />
+          </label>
+          <label className="block space-y-1">
+            <span className="text-xs font-semibold text-slate-600">Uds/caja</span>
+            <input
+              type="number"
+              min={1}
+              className="w-24 rounded-xl border-2 border-violet-200 px-4 py-2 text-sm text-center focus:border-violet-500 focus:outline-none"
+              value={udsCaja}
+              onChange={(e) => setUdsCaja(e.target.value)}
+              disabled={busy}
+            />
+          </label>
         </div>
       )}
       <div className="space-y-1">
@@ -1816,8 +1896,22 @@ function SustituirPorPanel({
         </button>
         <button
           type="button"
-          onClick={() => onConfirmar(cnNuevo, cajas)}
-          disabled={busy || !cima || !cnNuevo.trim()}
+          onClick={() => {
+            if (!cima || !nombre.trim()) {
+              toast.error('El nombre del medicamento es obligatorio.');
+              return;
+            }
+            const uds = Number(udsCaja);
+            onConfirmar({
+              cnNuevo: cima.cn,
+              nombre: nombre.trim(),
+              principioActivo: principioActivo.trim(),
+              presentacion: presentacion.trim(),
+              unidadesPorCaja: Number.isFinite(uds) && uds > 0 ? Math.round(uds) : 1,
+              cajasPedidas: cajas,
+            });
+          }}
+          disabled={busy || !cima || !nombre.trim()}
           className="rounded-xl bg-violet-700 px-6 py-3 text-sm font-bold text-white disabled:opacity-50"
         >
           {busy ? 'Sustituyendo…' : 'Confirmar sustitución'}

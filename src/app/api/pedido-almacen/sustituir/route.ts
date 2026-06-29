@@ -33,6 +33,10 @@ export async function POST(req: NextRequest) {
     cnNuevo?: unknown;
     ubicacion?: unknown;
     cajasPedidas?: unknown;
+    nombre?: unknown;
+    principioActivo?: unknown;
+    presentacion?: unknown;
+    unidadesPorCaja?: unknown;
   };
 
   const cnViejo = String(body.cnViejo ?? '').trim();
@@ -44,11 +48,25 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'CN anterior, CN nuevo y ubicación son obligatorios.' }, { status: 400 });
   }
 
+  const tieneDatosEditados =
+    body.nombre != null ||
+    body.principioActivo != null ||
+    body.presentacion != null ||
+    body.unidadesPorCaja != null;
+
   const outcome = await sustituirCnEnCatalogoAlmacen({
     area: session.area,
     cnViejo,
     cnNuevoRaw,
     ubicacion,
+    datosNuevo: tieneDatosEditados
+      ? {
+          nombre: String(body.nombre ?? '').trim(),
+          principioActivo: body.principioActivo != null ? String(body.principioActivo) : null,
+          presentacion: body.presentacion != null ? String(body.presentacion) : null,
+          unidadesPorCaja: body.unidadesPorCaja != null ? Number(body.unidadesPorCaja) : undefined,
+        }
+      : undefined,
   });
 
   if (!outcome.ok) {
