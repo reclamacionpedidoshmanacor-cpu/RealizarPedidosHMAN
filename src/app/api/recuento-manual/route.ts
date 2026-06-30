@@ -22,7 +22,6 @@ import {
   incorporarFaltantesRecuento,
   recalcularTotalLineasPedidoAlmacen,
   recalcularTotalLineasRecuento,
-  syncPropuestaUbicacionDesdeRecuento,
   upsertLineaRecuento,
 } from '@/lib/stock-propuesta-neon';
 
@@ -228,14 +227,16 @@ export async function GET(req: NextRequest) {
       ? catalogo
           .filter((med) => normalizeText(med.ubicacion) === selectedKey)
           .sort((a, b) => {
-            if (a.activo !== b.activo) return a.activo ? -1 : 1;
             const pa = (a.principioActivo ?? a.nombre).localeCompare(
               b.principioActivo ?? b.nombre,
               'es',
               { sensitivity: 'base' }
             );
             if (pa !== 0) return pa;
-            return a.nombre.localeCompare(b.nombre, 'es', { sensitivity: 'base' });
+            if (a.activo !== b.activo) return a.activo ? -1 : 1;
+            const na = a.nombre.localeCompare(b.nombre, 'es', { sensitivity: 'base' });
+            if (na !== 0) return na;
+            return a.cn.localeCompare(b.cn, 'es', { sensitivity: 'base' });
           })
           .map((med) => {
             const unidadesPorCaja = Number(med.unidadesPorCaja) > 0 ? Number(med.unidadesPorCaja) : 1;
@@ -603,8 +604,6 @@ export async function POST(req: NextRequest) {
     }
 
     const totalLineas = await recalcularTotalLineasRecuento(importacionId);
-
-    await syncPropuestaUbicacionDesdeRecuento(area, importacionId, ubicacionSeleccionada);
 
     const res = NextResponse.json({
       ok: true,
