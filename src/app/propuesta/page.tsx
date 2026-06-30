@@ -370,7 +370,11 @@ export default function PropuestaPage() {
       });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo tramitar.');
-      toast.success('Propuesta tramitada correctamente.');
+      toast.success(
+        payload?.recuentoGenerado
+          ? 'Propuesta tramitada y recuento marcado como generado.'
+          : 'Propuesta tramitada correctamente.'
+      );
       if (usaBloquesPorUbicacion) {
         setPropuestaSeleccionadaId(data.propuesta.id);
         await load({ propuestaId: data.propuesta.id });

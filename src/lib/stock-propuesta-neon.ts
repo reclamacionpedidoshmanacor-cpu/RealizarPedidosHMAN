@@ -733,6 +733,87 @@ export async function recuperarRecuentoGenerado(
   return rows.length > 0;
 }
 
+type ResumenPropuestasRecuento = {
+  total: number;
+  borradores: number;
+  tramitadas: number;
+  propuestaIdSugerida: number | null;
+};
+
+async function getResumenPropuestasRecuento(
+  area: string,
+  importacionStockId: number
+): Promise<ResumenPropuestasRecuento> {
+  const sql = getDb();
+  const propuestas = (await sql`
+    SELECT id, estado
+    FROM propuestas
+    WHERE area = ${area}
+      AND importacion_stock_id = ${importacionStockId}
+    ORDER BY
+      CASE
+        WHEN estado = 'tramitada' THEN 0
+        WHEN estado = 'borrador' THEN 1
+        ELSE 2
+      END,
+      id DESC;
+  `) as Array<{ id: number; estado: string }>;
+
+  const borradores = propuestas.filter((propuesta) => propuesta.estado === 'borrador').length;
+  const tramitadas = propuestas.filter((propuesta) => propuesta.estado === 'tramitada').length;
+
+  return {
+    total: propuestas.length,
+    borradores,
+    tramitadas,
+    propuestaIdSugerida: propuestas[0] ? num(propuestas[0].id) : null,
+  };
+}
+
+async function marcarRecuentoComoGenerado(
+  importacionId: number,
+  area: string,
+  propuestaId: number | null
+): Promise<boolean> {
+  const sql = getDb();
+  const rows = (await sql`
+    UPDATE importaciones_stock
+    SET estado = 'generado', generado_en = now(), propuesta_id = ${propuestaId}
+    WHERE id = ${importacionId} AND area = ${area}
+    RETURNING id;
+  `) as Array<{ id: number }>;
+  return rows.length > 0;
+}
+
+export async function finalizarRecuentoDesdeStock(
+  importacionId: number,
+  area: string
+): Promise<
+  | { ok: true; propuestaId: number | null }
+  | { ok: false; reason: 'not_found_or_not_pending' | 'linked_draft_proposals' }
+> {
+  const sql = getDb();
+  const recuentoRows = (await sql`
+    SELECT id
+    FROM importaciones_stock
+    WHERE id = ${importacionId} AND area = ${area} AND estado = 'pendiente'
+    LIMIT 1;
+  `) as Array<{ id: number }>;
+
+  if (recuentoRows.length === 0) {
+    return { ok: false, reason: 'not_found_or_not_pending' };
+  }
+
+  const resumen = await getResumenPropuestasRecuento(area, importacionId);
+  if (resumen.borradores > 0) {
+    return { ok: false, reason: 'linked_draft_proposals' };
+  }
+
+  const propuestaId = resumen.tramitadas > 0 ? resumen.propuestaIdSugerida : null;
+  await marcarRecuentoComoGenerado(importacionId, area, propuestaId);
+  return { ok: true, propuestaId };
+}
+
 // ---------------------------------------------------------------------------
 // PROPUESTAS
 // ---------------------------------------------------------------------------
@@ -1637,7 +1718,7 @@ export async function tramitarPropuesta(
   propuestaId: number,
   importacionStockId: number,
   area?: string
-): Promise<void> {
+): Promise<{ recuentoGenerado: boolean }> {
   const sql = getDb();
 
   const lineas = (await sql`
@@ -1664,17 +1745,15 @@ export async function tramitarPropuesta(
     WHERE id = ${propuestaId};
   `;
 
-  const puedeMarcarGenerado = area
+  const recuentoGenerado = area
     ? await recuentoTieneTodosLosBloquesTramitados(area, importacionStockId)
     : false;
 
-  if (puedeMarcarGenerado) {
-    await sql`
-      UPDATE importaciones_stock
-      SET estado = 'generado', generado_en = now(), propuesta_id = ${propuestaId}
-      WHERE id = ${importacionStockId};
-    `;
+  if (recuentoGenerado && area) {
+    await marcarRecuentoComoGenerado(importacionStockId, area, propuestaId);
   }
+
+  return { recuentoGenerado };
 }
 
 export async function deshacerPropuesta(

@@ -9,6 +9,7 @@ import {
   buildLineasPropuestaParaUi,
   getPedidoAlmacenPendiente,
   getPropuestaById,
+  getRecuentoCabeceraById,
   listBorradoresPropuestaAlmacen,
   listBloquesPropuestaRecuento,
   getPendienteRecuento,
@@ -185,7 +186,22 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    const recuento = await getPendienteRecuento(session.area);
+    let propuestaParam = null;
+    if (propuestaIdParam > 0) {
+      propuestaParam = await getPropuestaById(propuestaIdParam);
+      if (!propuestaParam || propuestaParam.area !== session.area) {
+        return NextResponse.json({ error: 'La propuesta seleccionada no existe en el área activa.' }, { status: 404 });
+      }
+    }
+
+    let recuento = await getPendienteRecuento(session.area);
+    if (!recuento && propuestaParam?.importacionStockId) {
+      recuento = await getRecuentoCabeceraById(propuestaParam.importacionStockId);
+      if (recuento && recuento.area !== session.area) {
+        recuento = null;
+      }
+    }
+
     if (!recuento) {
       return NextResponse.json(
         { error: 'No hay recuento pendiente para generar propuesta.' },
@@ -207,9 +223,9 @@ export async function GET(req: NextRequest) {
 
     let propuesta = null;
     if (propuestaIdParam > 0) {
-      propuesta = await getPropuestaById(propuestaIdParam);
+      propuesta = propuestaParam;
       if (!propuesta || propuesta.area !== session.area || propuesta.importacionStockId !== recuento.id) {
-        return NextResponse.json({ error: 'La propuesta seleccionada ya no pertenece al recuento pendiente actual.' }, { status: 404 });
+        return NextResponse.json({ error: 'La propuesta seleccionada ya no pertenece al recuento actual.' }, { status: 404 });
       }
     } else if (ubicacionParam) {
       const bloque = bloques.find((item) => item.ubicacion === ubicacionParam);

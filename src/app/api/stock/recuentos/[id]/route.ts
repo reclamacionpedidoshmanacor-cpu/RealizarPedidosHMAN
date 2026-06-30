@@ -3,6 +3,7 @@ import { requireApiSession } from '@/lib/api-auth';
 import {
   actualizarLineaRecuento,
   eliminarRecuentoPendiente,
+  finalizarRecuentoDesdeStock,
   getLineasRecuento,
   getMedicamentoByCnArea,
   getMedicamentosParaRecuento,
@@ -84,43 +85,49 @@ export async function PATCH(
 
     const body = await req.json();
     const bulkLineas = parseBulkLineas(body);
+    const finalizar = (body as { finalizar?: unknown }).finalizar === true;
 
     if (bulkLineas) {
-      if (bulkLineas.length === 0) {
+      if (bulkLineas.length === 0 && !finalizar) {
         return NextResponse.json({ error: 'No hay lineas para guardar.' }, { status: 400 });
       }
 
-      const meds = await getMedicamentosParaRecuento(
-        session.area,
-        bulkLineas.map((linea) => linea.cn)
-      );
-      const medsMap = new Map(meds.map((med) => [med.cn, med]));
-
-      const noEncontrados = bulkLineas
-        .map((linea) => linea.cn)
-        .filter((cn) => !medsMap.has(cn));
-      const lineasValidas = bulkLineas.filter((linea) => medsMap.has(linea.cn));
-      if (lineasValidas.length === 0) {
-        return NextResponse.json(
-          {
-            error: 'No hay líneas válidas para guardar en el área activa.',
-            cns: noEncontrados,
-          },
-          { status: 404 }
-        );
-      }
-
+      let noEncontrados: string[] = [];
+      let lineasValidas = bulkLineas;
       const erroresActualizacion: string[] = [];
-      for (const linea of lineasValidas) {
-        const med = medsMap.get(linea.cn);
-        if (!med) continue;
-        const actualizado = await actualizarLineaRecuento(
-          recuentoId,
-          linea.cn,
-          linea.stockCajas,
-          linea.stockCajas * med.unidadesPorCaja
+
+      if (bulkLineas.length > 0) {
+        const meds = await getMedicamentosParaRecuento(
+          session.area,
+          bulkLineas.map((linea) => linea.cn)
         );
-        if (!actualizado) erroresActualizacion.push(linea.cn);
+        const medsMap = new Map(meds.map((med) => [med.cn, med]));
+
+        noEncontrados = bulkLineas
+          .map((linea) => linea.cn)
+          .filter((cn) => !medsMap.has(cn));
+        lineasValidas = bulkLineas.filter((linea) => medsMap.has(linea.cn));
+        if (lineasValidas.length === 0) {
+          return NextResponse.json(
+            {
+              error: 'No hay líneas válidas para guardar en el área activa.',
+              cns: noEncontrados,
+            },
+            { status: 404 }
+          );
+        }
+
+        for (const linea of lineasValidas) {
+          const med = medsMap.get(linea.cn);
+          if (!med) continue;
+          const actualizado = await actualizarLineaRecuento(
+            recuentoId,
+            linea.cn,
+            linea.stockCajas,
+            linea.stockCajas * med.unidadesPorCaja
+          );
+          if (!actualizado) erroresActualizacion.push(linea.cn);
+        }
       }
 
       if (erroresActualizacion.length > 0) {
@@ -133,10 +140,37 @@ export async function PATCH(
         );
       }
 
+      if (finalizar) {
+        const cierre = await finalizarRecuentoDesdeStock(recuentoId, session.area);
+        if (!cierre.ok) {
+          if (cierre.reason === 'linked_draft_proposals') {
+            return NextResponse.json(
+              {
+                error: 'Hay propuestas en borrador vinculadas a este recuento. Tramítalas o elimínalas antes de cerrarlo desde Stock.',
+              },
+              { status: 409 }
+            );
+          }
+          return NextResponse.json(
+            { error: 'No se pudo marcar el recuento como generado.' },
+            { status: 409 }
+          );
+        }
+
+        return NextResponse.json({
+          ok: true,
+          updated: lineasValidas.length,
+          omitidosCatalogo: noEncontrados,
+          recuentoEstado: 'generado',
+          propuestaId: cierre.propuestaId,
+        });
+      }
+
       return NextResponse.json({
         ok: true,
         updated: lineasValidas.length,
         omitidosCatalogo: noEncontrados,
+        recuentoEstado: 'pendiente',
       });
     }
 

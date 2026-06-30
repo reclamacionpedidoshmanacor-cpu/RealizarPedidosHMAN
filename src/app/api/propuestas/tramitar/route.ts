@@ -31,9 +31,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'El recuento asociado ya no esta pendiente.' }, { status: 409 });
     }
 
-    await tramitarPropuesta(propuestaId, propuesta.importacionStockId, propuesta.area);
+    const result = await tramitarPropuesta(propuestaId, propuesta.importacionStockId, propuesta.area);
 
-    return NextResponse.json({ ok: true, propuestaId });
+    return NextResponse.json({ ok: true, propuestaId, recuentoGenerado: result.recuentoGenerado });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Error inesperado';
     return NextResponse.json({ error: msg }, { status: 500 });

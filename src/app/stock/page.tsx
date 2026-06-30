@@ -209,31 +209,25 @@ export default function StockPage() {
       return;
     }
 
-    if (cambios.length === 0) {
-      toast.info('No hay cambios pendientes de guardar.');
-      return;
-    }
-
     setSavingAll(true);
     try {
       const res = await fetch(`/api/stock/recuentos/${data.pendiente.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lineas: cambios }),
+        body: JSON.stringify({ lineas: cambios, finalizar: true }),
       });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo guardar el recuento.');
-      let propuestaSyncMsg = '';
-      try {
-        const syncRes = await fetch(`/api/stock/recuentos/${data.pendiente.id}/actualizar`, { method: 'POST' });
-        const syncPayload = await syncRes.json();
-        if (syncRes.ok && syncPayload?.propuestaActualizada) {
-          propuestaSyncMsg = ` Propuesta borrador sincronizada (${syncPayload?.lineasPropuesta ?? 0} líneas).`;
-        }
-      } catch {
-        // Silencioso: el recuento ya quedó guardado.
-      }
-      toast.success(`Recuento guardado (${payload?.updated ?? cambios.length} lineas actualizadas).${propuestaSyncMsg}`);
+      const actualizadas = Number(payload?.updated ?? cambios.length ?? 0);
+      const msgActualizacion =
+        actualizadas > 0
+          ? `${actualizadas} lineas actualizadas`
+          : 'sin cambios en líneas';
+      const msgCierre =
+        payload?.recuentoEstado === 'generado'
+          ? ' Recuento marcado como generado.'
+          : '';
+      toast.success(`Recuento guardado (${msgActualizacion}).${msgCierre}`);
       const omitidosCatalogo = Array.isArray(payload?.omitidosCatalogo)
         ? (payload.omitidosCatalogo as unknown[]).map((cn) => String(cn))
         : [];
