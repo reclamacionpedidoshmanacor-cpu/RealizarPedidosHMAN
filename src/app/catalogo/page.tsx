@@ -197,6 +197,17 @@ export default function CatalogoPage() {
   const [area, setArea] = useState('');
   const [page, setPage] = useState(1);
   const fileRef = useRef<HTMLInputElement>(null);
+  const consumoMedioFileRef = useRef<HTMLInputElement>(null);
+  const [consumoMedioModal, setConsumoMedioModal] = useState<{ file: File } | null>(null);
+  const [consumoMedioMeses, setConsumoMedioMeses] = useState('6');
+  const [importandoConsumoMedio, setImportandoConsumoMedio] = useState(false);
+  const [consumoMedioResultado, setConsumoMedioResultado] = useState<{
+    meses: number;
+    filasExcel: number;
+    actualizados: number;
+    omitidos: Array<{ cn: string; material: string }>;
+    errores: string[];
+  } | null>(null);
   const pendingRepositionCn = useRef<string | null>(null);
 
   const getArea = () => {
@@ -390,6 +401,65 @@ export default function CatalogoPage() {
       toast.success('Errores copiados al portapapeles.');
     } catch {
       toast.error('No se pudieron copiar los errores.');
+    }
+  };
+
+  const handleConsumoMedioFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setConsumoMedioMeses('6');
+    setConsumoMedioModal({ file });
+    e.target.value = '';
+  };
+
+  const handleImportarConsumoMedio = async () => {
+    if (!consumoMedioModal?.file) return;
+    const meses = Number(consumoMedioMeses);
+    if (!Number.isFinite(meses) || meses <= 0) {
+      toast.error('Indica un número de meses válido (mayor que 0).');
+      return;
+    }
+
+    setImportandoConsumoMedio(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', consumoMedioModal.file);
+      fd.append('meses', String(meses));
+      const res = await fetch('/api/catalogo/importar-consumo-medio', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? 'No se pudo importar el consumo medio.');
+        if (Array.isArray(data.errores) && data.errores.length > 0) {
+          setConsumoMedioResultado({
+            meses,
+            filasExcel: 0,
+            actualizados: 0,
+            omitidos: [],
+            errores: data.errores.map((msg: unknown) => String(msg)),
+          });
+        }
+        return;
+      }
+
+      setConsumoMedioResultado({
+        meses: Number(data.meses ?? meses),
+        filasExcel: Number(data.filasExcel ?? 0),
+        actualizados: Number(data.actualizados ?? 0),
+        omitidos: Array.isArray(data.omitidos) ? data.omitidos : [],
+        errores: Array.isArray(data.errores) ? data.errores.map((msg: unknown) => String(msg)) : [],
+      });
+      setConsumoMedioModal(null);
+      toast.success(
+        `Consumo medio actualizado: ${data.actualizados} artículo${data.actualizados !== 1 ? 's' : ''} (${meses} mes${meses !== 1 ? 'es' : ''}).`
+      );
+      if (Array.isArray(data.omitidos) && data.omitidos.length > 0) {
+        toast.message(`${data.omitidos.length} código(s) del Excel no están en catálogo Almacén.`);
+      }
+      await fetchMeds({ silent: true });
+    } catch {
+      toast.error('Error de conexión al importar consumo medio.');
+    } finally {
+      setImportandoConsumoMedio(false);
     }
   };
 
@@ -822,6 +892,15 @@ export default function CatalogoPage() {
         </div>
         <div className="flex items-center gap-2">
           <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImport} />
+          {esAlmacen && (
+            <input
+              ref={consumoMedioFileRef}
+              type="file"
+              accept=".xlsx,.xls"
+              className="hidden"
+              onChange={handleConsumoMedioFile}
+            />
+          )}
           <button
             onClick={handleCopiarCodigosSap}
             disabled={loading || meds.length === 0}
@@ -853,6 +932,20 @@ export default function CatalogoPage() {
             </svg>
             Nuevo medicamento
           </button>
+          {esAlmacen && (
+            <button
+              type="button"
+              onClick={() => consumoMedioFileRef.current?.click()}
+              disabled={importandoConsumoMedio || loading}
+              className="flex items-center gap-2 rounded-lg border border-sky-300 px-4 py-2 text-sm font-medium text-sky-800 hover:bg-sky-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              title="Excel SAP: Material + Consumo TOTAL. Solo actualiza consumo medio (unidades/mes)."
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
+              </svg>
+              {importandoConsumoMedio ? 'Importando…' : 'Importar consumo medio'}
+            </button>
+          )}
           <button
             onClick={() => fileRef.current?.click()}
             disabled={importing}
@@ -950,6 +1043,41 @@ export default function CatalogoPage() {
                 ))}
               </ul>
             </div>
+          )}
+        </div>
+      )}
+
+      {consumoMedioResultado && (
+        <div className="mb-4 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900 space-y-2">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="font-semibold">Importación de consumo medio</p>
+              <p className="mt-1">
+                <span className="font-semibold">{consumoMedioResultado.actualizados}</span> actualizado
+                {consumoMedioResultado.actualizados !== 1 ? 's' : ''} ·{' '}
+                {consumoMedioResultado.filasExcel} código{consumoMedioResultado.filasExcel !== 1 ? 's' : ''} en Excel ·{' '}
+                periodo {consumoMedioResultado.meses} mes{consumoMedioResultado.meses !== 1 ? 'es' : ''}
+              </p>
+              {consumoMedioResultado.omitidos.length > 0 && (
+                <p className="text-xs text-sky-700 mt-1">
+                  {consumoMedioResultado.omitidos.length} no están en catálogo Almacén (omitidos).
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setConsumoMedioResultado(null)}
+              className="text-sky-400 hover:text-sky-700 shrink-0"
+            >
+              ✕
+            </button>
+          </div>
+          {consumoMedioResultado.errores.length > 0 && (
+            <ul className="text-xs text-amber-800 list-disc pl-5 max-h-32 overflow-y-auto">
+              {consumoMedioResultado.errores.slice(0, 20).map((err) => (
+                <li key={err}>{err}</li>
+              ))}
+            </ul>
           )}
         </div>
       )}
@@ -1344,6 +1472,53 @@ export default function CatalogoPage() {
       )}
 
       {/* Modal Nuevo medicamento */}
+      {consumoMedioModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+            <h2 className="text-lg font-bold text-slate-800 mb-1">Importar consumo medio</h2>
+            <p className="text-sm text-slate-500 mb-4">
+              Archivo: <span className="font-medium text-slate-700">{consumoMedioModal.file.name}</span>
+            </p>
+            <p className="text-xs text-slate-500 mb-4">
+              Se leerán las columnas <strong>Material</strong> y <strong>Consumo TOTAL</strong> (unidades SAP).
+              Solo se actualizará el campo consumo medio del catálogo.
+            </p>
+            <label className="block text-sm font-medium text-slate-700 mb-1">
+              ¿De cuántos meses es el análisis?
+            </label>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={consumoMedioMeses}
+              onChange={(e) => setConsumoMedioMeses(e.target.value)}
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 mb-1"
+            />
+            <p className="text-xs text-slate-400 mb-5">
+              Consumo medio = Consumo TOTAL ÷ meses (resultado en unidades/mes).
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => !importandoConsumoMedio && setConsumoMedioModal(null)}
+                disabled={importandoConsumoMedio}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleImportarConsumoMedio()}
+                disabled={importandoConsumoMedio}
+                className="rounded-lg bg-sky-700 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-800 disabled:opacity-50"
+              >
+                {importandoConsumoMedio ? 'Importando…' : 'Importar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showNuevo && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl">
