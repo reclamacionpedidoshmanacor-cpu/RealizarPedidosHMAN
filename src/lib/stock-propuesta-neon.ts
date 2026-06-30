@@ -187,6 +187,30 @@ export type PropuestaLineaUI = PropuestaLinea & {
   editable: boolean;
 };
 
+export type PropuestaBloqueEstado = 'sin_propuesta' | 'borrador' | 'tramitada';
+
+export type PropuestaBloqueResumen = {
+  ubicacion: string;
+  etiqueta: string;
+  estado: PropuestaBloqueEstado;
+  propuestaId: number | null;
+  totalLineas: number;
+  fechaGeneracion: string | null;
+  tramitadaEn: string | null;
+};
+
+function sortByPrincipioNombre<T extends {
+  principioActivo: string | null;
+  nombre: string | null;
+  cn: string;
+}>(a: T, b: T): number {
+  const keyA = (a.principioActivo ?? a.nombre ?? a.cn).trim();
+  const keyB = (b.principioActivo ?? b.nombre ?? b.cn).trim();
+  const byPa = keyA.localeCompare(keyB, 'es', { sensitivity: 'base' });
+  if (byPa !== 0) return byPa;
+  return (a.nombre ?? a.cn).localeCompare(b.nombre ?? b.cn, 'es', { sensitivity: 'base' });
+}
+
 // ---------------------------------------------------------------------------
 // RECUENTOS
 // ---------------------------------------------------------------------------
@@ -224,22 +248,31 @@ export async function getRecuentosByArea(area: string): Promise<{
 export async function getLineasRecuento(importacionId: number): Promise<RecuentoLinea[]> {
   const sql = getDb();
   const rows = (await sql`
-    SELECT sr.cn, m.principio_activo, m.nombre, m.unidades_por_caja, sr.stock_cajas, sr.stock_unidades, sr.valor_total
+    SELECT sr.id, sr.cn, m.principio_activo, m.nombre, m.unidades_por_caja, sr.stock_cajas, sr.stock_unidades, sr.valor_total
     FROM stock_registros sr
     INNER JOIN medicamentos m ON m.cn = sr.cn
     WHERE sr.importacion_id = ${importacionId}
-    ORDER BY m.principio_activo ASC NULLS LAST, m.nombre ASC;
+    ORDER BY sr.cn ASC, sr.id DESC;
   `) as Array<{
-    cn: string; principio_activo: string | null; nombre: string; unidades_por_caja: number;
+    id: number; cn: string; principio_activo: string | null; nombre: string; unidades_por_caja: number;
     stock_cajas: string; stock_unidades: string; valor_total: string | null;
   }>;
 
-  return rows.map((r) => ({
-    cn: r.cn, principioActivo: r.principio_activo, nombre: r.nombre,
-    unidadesPorCaja: num(r.unidades_por_caja) > 0 ? num(r.unidades_por_caja) : 1,
-    stockCajas: num(r.stock_cajas), stockUnidades: num(r.stock_unidades),
-    valorTotal: numOrNull(r.valor_total),
-  }));
+  const dedup = new Map<string, RecuentoLinea>();
+  for (const r of rows) {
+    if (dedup.has(r.cn)) continue;
+    dedup.set(r.cn, {
+      cn: r.cn,
+      principioActivo: r.principio_activo,
+      nombre: r.nombre,
+      unidadesPorCaja: num(r.unidades_por_caja) > 0 ? num(r.unidades_por_caja) : 1,
+      stockCajas: num(r.stock_cajas),
+      stockUnidades: num(r.stock_unidades),
+      valorTotal: numOrNull(r.valor_total),
+    });
+  }
+
+  return [...dedup.values()].sort(sortByPrincipioNombre);
 }
 
 export async function listRecuentosManualesByArea(area: string): Promise<RecuentoManualResumen[]> {
@@ -754,6 +787,44 @@ export async function getBorradorPropuestaAlmacenPorNombre(
   };
 }
 
+export async function getUltimaPropuestaPorNombre(
+  area: string,
+  importacionStockId: number,
+  nombreGrupo: string
+): Promise<PropuestaCabecera | null> {
+  await ensurePropuestasObservacionesSchema();
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT id, area, estado, fecha_generacion::text, tramitada_en::text, observaciones
+    FROM propuestas
+    WHERE area = ${area}
+      AND importacion_stock_id = ${importacionStockId}
+      AND observaciones = ${nombreGrupo}
+    ORDER BY
+      CASE
+        WHEN estado = 'borrador' THEN 0
+        WHEN estado = 'tramitada' THEN 1
+        ELSE 2
+      END,
+      id DESC
+    LIMIT 1;
+  `) as Array<{
+    id: number; area: string; estado: string;
+    fecha_generacion: string; tramitada_en: string | null; observaciones: string | null;
+  }>;
+
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    id: num(r.id),
+    area: r.area,
+    estado: r.estado,
+    fechaGeneracion: r.fecha_generacion,
+    tramitadaEn: r.tramitada_en,
+    observaciones: r.observaciones,
+  };
+}
+
 export async function listBorradoresPropuestaAlmacen(
   area: string,
   importacionStockId: number
@@ -768,7 +839,7 @@ export async function listBorradoresPropuestaAlmacen(
       p.fecha_generacion::text AS fecha_generacion,
       p.tramitada_en::text AS tramitada_en,
       p.observaciones,
-      COUNT(pl.id) FILTER (WHERE COALESCE(pl.cajas_validadas, pl.cajas_propuestas) > 0)::int AS total_lineas
+      COUNT(DISTINCT pl.cn) FILTER (WHERE COALESCE(pl.cajas_validadas, pl.cajas_propuestas) > 0)::int AS total_lineas
     FROM propuestas p
     LEFT JOIN propuestas_lineas pl ON pl.propuesta_id = p.id
     WHERE p.area = ${area}
@@ -791,6 +862,89 @@ export async function listBorradoresPropuestaAlmacen(
     observaciones: r.observaciones,
     totalLineas: num(r.total_lineas),
   }));
+}
+
+export async function listBloquesPropuestaRecuento(
+  area: string,
+  importacionStockId: number
+): Promise<PropuestaBloqueResumen[]> {
+  const ubicaciones = await listUbicacionesConStockEnRecuento(importacionStockId, area);
+  if (ubicaciones.length === 0) return [];
+
+  await ensurePropuestasObservacionesSchema();
+  const sql = getDb();
+  const propuestasRows = (await sql`
+    SELECT
+      p.id,
+      p.estado,
+      p.fecha_generacion::text AS fecha_generacion,
+      p.tramitada_en::text AS tramitada_en,
+      p.observaciones,
+      COUNT(DISTINCT pl.cn) FILTER (WHERE COALESCE(pl.cajas_validadas, pl.cajas_propuestas) > 0)::int AS total_lineas
+    FROM propuestas p
+    LEFT JOIN propuestas_lineas pl ON pl.propuesta_id = p.id
+    WHERE p.area = ${area}
+      AND p.importacion_stock_id = ${importacionStockId}
+    GROUP BY p.id
+    ORDER BY p.id DESC;
+  `) as Array<{
+    id: number;
+    estado: string;
+    fecha_generacion: string;
+    tramitada_en: string | null;
+    observaciones: string | null;
+    total_lineas: number;
+  }>;
+
+  const canonicalByEtiqueta = new Map<string, {
+    id: number;
+    estado: string;
+    fechaGeneracion: string;
+    tramitadaEn: string | null;
+    observaciones: string | null;
+    totalLineas: number;
+  }>();
+
+  for (const row of propuestasRows) {
+    const etiqueta = String(row.observaciones ?? '').trim();
+    if (!etiqueta) continue;
+    const current = canonicalByEtiqueta.get(etiqueta);
+    if (!current) {
+      canonicalByEtiqueta.set(etiqueta, {
+        id: num(row.id),
+        estado: row.estado,
+        fechaGeneracion: row.fecha_generacion,
+        tramitadaEn: row.tramitada_en,
+        observaciones: row.observaciones,
+        totalLineas: num(row.total_lineas),
+      });
+      continue;
+    }
+    if (current.estado !== 'borrador' && row.estado === 'borrador') {
+      canonicalByEtiqueta.set(etiqueta, {
+        id: num(row.id),
+        estado: row.estado,
+        fechaGeneracion: row.fecha_generacion,
+        tramitadaEn: row.tramitada_en,
+        observaciones: row.observaciones,
+        totalLineas: num(row.total_lineas),
+      });
+    }
+  }
+
+  return ubicaciones.map((ubicacion) => {
+    const etiqueta = nombrePropuestaUbicacion(ubicacion);
+    const propuesta = canonicalByEtiqueta.get(etiqueta);
+    return {
+      ubicacion,
+      etiqueta,
+      estado: propuesta ? (propuesta.estado as PropuestaBloqueEstado) : 'sin_propuesta',
+      propuestaId: propuesta?.id ?? null,
+      totalLineas: propuesta?.totalLineas ?? 0,
+      fechaGeneracion: propuesta?.fechaGeneracion ?? null,
+      tramitadaEn: propuesta?.tramitadaEn ?? null,
+    };
+  });
 }
 
 export async function getOrCreatePropuestaAlmacenGrupo(
@@ -848,7 +1002,7 @@ export async function getLineasPropuesta(propuestaId: number): Promise<Propuesta
     FROM propuestas_lineas pl
     LEFT JOIN medicamentos m ON m.cn = pl.cn
     WHERE pl.propuesta_id = ${propuestaId}
-    ORDER BY m.principio_activo ASC NULLS LAST, pl.nombre_medicamento ASC NULLS LAST;
+    ORDER BY pl.cn ASC, pl.id DESC;
   `) as Array<{
     id: number; cn: string; nombre_medicamento: string | null; unidades_por_caja: number;
     principio_activo: string | null;
@@ -858,15 +1012,35 @@ export async function getLineasPropuesta(propuestaId: number): Promise<Propuesta
     proveedor_local: boolean | null;
   }>;
 
-  return rows.map((r) => ({
-    id: num(r.id), cn: r.cn, principioActivo: r.principio_activo, nombreMedicamento: r.nombre_medicamento,
-    unidadesPorCaja: num(r.unidades_por_caja), stockActual: num(r.stock_actual), stockTransito: num(r.stock_transito_snap),
-    stockMinimoSnap: num(r.stock_minimo_snap), puntoPedidoSnap: num(r.punto_pedido_snap),
-    stockMaximoSnap: num(r.stock_maximo_snap), cajasPropuestas: num(r.cajas_propuestas),
-    cajasValidadas: r.cajas_validadas != null ? num(r.cajas_validadas) : null,
-    motivoAjuste: r.motivo_ajuste, motivoAjusteOtro: r.motivo_ajuste_otro, ajustado: r.ajustado,
-    proveedorLocal: r.proveedor_local === true,
-  }));
+  const dedup = new Map<string, PropuestaLinea>();
+  for (const r of rows) {
+    if (dedup.has(r.cn)) continue;
+    dedup.set(r.cn, {
+      id: num(r.id),
+      cn: r.cn,
+      principioActivo: r.principio_activo,
+      nombreMedicamento: r.nombre_medicamento,
+      unidadesPorCaja: num(r.unidades_por_caja),
+      stockActual: num(r.stock_actual),
+      stockTransito: num(r.stock_transito_snap),
+      stockMinimoSnap: num(r.stock_minimo_snap),
+      puntoPedidoSnap: num(r.punto_pedido_snap),
+      stockMaximoSnap: num(r.stock_maximo_snap),
+      cajasPropuestas: num(r.cajas_propuestas),
+      cajasValidadas: r.cajas_validadas != null ? num(r.cajas_validadas) : null,
+      motivoAjuste: r.motivo_ajuste,
+      motivoAjusteOtro: r.motivo_ajuste_otro,
+      ajustado: r.ajustado,
+      proveedorLocal: r.proveedor_local === true,
+    });
+  }
+
+  return [...dedup.values()].sort((a, b) =>
+    sortByPrincipioNombre(
+      { cn: a.cn, principioActivo: a.principioActivo, nombre: a.nombreMedicamento },
+      { cn: b.cn, principioActivo: b.principioActivo, nombre: b.nombreMedicamento }
+    )
+  );
 }
 
 export async function getRecuentoConStockParaPropuesta(
@@ -878,24 +1052,36 @@ export async function getRecuentoConStockParaPropuesta(
   const sql = getDb();
   const rows = (await sql`
     SELECT
-      sr.cn, sr.stock_cajas,
+      sr.id, sr.cn, sr.stock_cajas,
       m.nombre, m.unidades_por_caja, m.ubicacion,
+      m.principio_activo,
       so.stock_minimo, so.punto_pedido, so.stock_maximo
     FROM stock_registros sr
     INNER JOIN medicamentos m ON m.cn = sr.cn AND m.area = ${area} AND m.activo = true
     LEFT JOIN stock_objetivo so ON so.cn = sr.cn
     WHERE sr.importacion_id = ${importacionId}
-    ORDER BY m.principio_activo ASC NULLS LAST, m.nombre ASC;
+    ORDER BY sr.cn ASC, sr.id DESC;
   `) as Array<{
-    cn: string; stock_cajas: string;
-    nombre: string; unidades_por_caja: number; ubicacion: string | null;
+    id: number; cn: string; stock_cajas: string;
+    nombre: string; unidades_por_caja: number; ubicacion: string | null; principio_activo: string | null;
     stock_minimo: number | null; punto_pedido: number | null; stock_maximo: number | null;
   }>;
 
-  if (!ubicacion?.trim()) return rows;
+  const dedup = new Map<string, typeof rows[number]>();
+  for (const row of rows) {
+    if (!dedup.has(row.cn)) dedup.set(row.cn, row);
+  }
+  const uniqueRows = [...dedup.values()].sort((a, b) =>
+    sortByPrincipioNombre(
+      { cn: a.cn, principioActivo: a.principio_activo, nombre: a.nombre },
+      { cn: b.cn, principioActivo: b.principio_activo, nombre: b.nombre }
+    )
+  );
+
+  if (!ubicacion?.trim()) return uniqueRows;
 
   const ubicacionKey = normalizeUbicacionKey(ubicacion);
-  return rows.filter((row) => normalizeUbicacionKey(row.ubicacion) === ubicacionKey);
+  return uniqueRows.filter((row) => normalizeUbicacionKey(row.ubicacion) === ubicacionKey);
 }
 
 export async function listUbicacionesConStockEnRecuento(
@@ -951,13 +1137,15 @@ export async function syncPropuestaUbicacionDesdeRecuento(
   area: string,
   importacionId: number,
   ubicacion: string,
-  stockTransitoByCn?: Record<string, number>
+  stockTransitoByCn?: Record<string, number>,
+  options?: { createIfMissing?: boolean }
 ): Promise<number> {
   if (isAlmacenArea(area)) return 0;
 
   const etiqueta = nombrePropuestaUbicacion(ubicacion);
   let propuesta = await getBorradorPropuestaAlmacenPorNombre(area, importacionId, etiqueta);
   if (!propuesta) {
+    if (options?.createIfMissing !== true) return 0;
     propuesta = await crearPropuesta(area, importacionId, etiqueta);
   }
 
@@ -986,7 +1174,8 @@ export async function syncPropuestaUbicacionDesdeRecuento(
 
 export async function syncTodasPropuestasUbicacionDesdeRecuento(
   area: string,
-  importacionId: number
+  importacionId: number,
+  options?: { createIfMissing?: boolean }
 ): Promise<void> {
   if (isAlmacenArea(area)) return;
 
@@ -1009,8 +1198,48 @@ export async function syncTodasPropuestasUbicacionDesdeRecuento(
   }
 
   for (const ubicacion of ubicaciones) {
-    await syncPropuestaUbicacionDesdeRecuento(area, importacionId, ubicacion, stockTransitoByCn);
+    await syncPropuestaUbicacionDesdeRecuento(
+      area,
+      importacionId,
+      ubicacion,
+      stockTransitoByCn,
+      options
+    );
   }
+}
+
+export async function recuentoTieneTodosLosBloquesTramitados(
+  area: string,
+  importacionStockId: number
+): Promise<boolean> {
+  const bloques = await listBloquesPropuestaRecuento(area, importacionStockId);
+  return bloques.length > 0 && bloques.every((bloque) => bloque.estado === 'tramitada');
+}
+
+export async function abrirPropuestaUbicacionDesdeRecuento(
+  area: string,
+  importacionId: number,
+  ubicacion: string
+): Promise<PropuestaCabecera> {
+  if (isAlmacenArea(area)) {
+    throw new Error('Solo disponible para recuentos por ubicación.');
+  }
+
+  const etiqueta = nombrePropuestaUbicacion(ubicacion);
+  const existente = await getUltimaPropuestaPorNombre(area, importacionId, etiqueta);
+  if (existente) {
+    if (existente.estado === 'borrador') {
+      const lineas = await getLineasPropuesta(existente.id);
+      if (lineas.length === 0) {
+        await syncPropuestaUbicacionDesdeRecuento(area, importacionId, ubicacion);
+      }
+    }
+    return existente;
+  }
+
+  const propuesta = await crearPropuesta(area, importacionId, etiqueta);
+  await syncPropuestaUbicacionDesdeRecuento(area, importacionId, ubicacion);
+  return propuesta;
 }
 
 export async function getRecuentoInactivosParaVisualizacion(
@@ -1022,24 +1251,35 @@ export async function getRecuentoInactivosParaVisualizacion(
   const sql = getDb();
   const rows = (await sql`
     SELECT
-      sr.cn, sr.stock_cajas,
+      sr.id, sr.cn, sr.stock_cajas,
       m.nombre, m.principio_activo, m.unidades_por_caja, m.ubicacion,
       so.stock_minimo, so.punto_pedido, so.stock_maximo
     FROM stock_registros sr
     INNER JOIN medicamentos m ON m.cn = sr.cn AND m.area = ${area} AND m.activo = false
     LEFT JOIN stock_objetivo so ON so.cn = sr.cn
     WHERE sr.importacion_id = ${importacionId}
-    ORDER BY m.principio_activo ASC NULLS LAST, m.nombre ASC;
+    ORDER BY sr.cn ASC, sr.id DESC;
   `) as Array<{
-    cn: string; stock_cajas: string;
+    id: number; cn: string; stock_cajas: string;
     nombre: string; principio_activo: string | null; unidades_por_caja: number; ubicacion: string | null;
     stock_minimo: number | null; punto_pedido: number | null; stock_maximo: number | null;
   }>;
 
-  if (!ubicacion?.trim()) return rows;
+  const dedup = new Map<string, typeof rows[number]>();
+  for (const row of rows) {
+    if (!dedup.has(row.cn)) dedup.set(row.cn, row);
+  }
+  const uniqueRows = [...dedup.values()].sort((a, b) =>
+    sortByPrincipioNombre(
+      { cn: a.cn, principioActivo: a.principio_activo, nombre: a.nombre },
+      { cn: b.cn, principioActivo: b.principio_activo, nombre: b.nombre }
+    )
+  );
+
+  if (!ubicacion?.trim()) return uniqueRows;
 
   const ubicacionKey = normalizeUbicacionKey(ubicacion);
-  return rows.filter((row) => normalizeUbicacionKey(row.ubicacion) === ubicacionKey);
+  return uniqueRows.filter((row) => normalizeUbicacionKey(row.ubicacion) === ubicacionKey);
 }
 
 function sortLineasPropuestaUI(a: PropuestaLineaUI, b: PropuestaLineaUI): number {
@@ -1424,13 +1664,11 @@ export async function tramitarPropuesta(
     WHERE id = ${propuestaId};
   `;
 
-  const pendientes = (await sql`
-    SELECT COUNT(*)::int AS n
-    FROM propuestas
-    WHERE importacion_stock_id = ${importacionStockId}
-      AND estado = 'borrador';
-  `) as Array<{ n: number }>;
-  if (num(pendientes[0]?.n) === 0) {
+  const puedeMarcarGenerado = area
+    ? await recuentoTieneTodosLosBloquesTramitados(area, importacionStockId)
+    : false;
+
+  if (puedeMarcarGenerado) {
     await sql`
       UPDATE importaciones_stock
       SET estado = 'generado', generado_en = now(), propuesta_id = ${propuestaId}
@@ -1502,27 +1740,15 @@ export async function getLineasParaExcel(propuestaId: number): Promise<Array<{
   cajasPropuestas: number; cajasValidadas: number | null; unidadesPorCaja: number;
   proveedorLocal: boolean;
 }>> {
-  await ensurePropuestasLineasSchema();
-  const sql = getDb();
-  const rows = (await sql`
-    SELECT
-      pl.cn, pl.nombre_medicamento, pl.cajas_propuestas, pl.cajas_validadas, pl.unidades_por_caja,
-      pl.proveedor_local,
-      m.principio_activo
-    FROM propuestas_lineas pl
-    LEFT JOIN medicamentos m ON m.cn = pl.cn
-    WHERE pl.propuesta_id = ${propuestaId};
-  `) as Array<{
-    cn: string; nombre_medicamento: string | null; principio_activo: string | null;
-    cajas_propuestas: number; cajas_validadas: number | null; unidades_por_caja: number;
-    proveedor_local: boolean | null;
-  }>;
-  return rows.map((r) => ({
-    cn: r.cn, nombreMedicamento: r.nombre_medicamento, principioActivo: r.principio_activo,
-    cajasPropuestas: num(r.cajas_propuestas),
-    cajasValidadas: r.cajas_validadas != null ? num(r.cajas_validadas) : null,
-    unidadesPorCaja: num(r.unidades_por_caja),
-    proveedorLocal: r.proveedor_local === true,
+  const lineas = await getLineasPropuesta(propuestaId);
+  return lineas.map((linea) => ({
+    cn: linea.cn,
+    nombreMedicamento: linea.nombreMedicamento,
+    principioActivo: linea.principioActivo,
+    cajasPropuestas: linea.cajasPropuestas,
+    cajasValidadas: linea.cajasValidadas,
+    unidadesPorCaja: linea.unidadesPorCaja,
+    proveedorLocal: linea.proveedorLocal,
   }));
 }
 
@@ -1553,7 +1779,7 @@ export async function listPropuestasByArea(area: string): Promise<PropuestaResum
       p.importacion_stock_id     AS recuento_id,
       i.fecha_recuento::text     AS recuento_fecha,
       i.origen                   AS recuento_origen,
-      COUNT(pl.id)::int          AS total_lineas
+      COUNT(DISTINCT pl.cn)::int AS total_lineas
     FROM propuestas p
     LEFT JOIN importaciones_stock i ON i.id = p.importacion_stock_id
     LEFT JOIN propuestas_lineas pl ON pl.propuesta_id = p.id

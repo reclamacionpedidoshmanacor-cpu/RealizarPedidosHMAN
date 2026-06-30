@@ -34,6 +34,16 @@ type BorradorResumen = {
   totalLineas: number;
 };
 
+type BloqueResumen = {
+  ubicacion: string;
+  etiqueta: string;
+  estado: 'sin_propuesta' | 'borrador' | 'tramitada';
+  propuestaId: number | null;
+  totalLineas: number;
+  fechaGeneracion: string | null;
+  tramitadaEn: string | null;
+};
+
 type Linea = {
   id: number;
   cn: string;
@@ -62,6 +72,7 @@ type ApiResponse = {
   lineas: Linea[];
   modo?: string;
   borradores?: BorradorResumen[];
+  bloques?: BloqueResumen[];
 };
 
 type DraftEdit = {
@@ -135,6 +146,28 @@ function stockActualDestacadoBajoMinimo(linea: Linea, layoutCompacto: boolean): 
   return stockDisponible <= Number(linea.puntoPedidoSnap);
 }
 
+function bloqueEstadoLabel(estado: BloqueResumen['estado']): string {
+  switch (estado) {
+    case 'borrador':
+      return 'Borrador';
+    case 'tramitada':
+      return 'Tramitada';
+    default:
+      return 'Sin propuesta';
+  }
+}
+
+function bloqueEstadoClass(estado: BloqueResumen['estado']): string {
+  switch (estado) {
+    case 'borrador':
+      return 'border-amber-200 bg-amber-50 text-amber-700';
+    case 'tramitada':
+      return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+    default:
+      return 'border-slate-200 bg-slate-100 text-slate-600';
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Página principal
 // ---------------------------------------------------------------------------
@@ -158,23 +191,24 @@ export default function PropuestaPage() {
 
   const esAlmacen = getAreaFromCookie() === 'almacen';
   const layoutCompacto = usaPropuestaLayoutCompacto(getAreaFromCookie());
-  const usaBorradoresPorUbicacion =
-    esAlmacen || data?.modo === 'por-ubicacion' || (data?.borradores?.length ?? 0) > 0;
+  const usaBloquesPorUbicacion =
+    esAlmacen || data?.modo === 'por-ubicacion' || (data?.bloques?.length ?? 0) > 0;
 
   const etiquetaPropuesta = (observaciones?: string | null, id?: number) =>
     observaciones?.trim() || (id != null ? `Propuesta #${id}` : 'Propuesta');
 
   // ── Carga propuesta activa ────────────────────────────────────────────────
-  const load = async (propuestaIdOverride?: number | null) => {
+  const load = async (opts?: { propuestaId?: number | null; ubicacion?: string | null }) => {
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams();
       const id =
-        propuestaIdOverride !== undefined
-          ? propuestaIdOverride
+        opts?.propuestaId !== undefined
+          ? opts.propuestaId
           : propuestaSeleccionadaId;
       if (id) params.set('propuestaId', String(id));
+      if (opts?.ubicacion) params.set('ubicacion', opts.ubicacion);
       const qs = params.toString();
       const res = await fetch(`/api/propuestas/actual${qs ? `?${qs}` : ''}`, { cache: 'no-store' });
       const payload = await res.json();
@@ -189,10 +223,10 @@ export default function PropuestaPage() {
         return;
       }
       setData(payload);
-      if (payload.propuesta?.id && payload.propuesta.estado === 'borrador') {
+      if (payload.propuesta?.id) {
         setPropuestaSeleccionadaId(payload.propuesta.id);
       } else if (
-        (payload.borradores?.length ?? 0) > 0 ||
+        (payload.bloques?.length ?? 0) > 0 ||
         payload.modo === 'por-ubicacion' ||
         payload.modo === 'pedido-almacen'
       ) {
@@ -269,7 +303,7 @@ export default function PropuestaPage() {
     try {
       await saveAll(data.lineas);
       toast.success('Borrador guardado.');
-      await load();
+      await load({ propuestaId: data.propuesta.id });
     } catch { toast.error('Error al guardar.'); }
     finally { setSaving(false); }
   };
@@ -298,7 +332,7 @@ export default function PropuestaPage() {
       } else {
         toast.success(`Comprimidos recalculados con el catálogo actual (${lineas} líneas).`);
       }
-      await load(data.propuesta.id);
+      await load({ propuestaId: data.propuesta.id });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado.');
     } finally {
@@ -306,9 +340,18 @@ export default function PropuestaPage() {
     }
   };
 
-  const abrirBorrador = async (propuestaId: number) => {
+  const abrirPropuesta = async (propuestaId: number) => {
     setPropuestaSeleccionadaId(propuestaId);
-    await load(propuestaId);
+    await load({ propuestaId });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const abrirBloque = async (bloque: BloqueResumen) => {
+    if (bloque.propuestaId) {
+      await abrirPropuesta(bloque.propuestaId);
+      return;
+    }
+    await load({ ubicacion: bloque.ubicacion });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -328,16 +371,16 @@ export default function PropuestaPage() {
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo tramitar.');
       toast.success('Propuesta tramitada correctamente.');
-      if (usaBorradoresPorUbicacion) {
-        setPropuestaSeleccionadaId(null);
-        await load(null);
+      if (usaBloquesPorUbicacion) {
+        setPropuestaSeleccionadaId(data.propuesta.id);
+        await load({ propuestaId: data.propuesta.id });
       } else {
         setData(prev =>
           prev && prev.propuesta
             ? { ...prev, propuesta: { ...prev.propuesta, estado: 'tramitada' } }
             : prev
         );
-        await load();
+        await load({ propuestaId: data.propuesta.id });
       }
       void loadHistorial();
     } catch (err) { toast.error(err instanceof Error ? err.message : 'Error inesperado.'); }
@@ -363,7 +406,7 @@ export default function PropuestaPage() {
           ? { ...prev, propuesta: { ...prev.propuesta, estado: 'borrador' } }
           : prev
       );
-      void load();
+      void load({ propuestaId: data.propuesta.id });
       void loadHistorial();
     } catch (err) { toast.error(err instanceof Error ? err.message : 'Error inesperado.'); }
     finally { setDeshaciendo(false); }
@@ -381,7 +424,7 @@ export default function PropuestaPage() {
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo deshacer.');
       toast.success('Propuesta revertida a borrador. Recargando…');
-      await load();
+      await load({ propuestaId: p.id });
       await loadHistorial();
     } catch (err) { toast.error(err instanceof Error ? err.message : 'Error inesperado.'); }
   };
@@ -427,8 +470,11 @@ export default function PropuestaPage() {
         delete next[propuestaId];
         return next;
       });
+      if (propuestaSeleccionadaId === propuestaId) {
+        setPropuestaSeleccionadaId(null);
+      }
       await loadHistorial();
-      await load();
+      await load({ propuestaId: propuestaSeleccionadaId === propuestaId ? null : undefined });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
@@ -451,7 +497,7 @@ export default function PropuestaPage() {
             <p className="text-sm text-slate-500">
               {esAlmacen
                 ? 'En Almacén hay una propuesta por ubicación (y por grupo de letras en ALMACEN FAR). Tramita cada bloque cuando esté listo.'
-                : usaBorradoresPorUbicacion
+                : usaBloquesPorUbicacion
                   ? 'Hay una propuesta por ubicación. Selecciona un bloque, revísalo y tramítalo cuando esté listo.'
                   : 'Calculada a partir del recuento pendiente. Solo incluye artículos activos. Si ajustas cantidades debes indicar el motivo.'}
             </p>
@@ -503,17 +549,45 @@ export default function PropuestaPage() {
 
         {data && (
           <>
-            {(data.borradores?.length ?? 0) > 0 && (
+            {(!esAlmacen && (data.bloques?.length ?? 0) > 0) && (
               <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50/80 p-3">
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  Borradores pendientes de tramitar — selecciona una ubicación para revisarla
+                  Bloques del recuento pendiente — abre una ubicación para crear, retomar o consultar su propuesta
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  {data.bloques!.map((bloque) => (
+                    <button
+                      key={bloque.ubicacion}
+                      type="button"
+                      onClick={() => void abrirBloque(bloque)}
+                      className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
+                        data.propuesta?.id === bloque.propuestaId
+                          ? 'border-teal-600 bg-teal-50 font-semibold text-teal-800'
+                          : 'border-slate-200 bg-white text-slate-600 hover:border-teal-300 hover:bg-teal-50/50'
+                      }`}
+                    >
+                      <span>{bloque.ubicacion}</span>
+                      <span className={`ml-2 rounded-full border px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide ${bloqueEstadoClass(bloque.estado)}`}>
+                        {bloqueEstadoLabel(bloque.estado)}
+                      </span>
+                      <span className="ml-1.5 text-xs text-slate-400">({bloque.totalLineas})</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {(esAlmacen && (data.borradores?.length ?? 0) > 0) && (
+              <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50/80 p-3">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Borradores pendientes de tramitar
                 </p>
                 <div className="flex flex-wrap items-center gap-2">
                   {data.borradores!.map((b) => (
                     <button
                       key={b.id}
                       type="button"
-                      onClick={() => void abrirBorrador(b.id)}
+                      onClick={() => void abrirPropuesta(b.id)}
                       className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
                         data.propuesta?.id === b.id
                           ? 'border-teal-600 bg-teal-50 font-semibold text-teal-800'
@@ -531,15 +605,15 @@ export default function PropuestaPage() {
             {!data.propuesta ? (
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-6 py-10 text-center">
                 <p className="text-slate-500 text-sm">
-                  {(data.borradores?.length ?? 0) > 0
-                    ? 'Selecciona un borrador arriba para revisarlo y tramitarlo.'
+                  {(data.bloques?.length ?? 0) > 0
+                    ? 'Selecciona una ubicación arriba para crear o retomar su propuesta.'
                     : esAlmacen
                       ? 'Pedido de almacén en curso, sin líneas guardadas aún.'
                       : 'Recuento pendiente sin líneas en propuesta. Completa el recuento manual por ubicación.'}
                 </p>
-                {(data.borradores?.length ?? 0) > 0 && (
+                {(data.bloques?.length ?? 0) > 0 && (
                   <p className="text-slate-400 text-xs mt-1">
-                    También puedes abrir un borrador desde el historial con «Revisar».
+                    Las propuestas ya tramitadas también se pueden abrir desde aquí en solo lectura.
                   </p>
                 )}
               </div>
@@ -1074,7 +1148,7 @@ export default function PropuestaPage() {
                           )}
                           {p.estado === 'borrador' && (
                             <button
-                              onClick={() => void abrirBorrador(p.id)}
+                              onClick={() => void abrirPropuesta(p.id)}
                               className="rounded border border-teal-200 bg-teal-50 px-2 py-1 text-[11px] font-medium text-teal-700 hover:bg-teal-100 transition-colors"
                               title="Abrir en el panel superior para revisar y tramitar"
                             >

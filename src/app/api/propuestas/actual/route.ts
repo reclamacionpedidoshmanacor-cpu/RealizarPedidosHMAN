@@ -2,15 +2,17 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
 import { isAlmacenArea, ubicacionDesdeEtiquetaPropuesta } from '@/lib/almacen';
 import {
+  abrirPropuestaUbicacionDesdeRecuento,
   actualizarStockTransitoSnapshot,
   actualizarCalculoAutomaticoLineaPropuesta,
   ensureNutricionDecimalSchema,
   buildLineasPropuestaParaUi,
   getPedidoAlmacenPendiente,
+  getPropuestaById,
   listBorradoresPropuestaAlmacen,
+  listBloquesPropuestaRecuento,
   getPendienteRecuento,
   getLineasPropuesta,
-  syncTodasPropuestasUbicacionDesdeRecuento,
 } from '@/lib/stock-propuesta-neon';
 import { loadCantidadTransitoByCn } from '@/lib/pedidos-pendientes';
 import { loadAlertasSuministroPorCnsSafe, alertaSuministroParaCn } from '@/lib/alertas-suministro';
@@ -108,6 +110,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const propuestaIdParam = Number(req.nextUrl.searchParams.get('propuestaId'));
+    const ubicacionParam = req.nextUrl.searchParams.get('ubicacion')?.trim() ?? '';
 
     if (isAlmacenArea(session.area)) {
       const pedido = await getPedidoAlmacenPendiente(session.area);
@@ -191,17 +194,38 @@ export async function GET(req: NextRequest) {
     }
 
     await ensureNutricionDecimalSchema(session.area);
-    await syncTodasPropuestasUbicacionDesdeRecuento(session.area, recuento.id);
-
-    const borradores = await listBorradoresPropuestaAlmacen(session.area, recuento.id);
-    const propuesta = seleccionarBorrador(borradores, propuestaIdParam);
-
-    if (!propuesta) {
+    let bloques = await listBloquesPropuestaRecuento(session.area, recuento.id);
+    if (!(propuestaIdParam > 0) && !ubicacionParam) {
       return NextResponse.json({
         recuento,
         propuesta: null,
         lineas: [],
-        borradores,
+        bloques,
+        modo: 'por-ubicacion',
+      });
+    }
+
+    let propuesta = null;
+    if (propuestaIdParam > 0) {
+      propuesta = await getPropuestaById(propuestaIdParam);
+      if (!propuesta || propuesta.area !== session.area || propuesta.importacionStockId !== recuento.id) {
+        return NextResponse.json({ error: 'La propuesta seleccionada ya no pertenece al recuento pendiente actual.' }, { status: 404 });
+      }
+    } else if (ubicacionParam) {
+      const bloque = bloques.find((item) => item.ubicacion === ubicacionParam);
+      if (!bloque) {
+        return NextResponse.json({ error: 'La ubicación seleccionada no pertenece al recuento pendiente actual.' }, { status: 404 });
+      }
+      propuesta = await abrirPropuestaUbicacionDesdeRecuento(session.area, recuento.id, ubicacionParam);
+    }
+
+    if (!propuesta) {
+      bloques = await listBloquesPropuestaRecuento(session.area, recuento.id);
+      return NextResponse.json({
+        recuento,
+        propuesta: null,
+        lineas: [],
+        bloques,
         modo: 'por-ubicacion',
       });
     }
@@ -211,14 +235,18 @@ export async function GET(req: NextRequest) {
       lineas.map((linea) => ({ cn: linea.cn, unidadesPorCaja: linea.unidadesPorCaja }))
     );
 
-    lineas = await recalcularLineasAutomaticas(propuesta.id, session.area, stockTransitoByCn);
+    if (propuesta.estado === 'borrador') {
+      lineas = await recalcularLineasAutomaticas(propuesta.id, session.area, stockTransitoByCn);
+    }
     if (lineas.length > 0 && Object.keys(stockTransitoByCn).length === 0) {
       stockTransitoByCn = await loadStockTransitoCajasSafely(
         lineas.map((linea) => ({ cn: linea.cn, unidadesPorCaja: linea.unidadesPorCaja }))
       );
     }
 
-    await actualizarStockTransitoSnapshot(propuesta.id, stockTransitoByCn);
+    if (propuesta.estado === 'borrador') {
+      await actualizarStockTransitoSnapshot(propuesta.id, stockTransitoByCn);
+    }
 
     const ubicacionFiltro = ubicacionDesdeEtiquetaPropuesta(propuesta.observaciones);
     const lineasParaUi = await attachAlertasLineas(
@@ -231,6 +259,7 @@ export async function GET(req: NextRequest) {
         ubicacionFiltro
       )
     );
+    bloques = await listBloquesPropuestaRecuento(session.area, recuento.id);
 
     return NextResponse.json({
       recuento,
@@ -242,7 +271,7 @@ export async function GET(req: NextRequest) {
         importacionStockId: recuento.id,
         observaciones: propuesta.observaciones ?? null,
       },
-      borradores,
+      bloques,
       lineas: lineasParaUi,
       modo: 'por-ubicacion',
     });
