@@ -352,11 +352,13 @@ function resolveInformeData(datos: AnalisisDatos, tipo: InformeTipo) {
       totalGasto: gk.totalGasto,
       totalPreparaciones: gk.totalPreparaciones,
       totalViales: gk.totalViales,
+      totalUnidades: gk.totalUnidades,
       mediaPackientesSemana: gk.mediaPackientesSemana,
       costePorPreparacion: gk.costePorPreparacion,
       variacionYoy: gk.variacionYoy,
       medicamentosDistintos: gk.medicamentosDistintos,
       protocolosActivos: gk.protocolosActivos,
+      serviciosActivos: 0,
     };
     return {
       kpis,

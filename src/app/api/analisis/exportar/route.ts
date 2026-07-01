@@ -64,7 +64,7 @@ export async function GET(req: NextRequest) {
     { header: 'Gasto (€)',        key: 'gasto', width: 16 },
     { header: 'Preparaciones',    key: 'prep',  width: 14 },
     { header: '€ / preparación',  key: 'cxp',   width: 16 },
-    { header: 'Variación YoY',    key: 'yoy',   width: 14 },
+    { header: 'Variación período',key: 'yoy',   width: 16 },
   ];
   styleHeader(shAnual.getRow(1));
   datos.gastoPorAnio.forEach((r, i) => {
@@ -80,7 +80,7 @@ export async function GET(req: NextRequest) {
     { header: 'Grupo tumoral',   key: 'label', width: 22 },
     { header: 'Gasto (€)',       key: 'gasto', width: 16 },
     { header: '% del total',     key: 'pct',   width: 12 },
-    { header: 'Variación YoY',   key: 'yoy',   width: 14 },
+    { header: 'Variación período', key: 'yoy',   width: 16 },
     { header: 'Preparaciones',   key: 'prep',  width: 14 },
     { header: 'Medicamentos',    key: 'meds',  width: 14 },
     { header: 'Protocolos',      key: 'prots', width: 12 },
@@ -121,9 +121,9 @@ export async function GET(req: NextRequest) {
     { header: 'Grupo tumoral',   key: 'grupo', width: 20 },
     { header: 'Gasto (€)',       key: 'gasto', width: 16 },
     { header: 'Preparaciones',   key: 'prep',  width: 14 },
-    { header: 'Viales',          key: 'viales',width: 10 },
+    { header: 'Cajas eq.',       key: 'viales',width: 12 },
     { header: '€ / preparación', key: 'cxp',   width: 16 },
-    { header: 'Variación YoY',   key: 'yoy',   width: 14 },
+    { header: 'Variación período', key: 'yoy',   width: 16 },
   ];
   styleHeader(shMeds.getRow(1));
   datos.topMedicamentos.forEach((m, i) => {
@@ -178,7 +178,7 @@ export async function GET(req: NextRequest) {
       { header: 'Principio activo', key: 'pa',    width: 28 },
       { header: 'Marca comercial',  key: 'nom',   width: 22 },
       { header: 'Preparaciones',    key: 'prep',  width: 14 },
-      { header: 'Viales',           key: 'viales',width: 10 },
+      { header: 'Cajas eq.',        key: 'viales',width: 12 },
       { header: 'Gasto (€)',        key: 'gasto', width: 16 },
       { header: '€ / preparación',  key: 'cxp',   width: 16 },
     ];

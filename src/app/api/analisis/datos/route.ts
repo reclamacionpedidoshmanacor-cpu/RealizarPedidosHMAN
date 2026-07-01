@@ -32,10 +32,11 @@ export async function GET(req: NextRequest) {
   const hasta    = searchParams.get('hasta')    || defaultHasta();
   const grupo    = searchParams.get('grupo')    || null;
   const servicio = searchParams.get('servicio') || null;
+  const cn       = searchParams.get('cn')       || null;
   const comparativa = parseModoComparativa(searchParams.get('comparativa'));
 
   try {
-    const datos = await getAnalisisDatos(session.area, desde, hasta, grupo, servicio, comparativa);
+    const datos = await getAnalisisDatos(session.area, desde, hasta, grupo, servicio, comparativa, cn);
     return NextResponse.json(datos);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Error inesperado';
