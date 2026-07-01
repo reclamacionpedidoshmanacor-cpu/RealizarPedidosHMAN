@@ -497,7 +497,7 @@ async function getAnalisisRaw(
       MIN(cr.fecha)::text                                                     AS fecha_min
     FROM consumo_registros cr
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
-    LEFT JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
+    JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
     WHERE ic.area = ${area}
       AND (cr.anio * 100 + cr.mes) >= ${ymDesde}
       AND (cr.anio * 100 + cr.mes) <= ${ymHasta}
@@ -542,7 +542,7 @@ async function getGastoByYear(area: string): Promise<GastoAnual[]> {
       COUNT(*)::int                                                          AS preparaciones
     FROM consumo_registros cr
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
-    LEFT JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
+    JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
     WHERE ic.area = ${area}
       AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
     GROUP BY EXTRACT(YEAR FROM cr.fecha)
@@ -607,7 +607,7 @@ async function getGastoAnualPorServicio(area: string): Promise<GastoAnualServici
       SUM(cr.viales_dispensados * COALESCE(m.precio_unidad, 0))::float        AS gasto
     FROM consumo_registros cr
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
-    LEFT JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
+    JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
     WHERE ic.area = ${area}
       AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
     GROUP BY cr.anio, cr.mes, cr.semana_iso, cr.diagnostico
@@ -731,7 +731,7 @@ async function getYoyYtd(area: string, mesHasta: number, anio: number): Promise<
       SUM(cr.viales_dispensados * COALESCE(m.precio_unidad, 0))::float        AS gasto
     FROM consumo_registros cr
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
-    LEFT JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
+    JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
     WHERE ic.area = ${area}
       AND cr.anio IN (${anio}, ${anio - 1})
       AND cr.mes <= ${mesHasta}
@@ -887,7 +887,7 @@ async function getTemporalSemanalReciente(
       SUM(cr.viales_dispensados * COALESCE(m.precio_unidad, 0))::float        AS gasto
     FROM consumo_registros cr
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
-    LEFT JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
+    JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
     WHERE ic.area = ${area}
       AND cr.semana_iso IS NOT NULL AND cr.semana_iso > 0
       AND (cr.anio * 100 + cr.mes) >= ${CUT_YM}
@@ -920,7 +920,7 @@ async function getTemporalSemanalReciente(
         COUNT(*)::int AS preparaciones
       FROM consumo_registros cr
       JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
-      LEFT JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
+      JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
       WHERE ic.area = ${area}
         AND cr.semana_iso IS NOT NULL AND cr.semana_iso > 0
         AND (cr.anio * 100 + cr.mes) >= ${CUT_YM}

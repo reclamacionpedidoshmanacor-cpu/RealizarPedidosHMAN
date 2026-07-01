@@ -12,6 +12,7 @@ import {
   CartesianGrid,
   Tooltip,
   Legend,
+  Cell,
 } from 'recharts';
 import {
   GRUPO_COLORS,
@@ -91,6 +92,63 @@ function fmtDate(iso: string): string {
   return `${d}/${m}/${y}`;
 }
 
+const SERIES_COLORS = {
+  consumo: '#0f766e',
+  consumoSoft: '#14b8a6',
+  gasto: '#be123c',
+  gastoSoft: '#fb7185',
+  preparaciones: '#d97706',
+  compras: '#2563eb',
+  comprasSoft: '#38bdf8',
+  comprasGasto: '#7c3aed',
+  surface: '#0f172a',
+} as const;
+
+const SERVICE_PALETTE = [
+  '#0f766e',
+  '#0369a1',
+  '#7c3aed',
+  '#c2410c',
+  '#be123c',
+  '#0891b2',
+  '#65a30d',
+  '#ea580c',
+] as const;
+
+function hashText(value: string): number {
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+  }
+  return hash;
+}
+
+function getServiceColor(key: string): string {
+  return SERVICE_PALETTE[hashText(key) % SERVICE_PALETTE.length] ?? SERVICE_PALETTE[0];
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const clean = hex.replace('#', '');
+  const value = clean.length === 3
+    ? clean.split('').map((char) => char + char).join('')
+    : clean;
+  const r = Number.parseInt(value.slice(0, 2), 16);
+  const g = Number.parseInt(value.slice(2, 4), 16);
+  const b = Number.parseInt(value.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+const KPI_TONES = {
+  teal: 'border-teal-200 bg-teal-50 text-teal-800',
+  blue: 'border-sky-200 bg-sky-50 text-sky-800',
+  amber: 'border-amber-200 bg-amber-50 text-amber-800',
+  rose: 'border-rose-200 bg-rose-50 text-rose-800',
+  violet: 'border-violet-200 bg-violet-50 text-violet-800',
+  slate: 'border-slate-200 bg-white text-slate-800',
+} as const;
+
+type KpiTone = keyof typeof KPI_TONES;
+
 function YoyBadge({ pct }: { pct: number | null }) {
   if (pct === null) {
     return <span className="text-[10px] text-slate-400">sin base comparable</span>;
@@ -113,23 +171,18 @@ function KpiCard({
   label,
   value,
   sub,
-  highlight,
+  tone = 'slate',
 }: {
   label: string;
   value: string;
   sub?: string;
-  highlight?: boolean;
+  tone?: KpiTone;
 }) {
+  const toneClasses = KPI_TONES[tone];
   return (
-    <div
-      className={`rounded-xl border px-5 py-4 shadow-sm ${
-        highlight ? 'border-teal-200 bg-teal-50' : 'border-slate-200 bg-white'
-      }`}
-    >
+    <div className={`rounded-xl border px-5 py-4 shadow-sm ${toneClasses}`}>
       <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">{label}</p>
-      <p className={`mt-1 text-2xl font-bold tabular-nums ${highlight ? 'text-teal-800' : 'text-slate-800'}`}>
-        {value}
-      </p>
+      <p className="mt-1 text-2xl font-bold tabular-nums">{value}</p>
       {sub && <p className="mt-0.5 text-xs text-slate-500 leading-tight">{sub}</p>}
     </div>
   );
@@ -215,17 +268,25 @@ function TemporalChart({
             yAxisId="left"
             dataKey="viales"
             name="Consumo (cajas eq.)"
-            fill="#0f766e"
-            fillOpacity={0.72}
+            fill={SERIES_COLORS.consumo}
+            fillOpacity={0.82}
             radius={[4, 4, 0, 0]}
           />
           <Line
+            yAxisId="left"
+            dataKey="preparaciones"
+            name="Preparaciones"
+            stroke={SERIES_COLORS.preparaciones}
+            strokeWidth={2}
+            dot={false}
+          />
+          <Bar
             yAxisId="right"
             dataKey="gasto"
             name="Gasto valorizado"
-            stroke="#0f172a"
-            strokeWidth={2}
-            dot={false}
+            fill={SERIES_COLORS.gastoSoft}
+            fillOpacity={0.55}
+            radius={[4, 4, 0, 0]}
           />
         </ComposedChart>
       </ResponsiveContainer>
@@ -242,15 +303,19 @@ function ServicioCardUI({
   selected: boolean;
   onClick: () => void;
 }) {
+  const color = getServiceColor(item.servicioKey);
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`w-full rounded-xl border p-4 text-left shadow-sm transition-colors ${
-        selected
-          ? 'border-teal-300 bg-teal-50 ring-2 ring-teal-100'
-          : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-md'
-      }`}
+      className="w-full rounded-xl border p-4 text-left shadow-sm transition-colors hover:shadow-md"
+      style={{
+        borderColor: selected ? hexToRgba(color, 0.45) : '#e2e8f0',
+        background: selected
+          ? `linear-gradient(135deg, ${hexToRgba(color, 0.16)}, rgba(255,255,255,0.96))`
+          : `linear-gradient(135deg, ${hexToRgba(color, 0.09)}, rgba(255,255,255,0.98))`,
+        boxShadow: selected ? `0 0 0 2px ${hexToRgba(color, 0.18)}` : undefined,
+      }}
     >
       <div className="flex items-start justify-between gap-3">
         <p className="text-sm font-bold text-slate-800 leading-tight">{item.servicio}</p>
@@ -260,6 +325,12 @@ function ServicioCardUI({
       <p className="mt-1 text-xs text-slate-500">
         {fmtNum(item.totalViales)} cajas eq. · {fmtNum(item.totalPreparaciones, 0)} preparaciones
       </p>
+      <div className="mt-3 h-1.5 w-full rounded-full bg-white/70 overflow-hidden">
+        <div
+          className="h-full rounded-full"
+          style={{ width: `${Math.min(item.pctGasto, 100)}%`, backgroundColor: color }}
+        />
+      </div>
       <p className="mt-2 text-[11px] text-slate-400">
         {item.pctGasto.toFixed(1)}% del gasto del período
       </p>
@@ -343,6 +414,71 @@ function TopProtocolosTable({ items }: { items: TopProtocolo[] }) {
             ))}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+function DistributionBars({
+  title,
+  rows,
+}: {
+  title: string;
+  rows: Array<{ id: string; label: string; gasto: number; cajas: number; color: string }>;
+}) {
+  if (!rows.length) return null;
+  const data = rows.slice(0, 8).map((row) => ({
+    ...row,
+    shortLabel: row.label.length > 22 ? `${row.label.slice(0, 20)}…` : row.label,
+  }));
+
+  return (
+    <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
+      <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
+        <h4 className="text-sm font-semibold text-slate-700">{title}</h4>
+      </div>
+      <div className="p-4">
+        <ResponsiveContainer width="100%" height={250}>
+          <BarChart data={data} layout="vertical" margin={{ top: 0, right: 18, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
+            <XAxis
+              type="number"
+              tick={{ fontSize: 10, fill: '#94a3b8' }}
+              tickFormatter={(v) => fmtEurShort(Number(v))}
+            />
+            <YAxis
+              type="category"
+              dataKey="shortLabel"
+              tick={{ fontSize: 10, fill: '#475569' }}
+              width={110}
+            />
+            <Tooltip
+              formatter={(value: unknown, name: unknown, payload: { payload?: { cajas?: number } } | undefined) => {
+                if (name === 'Gasto') return fmtEur(Number(value));
+                return `${fmtNum(Number(value))} cajas eq.`;
+              }}
+              labelFormatter={(label) => String(label)}
+            />
+            <Bar dataKey="gasto" name="Gasto" radius={[0, 4, 4, 0]}>
+              {data.map((row) => (
+                <Cell key={row.id} fill={row.color} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+        <div className="mt-3 space-y-2">
+          {data.map((row) => (
+            <div key={row.id} className="flex items-center justify-between gap-3 text-[11px]">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: row.color }} />
+                <span className="truncate text-slate-600">{row.label}</span>
+              </div>
+              <div className="text-right tabular-nums text-slate-500">
+                {fmtEur(row.gasto)} · {fmtNum(row.cajas)} cajas
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -493,10 +629,10 @@ function GrupoDetallePanel({
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <KpiCard label="Gasto" value={fmtEur(detalle.kpis.totalGasto)} highlight />
-        <KpiCard label="Cajas eq." value={fmtNum(detalle.kpis.totalViales)} />
-        <KpiCard label="Preparaciones" value={fmtNum(detalle.kpis.totalPreparaciones, 0)} />
-        <KpiCard label="Medicamentos" value={String(detalle.kpis.medicamentosDistintos)} />
+        <KpiCard label="Gasto" value={fmtEur(detalle.kpis.totalGasto)} tone="rose" />
+        <KpiCard label="Cajas eq." value={fmtNum(detalle.kpis.totalViales)} tone="teal" />
+        <KpiCard label="Preparaciones" value={fmtNum(detalle.kpis.totalPreparaciones, 0)} tone="amber" />
+        <KpiCard label="Medicamentos" value={String(detalle.kpis.medicamentosDistintos)} tone="violet" />
       </div>
 
       <div className={`grid gap-4 ${showWeekly ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1'}`}>
@@ -642,10 +778,10 @@ function MedicamentoDetallePanel({
 
       <div className="p-5 space-y-5">
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <KpiCard label="Consumo valorizado" value={fmtEur(detalle.consumo.totalGasto)} highlight />
-          <KpiCard label="Consumo cajas eq." value={fmtNum(detalle.consumo.totalViales)} />
-          <KpiCard label="Compras cajas eq." value={fmtNum(detalle.compras.totalViales)} />
-          <KpiCard label="Compras valorizadas" value={fmtEur(detalle.compras.totalGasto)} />
+          <KpiCard label="Consumo valorizado" value={fmtEur(detalle.consumo.totalGasto)} tone="rose" />
+          <KpiCard label="Consumo cajas eq." value={fmtNum(detalle.consumo.totalViales)} tone="teal" />
+          <KpiCard label="Compras cajas eq." value={fmtNum(detalle.compras.totalViales)} tone="blue" />
+          <KpiCard label="Compras valorizadas" value={fmtEur(detalle.compras.totalGasto)} tone="violet" />
         </div>
 
         <div className="flex items-center gap-2">
@@ -691,8 +827,15 @@ function MedicamentoDetallePanel({
                 <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} width={60} />
                 <Tooltip content={<TemporalTooltip />} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Bar dataKey="comprasCajas" name="Compras recibidas" fill="#0369a1" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="consumoCajas" name="Consumo" fill="#0f766e" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="comprasCajas" name="Compras recibidas" fill={SERIES_COLORS.compras} radius={[4, 4, 0, 0]} />
+                <Bar dataKey="consumoCajas" name="Consumo" fill={SERIES_COLORS.consumo} radius={[4, 4, 0, 0]} />
+                <Line
+                  dataKey="preparaciones"
+                  name="Preparaciones"
+                  stroke={SERIES_COLORS.preparaciones}
+                  strokeWidth={2}
+                  dot={false}
+                />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -700,7 +843,7 @@ function MedicamentoDetallePanel({
           <div className="rounded-xl border border-slate-200 p-4">
             <h4 className="text-sm font-semibold text-slate-700 mb-3">Compras valorizadas vs consumo valorizado</h4>
             <ResponsiveContainer width="100%" height={260}>
-              <ComposedChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 24 }}>
+              <BarChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 24 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis
                   dataKey="label"
@@ -713,61 +856,35 @@ function MedicamentoDetallePanel({
                 <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} width={72} tickFormatter={(v) => fmtEurShort(Number(v))} />
                 <Tooltip content={<TemporalTooltip />} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Line dataKey="comprasGasto" name="Compras valorizadas" stroke="#0369a1" strokeWidth={2} dot={false} />
-                <Line dataKey="consumoGasto" name="Consumo valorizado" stroke="#0f172a" strokeWidth={2} dot={false} />
-              </ComposedChart>
+                <Bar dataKey="comprasGasto" name="Compras valorizadas" fill={SERIES_COLORS.comprasGasto} radius={[4, 4, 0, 0]} />
+                <Bar dataKey="consumoGasto" name="Consumo valorizado" fill={SERIES_COLORS.gasto} radius={[4, 4, 0, 0]} />
+              </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-          <div className="rounded-xl border border-slate-200 overflow-hidden">
-            <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
-              <h4 className="text-sm font-semibold text-slate-700">Distribución por servicio real</h4>
-            </div>
-            <table className="w-full text-xs">
-              <thead className="bg-slate-50/60">
-                <tr className="text-[10px] uppercase tracking-wide text-slate-400">
-                  <th className="px-3 py-2 text-left">Servicio</th>
-                  <th className="px-3 py-2 text-right">Gasto</th>
-                  <th className="px-3 py-2 text-right">Cajas</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {detalle.porServicio.map((row) => (
-                  <tr key={row.servicioKey}>
-                    <td className="px-3 py-2.5 font-medium text-slate-700">{row.servicio}</td>
-                    <td className="px-3 py-2.5 text-right font-semibold tabular-nums">{fmtEur(row.totalGasto)}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums text-slate-600">{fmtNum(row.totalViales)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DistributionBars
+            title="Distribución por servicio real"
+            rows={detalle.porServicio.map((row) => ({
+              id: row.servicioKey,
+              label: row.servicio,
+              gasto: row.totalGasto,
+              cajas: row.totalViales,
+              color: getServiceColor(row.servicioKey),
+            }))}
+          />
 
-          <div className="rounded-xl border border-slate-200 overflow-hidden">
-            <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
-              <h4 className="text-sm font-semibold text-slate-700">Distribución por tipo tumoral</h4>
-            </div>
-            <table className="w-full text-xs">
-              <thead className="bg-slate-50/60">
-                <tr className="text-[10px] uppercase tracking-wide text-slate-400">
-                  <th className="px-3 py-2 text-left">Grupo</th>
-                  <th className="px-3 py-2 text-right">Gasto</th>
-                  <th className="px-3 py-2 text-right">Cajas</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {detalle.porGrupo.map((row) => (
-                  <tr key={row.grupo}>
-                    <td className="px-3 py-2.5 font-medium text-slate-700">{row.label}</td>
-                    <td className="px-3 py-2.5 text-right font-semibold tabular-nums">{fmtEur(row.totalGasto)}</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums text-slate-600">{fmtNum(row.totalViales)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DistributionBars
+            title="Distribución por tipo tumoral"
+            rows={detalle.porGrupo.map((row) => ({
+              id: row.grupo,
+              label: row.label,
+              gasto: row.totalGasto,
+              cajas: row.totalViales,
+              color: GRUPO_COLORS[row.grupo].chart,
+            }))}
+          />
 
           <div className="rounded-xl border border-slate-200 overflow-hidden">
             <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
@@ -888,7 +1005,12 @@ export default function AnalisisOncologiaPage() {
   }
 
   return (
-    <div className="w-full px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+    <div
+      className="w-full px-4 sm:px-6 lg:px-8 py-6 space-y-6"
+      style={{
+        background: 'linear-gradient(180deg, #fffdf8 0%, #f8fafc 36%, #ffffff 100%)',
+      }}
+    >
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -968,12 +1090,12 @@ export default function AnalisisOncologiaPage() {
       {!loading && datos && (
         <>
           <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3">
-            <KpiCard label="Gasto valorizado" value={fmtEur(datos.kpis.totalGasto)} highlight />
-            <KpiCard label="Consumo cajas eq." value={fmtNum(datos.kpis.totalViales)} />
-            <KpiCard label="Consumo unidades" value={fmtNum(datos.kpis.totalUnidades, 0)} />
-            <KpiCard label="Preparaciones" value={fmtNum(datos.kpis.totalPreparaciones, 0)} />
-            <KpiCard label="Servicios activos" value={String(datos.kpis.serviciosActivos)} />
-            <KpiCard label="Medicamentos" value={String(datos.kpis.medicamentosDistintos)} />
+            <KpiCard label="Gasto valorizado" value={fmtEur(datos.kpis.totalGasto)} tone="rose" />
+            <KpiCard label="Consumo cajas eq." value={fmtNum(datos.kpis.totalViales)} tone="teal" />
+            <KpiCard label="Consumo unidades" value={fmtNum(datos.kpis.totalUnidades, 0)} tone="blue" />
+            <KpiCard label="Preparaciones" value={fmtNum(datos.kpis.totalPreparaciones, 0)} tone="amber" />
+            <KpiCard label="Servicios activos" value={String(datos.kpis.serviciosActivos)} tone="violet" />
+            <KpiCard label="Medicamentos" value={String(datos.kpis.medicamentosDistintos)} tone="slate" />
           </div>
 
           <div className="space-y-3">
