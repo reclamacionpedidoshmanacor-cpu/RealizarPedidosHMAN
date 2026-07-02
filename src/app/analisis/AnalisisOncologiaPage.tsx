@@ -80,6 +80,16 @@ function fmtNum(n: number, dec = 1): string {
   return n.toLocaleString('es-ES', { maximumFractionDigits: dec });
 }
 
+function fmtQty(n: number, dec = 1): string {
+  const abs = Math.abs(n);
+  const maxFractionDigits = abs > 0 && abs < 0.1
+    ? 3
+    : abs > 0 && abs < 1
+    ? 2
+    : dec;
+  return n.toLocaleString('es-ES', { maximumFractionDigits: maxFractionDigits });
+}
+
 function fmtEurShort(n: number): string {
   if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace('.', ',')} M€`;
   if (Math.abs(n) >= 1_000) return `${Math.round(n / 1_000)} k€`;
@@ -95,8 +105,8 @@ function fmtDate(iso: string): string {
 const SERIES_COLORS = {
   consumo: '#0f766e',
   consumoSoft: '#14b8a6',
-  gasto: '#be123c',
-  gastoSoft: '#fb7185',
+  gasto: '#1d4f91',
+  gastoSoft: '#7fb3e6',
   preparaciones: '#d97706',
   compras: '#2563eb',
   comprasSoft: '#38bdf8',
@@ -207,9 +217,10 @@ function TemporalTooltip({
       {payload.map((entry, i) => {
         if (entry.value == null) return null;
         const isMoney = String(entry.name).toLowerCase().includes('gasto');
+        const isPrep = String(entry.name).toLowerCase().includes('prep');
         return (
           <p key={i} style={{ color: entry.color }} className="tabular-nums">
-            {entry.name}: {isMoney ? fmtEur(Number(entry.value)) : fmtNum(Number(entry.value))}
+            {entry.name}: {isMoney ? fmtEur(Number(entry.value)) : fmtQty(Number(entry.value), isPrep ? 0 : 1)}
           </p>
         );
       })}
@@ -252,7 +263,7 @@ function TemporalChart({
           <YAxis
             yAxisId="left"
             tick={{ fontSize: 10, fill: '#94a3b8' }}
-            tickFormatter={(v) => fmtNum(Number(v))}
+            tickFormatter={(v) => fmtQty(Number(v))}
             width={60}
           />
           <YAxis
@@ -270,6 +281,7 @@ function TemporalChart({
             name="Consumo (cajas eq.)"
             fill={SERIES_COLORS.consumo}
             fillOpacity={0.82}
+            minPointSize={3}
             radius={[4, 4, 0, 0]}
           />
           <Line
@@ -323,7 +335,7 @@ function ServicioCardUI({
       </div>
       <p className="mt-2 text-xl font-bold text-slate-900 tabular-nums">{fmtEur(item.totalGasto)}</p>
       <p className="mt-1 text-xs text-slate-500">
-        {fmtNum(item.totalViales)} cajas eq. · {fmtNum(item.totalPreparaciones, 0)} preparaciones
+        {fmtQty(item.totalViales)} cajas eq. · {fmtNum(item.totalPreparaciones, 0)} preparaciones
       </p>
       <div className="mt-3 h-1.5 w-full rounded-full bg-white/70 overflow-hidden">
         <div
@@ -369,7 +381,7 @@ function GrupoCardUI({
       </div>
       <p className="mt-2 text-xl font-bold text-slate-900 tabular-nums">{fmtEur(item.totalGasto)}</p>
       <p className="mt-1 text-xs text-slate-500">
-        {fmtNum(item.totalViales)} cajas eq. · {fmtNum(item.totalPreparaciones, 0)} preparaciones
+        {fmtQty(item.totalViales)} cajas eq. · {fmtNum(item.totalPreparaciones, 0)} preparaciones
       </p>
       <div className="mt-3 h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
         <div
@@ -385,7 +397,7 @@ function GrupoCardUI({
 function TopProtocolosTable({ items }: { items: TopProtocolo[] }) {
   if (!items.length) return null;
   return (
-    <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+    <div className="h-full rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden flex flex-col">
       <div className="px-5 py-3 border-b border-slate-100 bg-slate-50">
         <h3 className="text-sm font-semibold text-slate-700">Protocolos con mayor impacto económico</h3>
       </div>
@@ -407,7 +419,7 @@ function TopProtocolosTable({ items }: { items: TopProtocolo[] }) {
                 <td className="px-3 py-2.5 font-bold text-slate-400">{i + 1}</td>
                 <td className="px-3 py-2.5 font-semibold text-slate-800">{p.protocolo}</td>
                 <td className="px-3 py-2.5 text-right font-bold tabular-nums text-slate-900">{fmtEur(p.totalGasto)}</td>
-                <td className="px-3 py-2.5 text-right tabular-nums text-slate-600">{fmtNum(p.totalViales)}</td>
+                <td className="px-3 py-2.5 text-right tabular-nums text-slate-600">{fmtQty(p.totalViales)}</td>
                 <td className="px-3 py-2.5 text-right tabular-nums text-slate-600">{fmtNum(p.totalPreparaciones, 0)}</td>
                 <td className="px-3 py-2.5 text-right tabular-nums text-slate-500">{fmtEur(p.costePorPreparacion)}</td>
               </tr>
@@ -455,7 +467,7 @@ function DistributionBars({
             <Tooltip
               formatter={(value: unknown, name: unknown, payload: { payload?: { cajas?: number } } | undefined) => {
                 if (name === 'Gasto') return fmtEur(Number(value));
-                return `${fmtNum(Number(value))} cajas eq.`;
+                return `${fmtQty(Number(value))} cajas eq.`;
               }}
               labelFormatter={(label) => String(label)}
             />
@@ -474,12 +486,46 @@ function DistributionBars({
                 <span className="truncate text-slate-600">{row.label}</span>
               </div>
               <div className="text-right tabular-nums text-slate-500">
-                {fmtEur(row.gasto)} · {fmtNum(row.cajas)} cajas
+                {fmtEur(row.gasto)} · {fmtQty(row.cajas)} cajas
               </div>
             </div>
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+function GastoAnualRefChart({ data }: { data: TemporalPoint[] }) {
+  const yearly = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const row of data) {
+      map.set(row.anio, (map.get(row.anio) ?? 0) + row.gasto);
+    }
+    return [...map.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([anio, gasto]) => ({ anio: String(anio), gasto }));
+  }, [data]);
+
+  if (!yearly.length) return null;
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="mb-4">
+        <h3 className="text-sm font-semibold text-slate-700">Referencia anual del gasto valorizado</h3>
+        <p className="mt-1 text-xs text-slate-400">
+          Agrupa el alcance actual por año natural para contextualizar el importe seleccionado.
+        </p>
+      </div>
+      <ResponsiveContainer width="100%" height={220}>
+        <BarChart data={yearly} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+          <XAxis dataKey="anio" tick={{ fontSize: 10, fill: '#64748b' }} />
+          <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} tickFormatter={(v) => fmtEurShort(Number(v))} width={72} />
+          <Tooltip formatter={(value: unknown) => fmtEur(Number(value))} />
+          <Bar dataKey="gasto" name="Gasto valorizado" fill={SERIES_COLORS.gasto} radius={[6, 6, 0, 0]} />
+        </BarChart>
+      </ResponsiveContainer>
     </div>
   );
 }
@@ -502,7 +548,7 @@ function ProtocoloRow({
         <span className="text-xs font-bold text-slate-700 uppercase tracking-wide">{prot.protocolo}</span>
         <div className="flex items-center gap-4 text-xs text-right">
           <span className="font-semibold text-slate-800">{fmtEur(prot.totalGasto)}</span>
-          <span className="text-slate-500">{fmtNum(prot.totalViales)} cajas eq.</span>
+          <span className="text-slate-500">{fmtQty(prot.totalViales)} cajas eq.</span>
           <span className="text-slate-400">{open ? '▲' : '▼'}</span>
         </div>
       </button>
@@ -524,7 +570,7 @@ function ProtocoloRow({
                     <span className="font-semibold text-slate-800">{med.principioActivo || '—'}</span>
                     <span className="ml-2 text-slate-400 italic text-[10px]">{med.nombre || ''}</span>
                   </td>
-                  <td className="py-1.5 text-right tabular-nums text-slate-600">{fmtNum(med.totalViales)}</td>
+                  <td className="py-1.5 text-right tabular-nums text-slate-600">{fmtQty(med.totalViales)}</td>
                   <td className="py-1.5 text-right tabular-nums font-semibold text-slate-800">{fmtEur(med.totalGasto)}</td>
                   <td className="py-1.5 text-right">
                     <button
@@ -630,7 +676,7 @@ function GrupoDetallePanel({
     <div className="space-y-5">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <KpiCard label="Gasto" value={fmtEur(detalle.kpis.totalGasto)} tone="rose" />
-        <KpiCard label="Cajas eq." value={fmtNum(detalle.kpis.totalViales)} tone="teal" />
+        <KpiCard label="Cajas eq." value={fmtQty(detalle.kpis.totalViales)} tone="teal" />
         <KpiCard label="Preparaciones" value={fmtNum(detalle.kpis.totalPreparaciones, 0)} tone="amber" />
         <KpiCard label="Medicamentos" value={String(detalle.kpis.medicamentosDistintos)} tone="violet" />
       </div>
@@ -694,7 +740,7 @@ function MedicamentoListTable({
           className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm min-w-[260px] shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-400"
         />
       </div>
-      <div className="max-h-[360px] overflow-auto">
+      <div className="flex-1 min-h-[520px] overflow-auto">
         <table className="w-full text-xs">
           <thead className="sticky top-0 bg-slate-50/95 backdrop-blur">
             <tr className="text-[10px] uppercase tracking-wide text-slate-400">
@@ -720,7 +766,7 @@ function MedicamentoListTable({
                   </p>
                 </td>
                 <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-slate-900">{fmtEur(item.totalGasto)}</td>
-                <td className="px-3 py-2.5 text-right tabular-nums text-slate-600">{fmtNum(item.totalViales)}</td>
+                <td className="px-3 py-2.5 text-right tabular-nums text-slate-600">{fmtQty(item.totalViales)}</td>
                 <td className="px-3 py-2.5 text-right"><YoyBadge pct={item.variacionYoy} /></td>
               </tr>
             ))}
@@ -779,8 +825,8 @@ function MedicamentoDetallePanel({
       <div className="p-5 space-y-5">
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <KpiCard label="Consumo valorizado" value={fmtEur(detalle.consumo.totalGasto)} tone="rose" />
-          <KpiCard label="Consumo cajas eq." value={fmtNum(detalle.consumo.totalViales)} tone="teal" />
-          <KpiCard label="Compras cajas eq." value={fmtNum(detalle.compras.totalViales)} tone="blue" />
+          <KpiCard label="Consumo cajas eq." value={fmtQty(detalle.consumo.totalViales)} sub={`${fmtNum(detalle.consumo.totalUnidades, 0)} uds`} tone="teal" />
+          <KpiCard label="Compras cajas eq." value={fmtQty(detalle.compras.totalViales)} sub={`${fmtNum(detalle.compras.totalUnidades, 0)} uds`} tone="blue" />
           <KpiCard label="Compras valorizadas" value={fmtEur(detalle.compras.totalGasto)} tone="violet" />
         </div>
 
@@ -824,11 +870,11 @@ function MedicamentoDetallePanel({
                   textAnchor={data.length > 10 ? 'end' : 'middle'}
                   height={data.length > 10 ? 46 : 28}
                 />
-                <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} width={60} />
+                <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} width={60} tickFormatter={(v) => fmtQty(Number(v))} />
                 <Tooltip content={<TemporalTooltip />} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Bar dataKey="comprasCajas" name="Compras recibidas" fill={SERIES_COLORS.compras} radius={[4, 4, 0, 0]} />
-                <Bar dataKey="consumoCajas" name="Consumo" fill={SERIES_COLORS.consumo} radius={[4, 4, 0, 0]} />
+                <Bar dataKey="comprasCajas" name="Compras recibidas" fill={SERIES_COLORS.compras} minPointSize={3} radius={[4, 4, 0, 0]} />
+                <Bar dataKey="consumoCajas" name="Consumo" fill={SERIES_COLORS.consumo} minPointSize={3} radius={[4, 4, 0, 0]} />
                 <Line
                   dataKey="preparaciones"
                   name="Preparaciones"
@@ -856,8 +902,8 @@ function MedicamentoDetallePanel({
                 <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} width={72} tickFormatter={(v) => fmtEurShort(Number(v))} />
                 <Tooltip content={<TemporalTooltip />} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Bar dataKey="comprasGasto" name="Compras valorizadas" fill={SERIES_COLORS.comprasGasto} radius={[4, 4, 0, 0]} />
-                <Bar dataKey="consumoGasto" name="Consumo valorizado" fill={SERIES_COLORS.gasto} radius={[4, 4, 0, 0]} />
+                <Bar dataKey="comprasGasto" name="Compras valorizadas" fill={SERIES_COLORS.comprasGasto} minPointSize={3} radius={[4, 4, 0, 0]} />
+                <Bar dataKey="consumoGasto" name="Consumo valorizado" fill={SERIES_COLORS.gasto} minPointSize={3} radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -907,7 +953,7 @@ function MedicamentoDetallePanel({
                         <p className="text-[10px] text-slate-500">{row.indicacion}</p>
                       </td>
                       <td className="px-3 py-2.5 text-right font-semibold tabular-nums">{fmtEur(row.gasto)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-600">{fmtNum(row.viales)}</td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-600">{fmtQty(row.viales)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1098,23 +1144,31 @@ export default function AnalisisOncologiaPage() {
         <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
       )}
 
-      {loading && (
+      {loading && !datos && (
         <div className="flex items-center justify-center py-16">
           <div className="h-8 w-8 animate-spin rounded-full border-4 border-teal-600 border-t-transparent" />
           <span className="ml-3 text-sm text-slate-500">Cargando análisis…</span>
         </div>
       )}
 
-      {!loading && datos && (
+      {loading && datos && (
+        <div className="sticky top-3 z-10 flex justify-center">
+          <div className="rounded-full border border-sky-200 bg-white/95 px-3 py-1 text-xs font-medium text-sky-700 shadow-sm backdrop-blur">
+            Actualizando análisis…
+          </div>
+        </div>
+      )}
+
+      {datos && (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-4 gap-3">
             <KpiCard label="Gasto valorizado" value={fmtEur(datos.kpis.totalGasto)} tone="rose" />
-            <KpiCard label="Consumo cajas eq." value={fmtNum(datos.kpis.totalViales)} tone="teal" />
-            <KpiCard label="Consumo unidades" value={fmtNum(datos.kpis.totalUnidades, 0)} tone="blue" />
-            <KpiCard label="Preparaciones" value={fmtNum(datos.kpis.totalPreparaciones, 0)} tone="amber" />
+            <KpiCard label="Consumo cajas eq." value={fmtQty(datos.kpis.totalViales)} tone="teal" />
             <KpiCard label="Servicios activos" value={String(datos.kpis.serviciosActivos)} tone="violet" />
             <KpiCard label="Medicamentos" value={String(datos.kpis.medicamentosDistintos)} tone="slate" />
           </div>
+
+          <GastoAnualRefChart data={datos.temporalHistorico} />
 
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-3">
@@ -1203,7 +1257,7 @@ export default function AnalisisOncologiaPage() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 xl:grid-cols-[1.05fr_1.45fr] gap-4">
+          <div className="grid items-stretch grid-cols-1 xl:grid-cols-[1.05fr_1.45fr] gap-4">
             <MedicamentoListTable
               items={medicamentosFiltrados}
               selectedCn={cnSel}
@@ -1214,7 +1268,7 @@ export default function AnalisisOncologiaPage() {
             {datos.medicamentoDetalle ? (
               <MedicamentoDetallePanel detalle={datos.medicamentoDetalle} showWeeklyByDefault={showWeekly} />
             ) : (
-              <div className="rounded-xl border border-slate-200 bg-slate-50 px-6 py-12 text-center text-sm text-slate-500">
+              <div className="h-full rounded-xl border border-slate-200 bg-slate-50 px-6 py-12 text-center text-sm text-slate-500 flex items-center justify-center">
                 Selecciona un medicamento para abrir su ficha de análisis.
               </div>
             )}
