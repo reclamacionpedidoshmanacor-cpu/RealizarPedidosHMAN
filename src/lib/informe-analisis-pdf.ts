@@ -1,14 +1,16 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { PDFDocument, StandardFonts, rgb, PDFFont, PDFPage, RGB, PDFImage } from 'pdf-lib';
-import type { AnalisisDatos, KpisAnalisis, TemporalPoint, TopMed, TopProtocolo } from '@/lib/analisis-neon';
-import {
-  GRUPO_COLORS,
-  gruposParaServicio,
-  type DiagnosticoGrupo,
-  type Servicio,
-} from '@/lib/diagnostico-grupos';
-import type { InformeTipo } from '@/lib/informes-config';
+import type {
+  AnalisisDatos,
+  DxBreakdown,
+  KpisAnalisis,
+  MedicamentoTemporalPoint,
+  TemporalPoint,
+  TopMed,
+  TopProtocolo,
+} from '@/lib/analisis-neon';
+import { GRUPO_COLORS } from '@/lib/diagnostico-grupos';
 
 const MARGIN = 45;
 const PAGE_W = 595.28;
@@ -335,46 +337,9 @@ class PageWriter {
   }
 }
 
-export function buildInformePdfFilename(
-  tipo: InformeTipo,
-  slug: string,
-  desde: string,
-  hasta: string,
-): string {
-  const s = pdfSafe(slug).replace(/\s+/g, '-').toLowerCase();
-  return `informe-${tipo}-${s}_${desde}_${hasta}.pdf`;
-}
-
-function resolveInformeData(datos: AnalisisDatos, tipo: InformeTipo) {
-  if (tipo === 'grupo' && datos.grupoDetalle) {
-    const gk = datos.grupoDetalle.kpis;
-    const kpis: KpisAnalisis = {
-      totalGasto: gk.totalGasto,
-      totalPreparaciones: gk.totalPreparaciones,
-      totalViales: gk.totalViales,
-      totalUnidades: gk.totalUnidades,
-      mediaPackientesSemana: gk.mediaPackientesSemana,
-      costePorPreparacion: gk.costePorPreparacion,
-      variacionYoy: gk.variacionYoy,
-      medicamentosDistintos: gk.medicamentosDistintos,
-      protocolosActivos: gk.protocolosActivos,
-      serviciosActivos: 0,
-    };
-    return {
-      kpis,
-      topProtocolos: datos.grupoDetalle.topProtocolos,
-      topMedicamentos: datos.grupoDetalle.topMedicamentos,
-      temporalMensual: datos.grupoDetalle.temporalHistorico,
-      pareto: datos.pareto,
-    };
-  }
-  return {
-    kpis: datos.kpis,
-    topProtocolos: datos.topProtocolos,
-    topMedicamentos: datos.topMedicamentos,
-    temporalMensual: datos.temporalHistorico,
-    pareto: datos.pareto,
-  };
+export function buildInformePdfFilename(slug: string, desde: string, hasta: string): string {
+  const s = pdfSafe(slug).replace(/\s+/g, '-').replace(/-+/g, '-').toLowerCase();
+  return `informe-analisis-${s}_${desde}_${hasta}.pdf`;
 }
 
 async function loadInformeLogo(doc: PDFDocument): Promise<PDFImage | null> {
@@ -391,7 +356,7 @@ function drawInformeCabecera(
   logo: PDFImage | null,
   oblique: PDFFont,
   datos: AnalisisDatos,
-  lineaInforme: string,
+  opts: { lineaInforme: string; subtitulo?: string },
 ) {
   const gray = rgb(0.4, 0.4, 0.4);
   const brand = rgb(0.05, 0.2, 0.45);
@@ -421,11 +386,15 @@ function drawInformeCabecera(
 
   w.text('Informe farmaeconomico de actividad', MARGIN, { size: 15, font: w.bold, color: brand });
   w.gap(18);
-  w.text(lineaInforme, MARGIN, { size: 12, font: w.bold });
+  w.text(opts.lineaInforme, MARGIN, { size: 12, font: w.bold });
   w.gap(14);
+  if (opts.subtitulo) {
+    w.text(opts.subtitulo, MARGIN, { size: 9, color: gray, maxWidth: USABLE_W });
+    w.gap(12);
+  }
   const hoy = fmtDate(new Date().toISOString().slice(0, 10));
   w.text(
-    `Periodo: ${fmtDate(datos.periodo.desde)} - ${fmtDate(datos.periodo.hasta)} (12 meses)  |  Generado: ${hoy}`,
+    `Periodo: ${fmtDate(datos.periodo.desde)} - ${fmtDate(datos.periodo.hasta)}  |  Generado: ${hoy}`,
     MARGIN,
     { size: 9, color: gray, maxWidth: USABLE_W },
   );
@@ -441,13 +410,242 @@ function drawInformeCabecera(
   w.gap(18);
 }
 
+function fmtQty(n: number, digits = 1): string {
+  if (!Number.isFinite(n)) return '0';
+  const rounded = digits === 0 ? Math.round(n) : Number(n.toFixed(digits));
+  const needsDecimal = digits > 0 && Math.abs(rounded - Math.round(rounded)) > 0.001;
+  return rounded.toLocaleString('es-ES', {
+    minimumFractionDigits: needsDecimal ? Math.min(1, digits) : 0,
+    maximumFractionDigits: digits,
+  });
+}
+
+function buildKpiRows(kpis: KpisAnalisis) {
+  return [
+    ['Gasto valorizado', fmtEur(kpis.totalGasto), 'Consumo (cajas eq.)', fmtQty(kpis.totalViales)],
+    ['Unidades', fmtQty(kpis.totalUnidades, 0), 'Preparaciones', fmtQty(kpis.totalPreparaciones, 0)],
+    ['EUR / preparacion', fmtEur(kpis.costePorPreparacion), 'Variacion', fmtPct(kpis.variacionYoy)],
+    ['Medicamentos distintos', fmtQty(kpis.medicamentosDistintos, 0), 'Protocolos activos', fmtQty(kpis.protocolosActivos, 0)],
+  ];
+}
+
+function servicioBars(datos: AnalisisDatos) {
+  const total = datos.servicios.reduce((sum, item) => sum + item.totalGasto, 0);
+  const palette = ['#0f766e', '#0369a1', '#dc2626', '#7c3aed', '#ea580c', '#0891b2', '#16a34a', '#475569'];
+  return datos.servicios.map((item, index) => ({
+    label: item.servicio,
+    value: item.totalGasto,
+    color: palette[index % palette.length]!,
+    pct: total > 0 ? (item.totalGasto / total) * 100 : 0,
+  }));
+}
+
+function grupoBars(datos: AnalisisDatos) {
+  return datos.grupos.map((item) => ({
+    label: item.label,
+    value: item.totalGasto,
+    color: GRUPO_COLORS[item.grupo].chart,
+    pct: item.pctGasto,
+  }));
+}
+
+function drawScopeKpis(w: PageWriter, kpis: KpisAnalisis) {
+  const rows = buildKpiRows(kpis);
+  for (const row of rows) {
+    w.textRow([
+      { text: row[0]!, x: MARGIN, maxWidth: 132, size: 8, color: rgb(0.4, 0.4, 0.4) },
+      { text: row[1]!, x: MARGIN + 138, maxWidth: 112, size: 9, font: w.bold },
+      { text: row[2]!, x: MARGIN + 275, maxWidth: 132, size: 8, color: rgb(0.4, 0.4, 0.4) },
+      { text: row[3]!, x: MARGIN + 413, maxWidth: 96, size: 9, font: w.bold },
+    ]);
+  }
+  w.gap(14);
+}
+
+function drawTemporalResumenTable(w: PageWriter, rows: TemporalPoint[], title: string) {
+  if (!rows.length) return;
+  w.sectionTitle(title);
+  w.ensureTableBlock(1, Math.min(rows.length, 5));
+  w.tableBody(
+    [
+      { text: 'Periodo', x: MARGIN, maxWidth: 120 },
+      { text: 'Cajas eq.', x: MARGIN + 126, maxWidth: 52, align: 'right' },
+      { text: 'Unidades', x: MARGIN + 184, maxWidth: 56, align: 'right' },
+      { text: 'Prep.', x: MARGIN + 246, maxWidth: 40, align: 'right' },
+      { text: 'Gasto EUR', x: MARGIN + 292, maxWidth: 70, align: 'right' },
+    ],
+    rows,
+    (row) => [
+      { text: row.lunesRef ? fmtDate(row.lunesRef) : row.label, x: MARGIN, maxWidth: 120, size: 8 },
+      { text: fmtQty(row.viales), x: MARGIN + 126, maxWidth: 52, size: 8, align: 'right' },
+      { text: fmtQty(row.unidades, 0), x: MARGIN + 184, maxWidth: 56, size: 8, align: 'right' },
+      { text: fmtQty(row.preparaciones, 0), x: MARGIN + 246, maxWidth: 40, size: 8, align: 'right' },
+      { text: fmtEurTable(row.gasto), x: MARGIN + 292, maxWidth: 70, size: 8, align: 'right' },
+    ],
+    15,
+  );
+  w.gap(10);
+}
+
+function drawDiagnosticosGrupoTable(w: PageWriter, datos: AnalisisDatos) {
+  if (!datos.grupoDetalle?.diagnosticos.length) return;
+  const rows = [...datos.grupoDetalle.diagnosticos]
+    .sort((a, b) => b.totalGasto - a.totalGasto)
+    .slice(0, 12);
+  w.sectionTitle(`Diagnosticos dentro de ${datos.grupoDetalle.label}`);
+  w.ensureTableBlock(1, Math.min(rows.length, 5));
+  w.tableBody(
+    [
+      { text: 'Diagnostico', x: MARGIN, maxWidth: 222 },
+      { text: 'Gasto EUR', x: MARGIN + 228, maxWidth: 68, align: 'right' },
+      { text: 'Prep.', x: MARGIN + 302, maxWidth: 42, align: 'right' },
+      { text: 'Indic.', x: MARGIN + 350, maxWidth: 42, align: 'right' },
+    ],
+    rows,
+    (row) => [
+      { text: row.diagnostico || 'Sin diagnostico', x: MARGIN, maxWidth: 222, size: 8 },
+      { text: fmtEurTable(row.totalGasto), x: MARGIN + 228, maxWidth: 68, size: 8, align: 'right' },
+      { text: fmtQty(row.totalPreparaciones, 0), x: MARGIN + 302, maxWidth: 42, size: 8, align: 'right' },
+      { text: fmtQty(row.indicaciones.length, 0), x: MARGIN + 350, maxWidth: 42, size: 8, align: 'right' },
+    ],
+    15,
+  );
+  w.gap(10);
+}
+
+function drawDxBreakdownTable(w: PageWriter, rows: DxBreakdown[], title: string) {
+  if (!rows.length) return;
+  w.sectionTitle(title);
+  w.ensureTableBlock(1, Math.min(rows.length, 5));
+  w.tableBody(
+    [
+      { text: 'Diagnostico', x: MARGIN, maxWidth: 140 },
+      { text: 'Indicacion', x: MARGIN + 146, maxWidth: 122 },
+      { text: 'Servicio', x: MARGIN + 274, maxWidth: 88 },
+      { text: 'Cajas eq.', x: MARGIN + 368, maxWidth: 52, align: 'right' },
+      { text: 'Gasto EUR', x: MARGIN + 426, maxWidth: 70, align: 'right' },
+    ],
+    rows,
+    (row) => [
+      { text: row.diagnostico || 'Sin diagnostico', x: MARGIN, maxWidth: 140, size: 8 },
+      { text: row.indicacion || 'Sin indicacion', x: MARGIN + 146, maxWidth: 122, size: 8, color: rgb(0.35, 0.35, 0.35) },
+      { text: row.servicio || 'Sin servicio', x: MARGIN + 274, maxWidth: 88, size: 8 },
+      { text: fmtQty(row.viales), x: MARGIN + 368, maxWidth: 52, size: 8, align: 'right' },
+      { text: fmtEurTable(row.gasto), x: MARGIN + 426, maxWidth: 70, size: 8, align: 'right' },
+    ],
+    15,
+  );
+  w.gap(10);
+}
+
+function drawMedicamentoTemporalTable(
+  w: PageWriter,
+  rows: MedicamentoTemporalPoint[],
+  title: string,
+  limit = 12,
+) {
+  if (!rows.length) return;
+  const slice = rows.slice(-limit);
+  w.sectionTitle(title);
+  w.ensureTableBlock(1, Math.min(slice.length, 5));
+  w.tableBody(
+    [
+      { text: 'Periodo', x: MARGIN, maxWidth: 94 },
+      { text: 'Cons. cajas', x: MARGIN + 100, maxWidth: 58, align: 'right' },
+      { text: 'Comp. cajas', x: MARGIN + 164, maxWidth: 58, align: 'right' },
+      { text: 'Cons. EUR', x: MARGIN + 228, maxWidth: 62, align: 'right' },
+      { text: 'Comp. EUR', x: MARGIN + 296, maxWidth: 62, align: 'right' },
+      { text: 'Prep.', x: MARGIN + 364, maxWidth: 40, align: 'right' },
+    ],
+    slice,
+    (row) => [
+      { text: row.lunesRef ? fmtDate(row.lunesRef) : row.label, x: MARGIN, maxWidth: 94, size: 8 },
+      { text: fmtQty(row.consumoCajas), x: MARGIN + 100, maxWidth: 58, size: 8, align: 'right' },
+      { text: fmtQty(row.comprasCajas), x: MARGIN + 164, maxWidth: 58, size: 8, align: 'right' },
+      { text: fmtEurTable(row.consumoGasto), x: MARGIN + 228, maxWidth: 62, size: 8, align: 'right' },
+      { text: fmtEurTable(row.comprasGasto), x: MARGIN + 296, maxWidth: 62, size: 8, align: 'right' },
+      { text: fmtQty(row.preparaciones, 0), x: MARGIN + 364, maxWidth: 40, size: 8, align: 'right' },
+    ],
+    15,
+  );
+  w.gap(10);
+}
+
+function drawMedicamentoSection(w: PageWriter, datos: AnalisisDatos) {
+  const med = datos.medicamentoDetalle;
+  if (!med) return;
+
+  w.sectionTitle('Ficha de medicamento');
+  w.text(`${med.principioActivo || med.nombre}  |  CN ${med.cn}`, MARGIN, {
+    size: 10,
+    font: w.bold,
+    color: rgb(0.05, 0.25, 0.45),
+    maxWidth: USABLE_W,
+  });
+  w.gap(14);
+  if (med.nombre && med.nombre !== med.principioActivo) {
+    w.text(med.nombre, MARGIN, { size: 8, color: rgb(0.35, 0.35, 0.35), maxWidth: USABLE_W });
+    w.gap(12);
+  }
+
+  const resumen = [
+    ['Precio unidad', fmtEur(med.precioUnidad), 'Uds/caja', fmtQty(med.unidadesPorCaja, 0)],
+    ['Consumo cajas', fmtQty(med.consumo.totalViales), 'Compras cajas', fmtQty(med.compras.totalViales)],
+    ['Consumo EUR', fmtEur(med.consumo.totalGasto), 'Compras EUR', fmtEur(med.compras.totalGasto)],
+    ['Preparaciones', fmtQty(med.consumo.totalPreparaciones, 0), 'Pedidos recibidos', fmtQty(med.compras.nPedidosRecibidos, 0)],
+  ];
+  for (const row of resumen) {
+    w.textRow([
+      { text: row[0]!, x: MARGIN, maxWidth: 132, size: 8, color: rgb(0.4, 0.4, 0.4) },
+      { text: row[1]!, x: MARGIN + 138, maxWidth: 112, size: 9, font: w.bold },
+      { text: row[2]!, x: MARGIN + 275, maxWidth: 132, size: 8, color: rgb(0.4, 0.4, 0.4) },
+      { text: row[3]!, x: MARGIN + 413, maxWidth: 96, size: 9, font: w.bold },
+    ]);
+  }
+  w.gap(10);
+
+  if (med.porServicio.length > 1) {
+    const total = med.porServicio.reduce((sum, item) => sum + item.totalGasto, 0);
+    const palette = ['#0f766e', '#0369a1', '#dc2626', '#7c3aed', '#ea580c', '#0891b2', '#16a34a', '#475569'];
+    w.sectionTitle('Distribucion del medicamento por servicio');
+    w.drawHorizontalBars(
+      med.porServicio.map((item, index) => ({
+        label: item.servicio,
+        value: item.totalGasto,
+        color: palette[index % palette.length]!,
+        pct: total > 0 ? (item.totalGasto / total) * 100 : 0,
+      })),
+    );
+  }
+
+  if (med.porGrupo.length > 1) {
+    w.sectionTitle('Distribucion del medicamento por tipo tumoral');
+    w.drawHorizontalBars(
+      med.porGrupo.map((item) => ({
+        label: item.label,
+        value: item.totalGasto,
+        color: GRUPO_COLORS[item.grupo].chart,
+        pct: item.pctGasto,
+      })),
+    );
+  }
+
+  if (med.topProtocolos.length) {
+    w.sectionTitle('Top protocolos del medicamento');
+    drawTopProtocolosTable(w, med.topProtocolos.slice(0, 10));
+    w.gap(10);
+  }
+
+  drawDxBreakdownTable(w, med.topDiagnosticos.slice(0, 12), 'Diagnosticos e indicaciones del medicamento');
+  drawMedicamentoTemporalTable(w, med.temporalMensual, 'Evolucion mensual del medicamento', 12);
+  drawMedicamentoTemporalTable(w, med.temporalSemanal, 'Detalle semanal reciente del medicamento', 10);
+}
+
 export async function buildInformeAnalisisPdf(
-  tipo: InformeTipo,
   datos: AnalisisDatos,
   opts: {
     lineaInforme: string;
-    servicio?: Servicio;
-    grupo?: DiagnosticoGrupo;
+    subtitulo?: string;
   },
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
@@ -458,84 +656,49 @@ export async function buildInformeAnalisisPdf(
   const w = new PageWriter(doc, regular, bold);
   const gray = rgb(0.4, 0.4, 0.4);
 
-  const { kpis, topProtocolos, topMedicamentos, temporalMensual, pareto } = resolveInformeData(datos, tipo);
-
-  drawInformeCabecera(w, logo, oblique, datos, opts.lineaInforme);
+  drawInformeCabecera(w, logo, oblique, datos, opts);
 
   // ── KPIs ──
   w.sectionTitle('Resumen del periodo', 0);
-  const kpiRows = [
-    ['Gasto total', fmtEur(kpis.totalGasto), 'Preparaciones', String(kpis.totalPreparaciones)],
-    ['EUR / preparacion', fmtEur(kpis.costePorPreparacion), 'Variacion YoY', fmtPct(kpis.variacionYoy)],
-    ['Medicamentos distintos', String(kpis.medicamentosDistintos), 'Protocolos activos', String(kpis.protocolosActivos)],
-  ];
-  for (const row of kpiRows) {
-    w.textRow([
-      { text: row[0]!, x: MARGIN, maxWidth: 120, size: 8, color: gray },
-      { text: row[1]!, x: MARGIN + 125, maxWidth: 100, size: 9, font: bold },
-      { text: row[2]!, x: MARGIN + 260, maxWidth: 120, size: 8, color: gray },
-      { text: row[3]!, x: MARGIN + 385, maxWidth: 100, size: 9, font: bold },
-    ]);
-  }
-  w.gap(14);
+  drawScopeKpis(w, datos.kpis);
 
   // ── Evolución mensual ──
-  w.sectionTitle(`Evolucion mensual (gasto) — ${temporalMensual.length} meses`);
-  w.drawMonthlyBars(temporalMensual);
+  if (datos.temporalHistorico.length) {
+    w.sectionTitle(`Evolucion mensual del gasto — ${datos.temporalHistorico.length} periodos`);
+    w.drawMonthlyBars(datos.temporalHistorico);
+  }
 
-  // ── Informe SERVICIO: grupos tumorales ──
-  if (tipo === 'servicio' && opts.servicio) {
-    const grupos = datos.grupos.filter(g => gruposParaServicio(opts.servicio!).includes(g.grupo));
-    const svcTotal = grupos.reduce((s, g) => s + g.totalGasto, 0);
-    w.sectionTitle('Distribucion por grupo tumoral');
-    w.drawHorizontalBars(
-      grupos.map(g => ({
-        label: g.label,
-        value: g.totalGasto,
-        color: GRUPO_COLORS[g.grupo].chart,
-        pct: svcTotal > 0 ? (g.totalGasto / svcTotal) * 100 : 0,
-      })),
-    );
+  if (!datos.scope.servicio && !datos.scope.grupo && datos.servicios.length > 1) {
+    w.sectionTitle('Distribucion del gasto por servicio real');
+    w.drawHorizontalBars(servicioBars(datos));
+  }
 
-    w.sectionTitle('Detalle por grupo tumoral');
-    w.ensureTableBlock(1, Math.min(grupos.length, 3));
-    w.tableBody(
-      [
-        { text: 'Grupo', x: MARGIN, maxWidth: 108 },
-        { text: 'Gasto EUR', x: MARGIN + 112, maxWidth: 68, align: 'right' },
-        { text: '% serv.', x: MARGIN + 186, maxWidth: 42, align: 'right' },
-        { text: 'YoY', x: MARGIN + 234, maxWidth: 40, align: 'right' },
-        { text: 'Prep.', x: MARGIN + 280, maxWidth: 38, align: 'right' },
-        { text: 'Prot.', x: MARGIN + 324, maxWidth: 38, align: 'right' },
-      ],
-      grupos,
-      g => [
-        { text: g.label, x: MARGIN, maxWidth: 108, size: 8 },
-        { text: fmtEurTable(g.totalGasto), x: MARGIN + 112, maxWidth: 68, size: 8, align: 'right' },
-        { text: `${svcTotal > 0 ? ((g.totalGasto / svcTotal) * 100).toFixed(1) : '0.0'}%`, x: MARGIN + 186, maxWidth: 42, size: 8, align: 'right' },
-        { text: fmtPct(g.variacionYoy), x: MARGIN + 234, maxWidth: 40, size: 8, align: 'right' },
-        { text: String(g.totalPreparaciones), x: MARGIN + 280, maxWidth: 38, size: 8, align: 'right' },
-        { text: String(g.protocolosActivos), x: MARGIN + 324, maxWidth: 38, size: 8, align: 'right' },
-      ],
-      15,
-    );
+  if (!datos.scope.grupo && datos.grupos.length > 1) {
+    w.sectionTitle('Distribucion del gasto por tipo tumoral');
+    w.drawHorizontalBars(grupoBars(datos));
+  }
+
+  if (datos.temporalReciente.length) {
+    drawTemporalResumenTable(w, datos.temporalReciente.slice(-8), 'Detalle semanal reciente');
+  }
+
+  drawDiagnosticosGrupoTable(w, datos);
+
+  // ── Top protocolos ──
+  w.sectionTitle('Top 10 protocolos');
+  drawTopProtocolosTable(w, datos.topProtocolos);
+  w.gap(12);
+
+  if (datos.topMedicamentos.length) {
+    w.sectionTitle('Top 10 medicamentos');
+    drawTopMedsTable(w, datos.topMedicamentos);
     w.gap(12);
   }
 
-  // ── Top 10 protocolos ──
-  w.sectionTitle('Top 10 protocolos');
-  drawTopProtocolosTable(w, topProtocolos);
-  w.gap(12);
-
-  // ── Top 10 medicamentos ──
-  w.sectionTitle('Top 10 medicamentos');
-  drawTopMedsTable(w, topMedicamentos);
-  w.gap(12);
-
   // ── Pareto ──
-  if (pareto.length) {
+  if (datos.pareto.length) {
     w.sectionTitle('Concentracion del gasto (Pareto / ABC)');
-    w.ensureTableBlock(1, Math.min(pareto.length, 4));
+    w.ensureTableBlock(1, Math.min(datos.pareto.length, 4));
     w.tableBody(
       [
         { text: 'Medicamento', x: MARGIN, maxWidth: 200 },
@@ -543,7 +706,7 @@ export async function buildInformeAnalisisPdf(
         { text: 'Gasto EUR', x: MARGIN + 230, maxWidth: 68, align: 'right' },
         { text: '% acum.', x: MARGIN + 304, maxWidth: 44, align: 'right' },
       ],
-      pareto.slice(0, 10),
+      datos.pareto.slice(0, 10),
       p => [
         { text: p.principioActivo || p.nombre, x: MARGIN, maxWidth: 200, size: 8 },
         { text: p.clase, x: MARGIN + 206, maxWidth: 18, size: 8, font: bold },
@@ -555,12 +718,13 @@ export async function buildInformeAnalisisPdf(
     w.gap(12);
   }
 
-  // ── Desglose dx/indicación (servicio y grupo) ──
-  if (topMedicamentos.length) {
+  if (datos.topMedicamentos.length) {
     w.ensureSpace(100);
     w.sectionTitle('Desglose por diagnostico e indicacion (Top medicamentos)');
-    w.drawMedDxBreakdown(topMedicamentos, 5, 6);
+    w.drawMedDxBreakdown(datos.topMedicamentos, 5, 6);
   }
+
+  drawMedicamentoSection(w, datos);
 
   // ── Nota metodológica ──
   w.ensureSpace(80);
@@ -569,9 +733,11 @@ export async function buildInformeAnalisisPdf(
   w.text('Nota metodologica', MARGIN, { size: 8, font: bold, color: gray });
   w.gap(12);
   const notas = [
-    'Gasto calculado: viales dispensados x precio unitario (catalogo farmacia).',
-    'Serie mensual: dato mensual fiable; si no hay mensual se usa suma semanal del mes.',
-    'Variacion YoY: mismo tramo de meses del ano en curso vs ano anterior (dato mensual fiable).',
+    'El analisis incluye solo CN presentes en el catalogo activo del area.',
+    'Consumos y compras fisicas se expresan en cajas equivalentes: unidades / unidades_por_caja.',
+    'Gasto valorizado: unidades x precio_unidad actual del catalogo; no hay historico de coste por unidad.',
+    'No se explotan datos de pacientes; la referencia asistencial disponible es el numero de preparaciones.',
+    'La comparativa siempre usa el periodo anterior equivalente y el detalle reciente se muestra por semanas reales.',
   ];
   for (const n of notas) {
     w.text(`· ${n}`, MARGIN, { size: 7, color: gray, maxWidth: USABLE_W });

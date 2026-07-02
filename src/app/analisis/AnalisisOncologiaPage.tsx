@@ -1004,6 +1004,14 @@ export default function AnalisisOncologiaPage() {
     window.open(`/api/analisis/exportar?${params}`, '_blank');
   }
 
+  function handleExportarPdf() {
+    const params = new URLSearchParams({ desde, hasta, comparativa: 'periodo-anterior' });
+    if (servicioSel) params.set('servicio', servicioSel);
+    if (grupoSel) params.set('grupo', grupoSel);
+    if (cnSel) params.set('cn', cnSel);
+    window.open(`/api/analisis/informe/pdf?${params}`, '_blank');
+  }
+
   return (
     <div
       className="w-full px-4 sm:px-6 lg:px-8 py-6 space-y-6"
@@ -1019,14 +1027,24 @@ export default function AnalisisOncologiaPage() {
               Consumo valorizado y compras recibidas con servicio real de base de datos y métricas en cajas equivalentes.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={handleExportar}
-            disabled={!datos}
-            className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-40"
-          >
-            Exportar Excel
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleExportarPdf}
+              disabled={!datos}
+              className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-medium text-teal-700 shadow-sm hover:bg-teal-100 disabled:opacity-40"
+            >
+              Exportar PDF
+            </button>
+            <button
+              type="button"
+              onClick={handleExportar}
+              disabled={!datos}
+              className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-40"
+            >
+              Exportar Excel
+            </button>
+          </div>
         </div>
 
         <div className="rounded-xl border border-slate-200 bg-white p-3 flex flex-col gap-3">

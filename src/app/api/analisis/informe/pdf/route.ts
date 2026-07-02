@@ -6,21 +6,32 @@ import {
   buildInformePdfFilename,
 } from '@/lib/informe-analisis-pdf';
 import {
-  periodoInforme12Meses,
-  type InformeTipo,
-} from '@/lib/informes-config';
-import {
   GRUPO_LABELS,
   type DiagnosticoGrupo,
-  type Servicio,
 } from '@/lib/diagnostico-grupos';
 
 export const runtime = 'nodejs';
 
-const SERVICIO_LABELS: Record<Servicio, string> = {
-  'oncologia-solida': 'Oncologia solida',
-  'hematologia': 'Hematologia',
-};
+function defaultDesde() {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() - 1);
+  d.setMonth(d.getMonth() + 1, 1);
+  return d.toISOString().slice(0, 10);
+}
+
+function defaultHasta() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function slugify(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+}
 
 export async function GET(req: NextRequest) {
   const session = requireApiSession(req);
@@ -30,46 +41,45 @@ export async function GET(req: NextRequest) {
   }
 
   const { searchParams } = new URL(req.url);
-  const tipo = searchParams.get('tipo') as InformeTipo | null;
-  const servicio = searchParams.get('servicio') as Servicio | null;
-  const grupo = searchParams.get('grupo') as DiagnosticoGrupo | null;
-
-  if (tipo !== 'servicio' && tipo !== 'grupo') {
-    return NextResponse.json({ error: 'Parametro tipo requerido: servicio | grupo' }, { status: 400 });
-  }
-
-  if (tipo === 'servicio') {
-    if (servicio !== 'oncologia-solida' && servicio !== 'hematologia') {
-      return NextResponse.json({ error: 'Parametro servicio requerido: oncologia-solida | hematologia' }, { status: 400 });
-    }
-  } else if (!grupo || !GRUPO_LABELS[grupo]) {
-    return NextResponse.json({ error: 'Parametro grupo requerido y valido' }, { status: 400 });
-  }
-
-  const { desde, hasta } = periodoInforme12Meses();
+  const desde = searchParams.get('desde') || defaultDesde();
+  const hasta = searchParams.get('hasta') || defaultHasta();
+  const servicio = searchParams.get('servicio')?.trim() || null;
+  const grupoRaw = searchParams.get('grupo')?.trim() || null;
+  const cn = searchParams.get('cn')?.trim() || null;
+  const grupo = grupoRaw && grupoRaw in GRUPO_LABELS ? (grupoRaw as DiagnosticoGrupo) : null;
   const comparativa = parseModoComparativa(searchParams.get('comparativa'));
 
   const datos = await getAnalisisDatos(
     session.area,
     desde,
     hasta,
-    tipo === 'grupo' ? grupo : null,
-    tipo === 'servicio' ? servicio : null,
+    grupo,
+    servicio,
     comparativa,
+    cn,
   );
 
-  const lineaInforme = tipo === 'servicio'
-    ? `Informe por servicio: ${SERVICIO_LABELS[servicio!]}`
-    : `Informe por grupo tumoral: ${GRUPO_LABELS[grupo!]}`;
+  const subtitulo = [
+    servicio ? `Servicio: ${servicio}` : null,
+    grupo ? `Grupo tumoral: ${GRUPO_LABELS[grupo]}` : null,
+    cn ? `CN: ${cn}` : null,
+  ].filter(Boolean).join(' · ') || 'Vista global del area';
 
-  const pdfBytes = await buildInformeAnalisisPdf(tipo, datos, {
-    lineaInforme,
-    servicio: tipo === 'servicio' ? servicio! : undefined,
-    grupo: tipo === 'grupo' ? grupo! : undefined,
+  const pdfBytes = await buildInformeAnalisisPdf(datos, {
+    lineaInforme: cn ? 'Ficha de analisis de medicamento' : 'Informe de analisis de Oncologia',
+    subtitulo,
   });
 
-  const slug = tipo === 'servicio' ? servicio! : grupo!;
-  const filename = buildInformePdfFilename(tipo, slug, desde, hasta);
+  const filename = buildInformePdfFilename(
+    [
+      session.area,
+      servicio ? slugify(servicio) : 'global',
+      grupo ? slugify(GRUPO_LABELS[grupo]) : null,
+      cn ? `cn-${slugify(cn)}` : null,
+    ].filter(Boolean).join('-'),
+    desde,
+    hasta,
+  );
 
   return new NextResponse(Buffer.from(pdfBytes), {
     headers: {
