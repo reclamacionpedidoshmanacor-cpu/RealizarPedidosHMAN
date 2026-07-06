@@ -683,16 +683,35 @@ export function parseConsumoExcelOral(
     let fecha = anio >= 2000 && mes >= 1 && mes <= 12
       ? firstDayOfMonthUTC(anio, mes)
       : '';
+    // Guardamos el mes del Excel antes de sobreescribir, lo usaremos para
+    // detectar fechas en formato AAAA-DD-MM (día y mes invertidos).
+    const mesDelExcel = mes;
     let dia: number | null = null;
     if (cols.fechaDisp !== -1) {
       const parsed = parseExcelDate(row[cols.fechaDisp]);
       if (parsed) {
-        fecha = toIsoDateUTC(new Date(Date.UTC(parsed.anio, parsed.mes - 1, parsed.dia)));
-        dia = parsed.dia;
-        if (allowMissingYm || anio < 2000 || mes < 1) {
-          anio = parsed.anio;
-          mes = parsed.mes;
+        let { anio: pA, mes: pM, dia: pD } = parsed;
+
+        // Detección de formato AAAA-DD-MM: ocurre cuando el día (≤12) y el mes del
+        // Excel de referencia coinciden en posición invertida.
+        // Condición: mesDelExcel válido, el mes parseado ≠ mesDelExcel, pero el día
+        // parseado = mesDelExcel → el archivo usa AAAA-DD-MM.
+        if (
+          mesDelExcel >= 1 && mesDelExcel <= 12 &&
+          pM !== mesDelExcel &&
+          pD === mesDelExcel &&
+          pM >= 1 && pM <= 31
+        ) {
+          const tmp = pM;
+          pM = pD;
+          pD = tmp;
         }
+
+        fecha = toIsoDateUTC(new Date(Date.UTC(pA, pM - 1, pD)));
+        dia = pD;
+        // La fecha real de dispensación siempre tiene prioridad
+        anio = pA;
+        mes = pM;
       } else if (toStr(row[cols.fechaDisp])) {
         errors.push(`Fila ${i + 1}: fecha de dispensación no válida.`);
         continue;
