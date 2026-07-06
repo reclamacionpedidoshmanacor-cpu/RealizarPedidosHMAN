@@ -3,7 +3,6 @@ import { requireApiSession } from '@/lib/api-auth';
 import { isAlmacenArea, ubicacionDesdeEtiquetaPropuesta } from '@/lib/almacen';
 import {
   abrirPropuestaUbicacionDesdeRecuento,
-  actualizarStockTransitoSnapshot,
   actualizarCalculoAutomaticoLineaPropuesta,
   ensureNutricionDecimalSchema,
   buildLineasPropuestaParaUi,
@@ -63,7 +62,8 @@ async function recalcularLineasAutomaticas(
   const recalculos = lineas
     .map((linea) => {
       if (linea.ajustado) return null;
-      const stockTransito = Number(stockTransitoByCn[linea.cn] ?? 0);
+      // Usar el snapshot guardado para que el borrador no cambie si varía el tránsito entre sesiones
+      const stockTransito = Number(linea.stockTransito ?? stockTransitoByCn[linea.cn] ?? 0);
       const cajasCalculadas = calcularCajasPropuestas(
         linea.stockActual,
         linea.puntoPedidoSnap,
@@ -147,7 +147,8 @@ export async function GET(req: NextRequest) {
           unidadesPorCaja: linea.unidadesPorCaja,
         }))
       );
-      await actualizarStockTransitoSnapshot(propuesta.id, stockTransitoByCn);
+      // El snapshot de tránsito se guarda al crear la propuesta y no se actualiza en cargas
+      // posteriores, para que el borrador sea estable entre sesiones.
 
       const lineasParaUi = await attachAlertasLineas(
         (
@@ -258,10 +259,6 @@ export async function GET(req: NextRequest) {
       stockTransitoByCn = await loadStockTransitoCajasSafely(
         lineas.map((linea) => ({ cn: linea.cn, unidadesPorCaja: linea.unidadesPorCaja }))
       );
-    }
-
-    if (propuesta.estado === 'borrador') {
-      await actualizarStockTransitoSnapshot(propuesta.id, stockTransitoByCn);
     }
 
     const ubicacionFiltro = ubicacionDesdeEtiquetaPropuesta(propuesta.observaciones);

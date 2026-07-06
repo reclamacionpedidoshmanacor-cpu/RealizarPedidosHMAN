@@ -1383,7 +1383,9 @@ export async function buildLineasPropuestaParaUi(
 
   const activasUi: PropuestaLineaUI[] = activas.map((linea) => ({
     ...linea,
-    stockTransito: Number(stockTransitoByCn[linea.cn] ?? linea.stockTransito ?? 0),
+    // Usar el snapshot guardado para que el borrador muestre el tránsito del momento
+    // en que se creó/guardó. El tránsito en vivo se usa solo si no hay snapshot.
+    stockTransito: Number(linea.stockTransito ?? stockTransitoByCn[linea.cn] ?? 0),
     activo: true,
     editable: propuestaEstado === 'borrador',
   }));
