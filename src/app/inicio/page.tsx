@@ -214,7 +214,7 @@ function CurvaSemanalAlertas({
   return (
     <div className="mt-4">
       <p className="text-[10px] text-slate-400 mb-2 uppercase tracking-wide font-medium">
-        Últimas 8 semanas — Dispensaciones vs Recepciones (cajas)
+        8 semanas cerradas — Dispensaciones vs Recepciones (cajas)
       </p>
       <ResponsiveContainer width="100%" height={180}>
         <ComposedChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>

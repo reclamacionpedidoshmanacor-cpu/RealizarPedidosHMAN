@@ -529,6 +529,7 @@ export async function getMovimientosConsumo(area: string): Promise<MovimientosCo
     });
   }
 
+  // Excluimos la semana en curso (datos se incorporan a semana vencida).
   const cns = movimientos.map(m => m.cn);
   const seriesRows = cns.length > 0 ? (await sql`
     SELECT
@@ -540,8 +541,8 @@ export async function getMovimientosConsumo(area: string): Promise<MovimientosCo
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
     WHERE ic.area = ${area}
       AND cr.cn = ANY(${cns})
-      AND cr.fecha > (CURRENT_DATE - INTERVAL '56 days')
-      AND cr.fecha <= CURRENT_DATE
+      AND cr.fecha > (CURRENT_DATE - INTERVAL '63 days')
+      AND cr.fecha <  date_trunc('week', CURRENT_DATE)::date
       AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
     GROUP BY cr.cn, EXTRACT(ISOYEAR FROM cr.fecha), EXTRACT(WEEK FROM cr.fecha)
     ORDER BY cr.cn, iso_year, iso_week;
@@ -942,7 +943,9 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
 
   if (agrupado.length === 0) return [];
 
-  // Series semanales (últimas 8 semanas) para los CNs encontrados
+  // Series semanales (últimas 8 semanas CERRADAS) para los CNs encontrados.
+  // Usamos 63 días de margen para cubrir la semana más antigua completa (i=8),
+  // y excluimos la semana en curso (fecha < lunes de la semana actual).
   const cns = agrupado.map(r => r.cn);
   const seriesRows = (await sql`
     SELECT
@@ -954,8 +957,8 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
     WHERE ic.area = ${area}
       AND cr.cn = ANY(${cns})
-      AND cr.fecha > (CURRENT_DATE - INTERVAL '56 days')
-      AND cr.fecha <= CURRENT_DATE
+      AND cr.fecha > (CURRENT_DATE - INTERVAL '63 days')
+      AND cr.fecha <  date_trunc('week', CURRENT_DATE)::date
       AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
     GROUP BY cr.cn, EXTRACT(ISOYEAR FROM cr.fecha), EXTRACT(WEEK FROM cr.fecha)
     ORDER BY cr.cn, iso_year, iso_week;
@@ -1032,9 +1035,11 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
         viales: Number(s.viales),
       }));
 
-    // Llenar 8 semanas con viales = 0 cuando no hay dato
+    // Llenar las 8 semanas CERRADAS anteriores a la actual (i=8..1).
+    // i=0 sería la semana en curso, que siempre aparece con consumo 0
+    // porque los datos se incorporan a semana vencida.
     const semanasFilled: AlertaCompra['semanasSeries'] = [];
-    for (let i = 7; i >= 0; i--) {
+    for (let i = 8; i >= 1; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i * 7);
       // Calcular semana ISO y año ISO
