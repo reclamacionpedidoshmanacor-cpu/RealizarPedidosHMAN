@@ -13,6 +13,7 @@ import {
   Tooltip,
   Legend,
   Cell,
+  LabelList,
 } from 'recharts';
 import {
   GRUPO_COLORS,
@@ -369,9 +370,6 @@ function ServicioCardUI({
         <YoyBadge pct={item.variacionYoy} />
       </div>
       <p className="mt-2 text-xl font-bold text-slate-900 tabular-nums">{fmtEur(item.totalGasto)}</p>
-      <p className="mt-1 text-xs text-slate-500">
-        {fmtQty(item.totalViales)} cajas eq. · {fmtNum(item.totalPreparaciones, 0)} preparaciones
-      </p>
       <div className="mt-3 h-1.5 w-full rounded-full bg-white/70 overflow-hidden">
         <div
           className="h-full rounded-full"
@@ -561,26 +559,62 @@ function GastoAnualRefChart({
   onClickAnio: (anio: number) => void;
   anioSeleccionado: number | null;
 }) {
-  // Total por año + desglose por servicio ordenado por gasto desc
-  const { chartData, serviciosByAnio } = useMemo(() => {
-    const totalByAnio = new Map<number, number>();
+  const OTROS_KEY   = '__otros__';
+  const OTROS_COLOR = '#94a3b8';
+  const PCT_THRESHOLD = 0.03;
+
+  const { anios, serviciosMostrados, chartData, serviciosByAnio } = useMemo(() => {
+    const anioSet = new Set<number>();
+    const totalPorServicio = new Map<string, { label: string; gasto: number }>();
     const detailByAnio = new Map<number, Array<{ key: string; label: string; gasto: number }>>();
+
     for (const r of gastoAnualServicioReal) {
-      totalByAnio.set(r.anio, (totalByAnio.get(r.anio) ?? 0) + r.gasto);
+      anioSet.add(r.anio);
+      const prev = totalPorServicio.get(r.servicioKey) ?? { label: r.servicio, gasto: 0 };
+      totalPorServicio.set(r.servicioKey, { label: r.servicio, gasto: prev.gasto + r.gasto });
       if (!detailByAnio.has(r.anio)) detailByAnio.set(r.anio, []);
       detailByAnio.get(r.anio)!.push({ key: r.servicioKey, label: r.servicio, gasto: r.gasto });
     }
-    const anios = [...totalByAnio.keys()].sort((a, b) => a - b);
-    const chartData = anios.map((anio) => ({
-      anio: String(anio),
-      anioNum: anio,
-      total: totalByAnio.get(anio) ?? 0,
-    }));
-    // Ordenar servicios de mayor a menor gasto para el tooltip
+
+    const grandTotal = [...totalPorServicio.values()].reduce((s, v) => s + v.gasto, 0);
+    const principales: Array<{ key: string; label: string }> = [];
+    const menores: Array<string> = [];
+    for (const [key, { label, gasto }] of totalPorServicio.entries()) {
+      if (grandTotal > 0 && gasto / grandTotal >= PCT_THRESHOLD) principales.push({ key, label });
+      else menores.push(key);
+    }
+    principales.sort((a, b) => (totalPorServicio.get(b.key)?.gasto ?? 0) - (totalPorServicio.get(a.key)?.gasto ?? 0));
+    const hayOtros = menores.length > 0;
+    const serviciosMostrados = hayOtros
+      ? [...principales, { key: OTROS_KEY, label: 'Otros servicios' }]
+      : principales;
+
+    const anios = [...anioSet].sort((a, b) => a - b);
+    const rowsByKey = new Map<string, Map<number, number>>();
+    for (const r of gastoAnualServicioReal) {
+      const key = menores.includes(r.servicioKey) ? OTROS_KEY : r.servicioKey;
+      if (!rowsByKey.has(key)) rowsByKey.set(key, new Map());
+      rowsByKey.get(key)!.set(r.anio, (rowsByKey.get(key)!.get(r.anio) ?? 0) + r.gasto);
+    }
+
+    const chartData = anios.map((anio) => {
+      const row: Record<string, unknown> = { anio: String(anio), anioNum: anio };
+      let total = 0;
+      for (const { key } of serviciosMostrados) {
+        const v = rowsByKey.get(key)?.get(anio) ?? 0;
+        row[key] = v;
+        total += v;
+      }
+      row.__total = total;
+      return row;
+    });
+
+    // Tooltip: desglose real por servicio (sin agrupar "otros"), ordenado por gasto desc
     for (const [anio, rows] of detailByAnio.entries()) {
       detailByAnio.set(anio, rows.sort((a, b) => b.gasto - a.gasto));
     }
-    return { chartData, serviciosByAnio: detailByAnio };
+    return { anios, serviciosMostrados, chartData, serviciosByAnio: detailByAnio };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gastoAnualServicioReal]);
 
   if (!chartData.length) return null;
@@ -590,25 +624,30 @@ function GastoAnualRefChart({
     if (barData?.anioNum) onClickAnio(Number(barData.anioNum));
   };
 
-  // Tooltip personalizado con desglose por servicio
+  // Tooltip con total + desglose real por servicio
   function AnualTooltip({
     active, payload,
-  }: { active?: boolean; payload?: Array<{ payload: { anioNum: number; total: number; anio: string } }> }) {
+  }: { active?: boolean; payload?: Array<{ payload: Record<string, unknown> }> }) {
     if (!active || !payload?.length) return null;
-    const { anioNum, total, anio } = payload[0]!.payload;
-    const rows = serviciosByAnio.get(anioNum) ?? [];
+    const row = payload[0]!.payload;
+    const anioNum = row.anioNum as number;
+    const total   = row.__total as number ?? 0;
+    const anio    = row.anio as string;
+    const rows    = serviciosByAnio.get(anioNum) ?? [];
     return (
-      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs shadow-lg min-w-[220px]">
-        <p className="font-bold text-slate-800 mb-2">{anio} — {fmtEur(total)}</p>
+      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs shadow-lg min-w-[230px]">
+        <p className="font-bold text-slate-800 mb-1.5 border-b border-slate-100 pb-1.5">
+          {anio} · <span className="text-teal-700">{fmtEur(total)}</span>
+        </p>
         {rows.map((s) => {
           const pct = total > 0 ? (s.gasto / total) * 100 : 0;
           return (
-            <div key={s.key} className="flex items-center justify-between gap-3 py-0.5">
+            <div key={s.key} className="flex items-center justify-between gap-3 py-[3px]">
               <div className="flex items-center gap-1.5 min-w-0">
                 <span className="h-2 w-2 rounded-sm flex-shrink-0" style={{ backgroundColor: getServiceColor(s.key) }} />
                 <span className="truncate text-slate-600">{s.label}</span>
               </div>
-              <span className="tabular-nums font-semibold text-slate-800 flex-shrink-0">
+              <span className="tabular-nums font-semibold text-slate-700 flex-shrink-0">
                 {fmtEur(s.gasto)}
                 <span className="ml-1 font-normal text-slate-400">({pct.toFixed(1)}%)</span>
               </span>
@@ -619,42 +658,94 @@ function GastoAnualRefChart({
     );
   }
 
+  const lastServicioKey = serviciosMostrados.at(-1)?.key;
+
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="mb-4">
-        <h3 className="text-sm font-semibold text-slate-700">Referencia anual del gasto valorizado</h3>
-        <p className="mt-1 text-xs text-slate-400">
-          Haz clic en un año para filtrar el análisis a ese período.
-          {anioSeleccionado && (
-            <> <span className="font-medium text-teal-700">Año {anioSeleccionado} seleccionado.</span></>
-          )}
-          {' '}Pasa el cursor sobre cada barra para ver el desglose por servicio.
-        </p>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-700">Referencia anual del gasto valorizado por servicio</h3>
+          <p className="mt-1 text-xs text-slate-400">
+            Haz clic en un año para filtrar el análisis · pasa el cursor para ver el desglose.
+            {anioSeleccionado && (
+              <> <span className="font-medium text-teal-700">Año {anioSeleccionado} seleccionado.</span></>
+            )}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-x-4 gap-y-1">
+          {serviciosMostrados.map(({ key, label }) => (
+            <span key={key} className="flex items-center gap-1 text-[11px] text-slate-600">
+              <span
+                className="inline-block h-2.5 w-2.5 rounded-sm flex-shrink-0"
+                style={{ backgroundColor: key === OTROS_KEY ? OTROS_COLOR : getServiceColor(key) }}
+              />
+              {label}
+            </span>
+          ))}
+        </div>
       </div>
-      <ResponsiveContainer width="100%" height={220}>
+      <ResponsiveContainer width="100%" height={240}>
         <BarChart
           data={chartData}
-          margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
+          margin={{ top: 22, right: 12, left: 0, bottom: 8 }}
           style={{ cursor: 'pointer' }}
         >
           <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
           <XAxis dataKey="anio" tick={{ fontSize: 10, fill: '#64748b' }} />
           <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} tickFormatter={(v) => fmtEurShort(Number(v))} width={72} />
           <Tooltip content={<AnualTooltip />} />
-          <Bar dataKey="total" name="Gasto total" radius={[6, 6, 0, 0]} onClick={handleBarClick}>
-            {chartData.map((d) => (
-              <Cell
-                key={d.anio}
-                fill={SERIES_COLORS.gasto}
-                opacity={anioSeleccionado && d.anioNum !== anioSeleccionado ? 0.3 : 0.88}
-              />
-            ))}
-          </Bar>
+          {serviciosMostrados.map(({ key, label }, idx) => {
+            const isLast    = idx === serviciosMostrados.length - 1;
+            const fillColor = key === OTROS_KEY ? OTROS_COLOR : getServiceColor(key);
+            return (
+              <Bar
+                key={key}
+                dataKey={key}
+                name={label}
+                stackId="a"
+                fill={fillColor}
+                radius={isLast ? [5, 5, 0, 0] : [0, 0, 0, 0]}
+                onClick={handleBarClick}
+              >
+                {chartData.map((d) => (
+                  <Cell
+                    key={String(d.anio)}
+                    fill={fillColor}
+                    opacity={anioSeleccionado && Number(d.anioNum) !== anioSeleccionado ? 0.28 : 0.88}
+                  />
+                ))}
+                {/* Etiqueta del total encima de la barra (solo en el último segmento) */}
+                {key === lastServicioKey && (
+                  <LabelList
+                    dataKey="__total"
+                    position="top"
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    content={({ x, y, width, value, index }: any) => {
+                      if (!value) return null;
+                      const isSelected = anioSeleccionado && Number(chartData[index]?.anioNum) !== anioSeleccionado;
+                      return (
+                        <text
+                          x={Number(x) + Number(width) / 2}
+                          y={Number(y) - 5}
+                          textAnchor="middle"
+                          fontSize={9}
+                          fontWeight={600}
+                          fill={isSelected ? '#cbd5e1' : '#475569'}
+                        >
+                          {fmtEurShort(Number(value))}
+                        </text>
+                      );
+                    }}
+                  />
+                )}
+              </Bar>
+            );
+          })}
         </BarChart>
       </ResponsiveContainer>
       {anioSeleccionado && (
         <p className="mt-2 text-center text-[11px] text-slate-500">
-          Año {anioSeleccionado} activo · haz clic en otra barra o en un preset para cambiar el período
+          Año {anioSeleccionado} activo · vuelve a hacer clic para deseleccionar
         </p>
       )}
     </div>
