@@ -18,6 +18,7 @@ import {
 import {
   GRUPO_COLORS,
   GRUPO_LABELS,
+  GRUPO_ORDER,
   type DiagnosticoGrupo,
 } from '@/lib/diagnostico-grupos';
 import type {
@@ -215,14 +216,66 @@ function TemporalTooltip({
   active,
   payload,
   label,
+  showGrupoBreakdown,
 }: {
   active?: boolean;
   payload?: Array<{ name?: string; value?: number; color?: string; payload?: Record<string, unknown> }>;
   label?: string;
+  showGrupoBreakdown?: boolean;
 }) {
   if (!active || !payload?.length) return null;
   const row = payload[0]?.payload ?? {};
   const lunesRef = typeof row.lunesRef === 'string' ? row.lunesRef : '';
+
+  if (showGrupoBreakdown) {
+    // Reconstruir total gasto y desglose desde payload (barras apiladas por grupo)
+    const grupoEntries = payload.filter((e) => String(e.name ?? '').startsWith('__g__'));
+    const totalGasto   = grupoEntries.reduce((s, e) => s + (e.value ?? 0), 0);
+    const nonGrupo     = payload.filter((e) => !String(e.name ?? '').startsWith('__g__'));
+    return (
+      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs shadow-lg min-w-[210px]">
+        <p className="font-semibold text-slate-800">{label}</p>
+        {lunesRef && <p className="text-slate-500">Lunes: {fmtDate(lunesRef)}</p>}
+        {nonGrupo.map((entry, i) => {
+          if (entry.value == null || entry.value === 0) return null;
+          const isPrep = String(entry.name ?? '').toLowerCase().includes('prep');
+          return (
+            <p key={i} style={{ color: entry.color }} className="tabular-nums mt-0.5">
+              {entry.name}: {fmtQty(Number(entry.value), isPrep ? 0 : 1)}
+            </p>
+          );
+        })}
+        {totalGasto > 0 && (
+          <>
+            <p className="mt-1.5 font-semibold text-slate-700 border-t border-slate-100 pt-1.5">
+              Gasto: {fmtEur(totalGasto)}
+            </p>
+            {grupoEntries
+              .filter((e) => (e.value ?? 0) > 0)
+              .sort((a, b) => (b.value ?? 0) - (a.value ?? 0))
+              .map((entry, i) => {
+                const pct = totalGasto > 0 ? ((entry.value ?? 0) / totalGasto) * 100 : 0;
+                return (
+                  <div key={i} className="flex items-center justify-between gap-2 py-[2px]">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="h-2 w-2 rounded-sm flex-shrink-0" style={{ backgroundColor: entry.color }} />
+                      <span className="truncate text-slate-600">
+                        {String(entry.name ?? '').replace('__g__', '')}
+                      </span>
+                    </div>
+                    <span className="tabular-nums text-slate-700 flex-shrink-0">
+                      {fmtEur(entry.value ?? 0)}
+                      <span className="ml-1 text-slate-400">({pct.toFixed(0)}%)</span>
+                    </span>
+                  </div>
+                );
+              })}
+          </>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg">
       <p className="font-semibold text-slate-800">{label}</p>
@@ -245,11 +298,37 @@ function TemporalChart({
   data,
   title,
   emptyHint,
+  showGrupoBreakdown = false,
 }: {
   data: TemporalPoint[];
   title: string;
   emptyHint: string;
+  showGrupoBreakdown?: boolean;
 }) {
+  // Grupos con gasto > 0 en el período (para no renderizar barras vacías)
+  const gruposPresentes = useMemo(() => {
+    if (!showGrupoBreakdown) return [];
+    const set = new Set<DiagnosticoGrupo>();
+    for (const pt of data) {
+      for (const g of (Object.keys(pt.gastoPorGrupo ?? {}) as DiagnosticoGrupo[])) {
+        if ((pt.gastoPorGrupo![g] ?? 0) > 0) set.add(g);
+      }
+    }
+    return GRUPO_ORDER.filter((g) => set.has(g));
+  }, [data, showGrupoBreakdown]);
+
+  // Aplanar gastoPorGrupo al nivel del objeto para que Recharts lo lea directamente
+  const chartData = useMemo(() => {
+    if (!showGrupoBreakdown) return data;
+    return data.map((pt) => {
+      const flat: Record<string, unknown> = { ...pt };
+      for (const g of gruposPresentes) {
+        flat[`__grupo__${g}`] = pt.gastoPorGrupo?.[g] ?? 0;
+      }
+      return flat;
+    });
+  }, [data, showGrupoBreakdown, gruposPresentes]);
+
   if (!data.length) {
     return (
       <div className="rounded-xl border border-slate-200 bg-slate-50 px-6 py-10 text-center text-sm text-slate-400">
@@ -262,8 +341,8 @@ function TemporalChart({
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <h3 className="text-sm font-semibold text-slate-700 mb-4">{title}</h3>
-      <ResponsiveContainer width="100%" height={260}>
-        <ComposedChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 24 }}>
+      <ResponsiveContainer width="100%" height={280}>
+        <ComposedChart data={chartData} margin={{ top: 10, right: 16, left: 0, bottom: 24 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
           <XAxis
             dataKey="label"
@@ -286,8 +365,7 @@ function TemporalChart({
             tickFormatter={(v) => fmtEurShort(Number(v))}
             width={72}
           />
-          <Tooltip content={<TemporalTooltip />} />
-          <Legend wrapperStyle={{ fontSize: 11 }} />
+          <Tooltip content={<TemporalTooltip showGrupoBreakdown={showGrupoBreakdown} />} />
           <Bar
             yAxisId="left"
             dataKey="viales"
@@ -305,16 +383,41 @@ function TemporalChart({
             strokeWidth={2}
             dot={false}
           />
-          <Bar
-            yAxisId="right"
-            dataKey="gasto"
-            name="Gasto valorizado"
-            fill={SERIES_COLORS.gastoTemporal}
-            fillOpacity={0.72}
-            radius={[4, 4, 0, 0]}
-          />
+          {showGrupoBreakdown ? (
+            gruposPresentes.map((g, idx) => (
+              <Bar
+                key={g}
+                yAxisId="right"
+                dataKey={`__grupo__${g}`}
+                name={`__g__${GRUPO_LABELS[g]}`}
+                stackId="gasto"
+                fill={GRUPO_COLORS[g].chart}
+                fillOpacity={0.85}
+                radius={idx === gruposPresentes.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]}
+              />
+            ))
+          ) : (
+            <Bar
+              yAxisId="right"
+              dataKey="gasto"
+              name="Gasto valorizado"
+              fill={SERIES_COLORS.gastoTemporal}
+              fillOpacity={0.72}
+              radius={[4, 4, 0, 0]}
+            />
+          )}
         </ComposedChart>
       </ResponsiveContainer>
+      {showGrupoBreakdown && gruposPresentes.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1">
+          {gruposPresentes.map((g) => (
+            <span key={g} className="flex items-center gap-1 text-[10px] text-slate-600">
+              <span className="h-2 w-2 rounded-sm flex-shrink-0" style={{ backgroundColor: GRUPO_COLORS[g].chart }} />
+              {GRUPO_LABELS[g]}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1496,6 +1599,7 @@ export default function AnalisisOncologiaPage() {
               data={datos.temporalHistorico}
               title="Evolución mensual del alcance actual"
               emptyHint="Sin consumo mensual para el rango seleccionado."
+              showGrupoBreakdown
             />
             {showWeekly && (
               <TemporalChart

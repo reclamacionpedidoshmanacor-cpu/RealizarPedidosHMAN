@@ -200,6 +200,7 @@ export type TemporalPoint = {
   preparaciones: number;
   pacientes: number;
   lunesRef?: string | null;
+  gastoPorGrupo?: Partial<Record<DiagnosticoGrupo, number>>;
 };
 
 export type MedicamentoEnProtocolo = {
@@ -1017,6 +1018,8 @@ type MonthAcc = {
   mUnits: number; sUnits: number;
   mPrep: number; sPrep: number;
   mPac: number; sPac: number;
+  mGastoPorGrupo: Map<DiagnosticoGrupo, number>;
+  sGastoPorGrupo: Map<DiagnosticoGrupo, number>;
 };
 
 function pickFiable(mensual: number, semanal: number, anio: number, mes: number): number {
@@ -1024,6 +1027,13 @@ function pickFiable(mensual: number, semanal: number, anio: number, mes: number)
 }
 
 function monthAccToPoint(a: MonthAcc): TemporalPoint {
+  const ym = ymKey(a.anio, a.mes);
+  const useSemanal = ym >= CUT_YM ? a.sGasto > 0 : a.mGasto === 0;
+  const srcGrupo = useSemanal ? a.sGastoPorGrupo : a.mGastoPorGrupo;
+  const gastoPorGrupo: Partial<Record<DiagnosticoGrupo, number>> = {};
+  for (const [g, v] of srcGrupo.entries()) {
+    if (v > 0) gastoPorGrupo[g] = v;
+  }
   return {
     anio: a.anio, mes: a.mes, semana: null,
     label: `${MESES_SHORT[a.mes - 1]} ${a.anio}`,
@@ -1033,6 +1043,7 @@ function monthAccToPoint(a: MonthAcc): TemporalPoint {
     preparaciones: pickFiable(a.mPrep, a.sPrep, a.anio, a.mes),
     pacientes: pickFiable(a.mPac, a.sPac, a.anio, a.mes),
     lunesRef: null,
+    gastoPorGrupo,
   };
 }
 
@@ -1050,6 +1061,8 @@ function buildMonthlyTemporalFiable(rows: ClassifiedRow[]): TemporalPoint[] {
         mUnits: 0, sUnits: 0,
         mPrep: 0, sPrep: 0,
         mPac: 0, sPac: 0,
+        mGastoPorGrupo: new Map<DiagnosticoGrupo, number>(),
+        sGastoPorGrupo: new Map<DiagnosticoGrupo, number>(),
       };
       map.set(key, a);
     }
@@ -1058,10 +1071,12 @@ function buildMonthlyTemporalFiable(rows: ClassifiedRow[]): TemporalPoint[] {
       a.mGasto += r.gasto; a.mViales += r.viales;
       a.mUnits += r.unidades;
       a.mPrep += r.preparaciones; a.mPac += r.pacientes;
+      a.mGastoPorGrupo.set(r.grupo, (a.mGastoPorGrupo.get(r.grupo) ?? 0) + r.gasto);
     } else {
       a.sGasto += r.gasto; a.sViales += r.viales;
       a.sUnits += r.unidades;
       a.sPrep += r.preparaciones; a.sPac += r.pacientes;
+      a.sGastoPorGrupo.set(r.grupo, (a.sGastoPorGrupo.get(r.grupo) ?? 0) + r.gasto);
     }
   }
   return [...map.values()]
@@ -1090,6 +1105,7 @@ function fillTemporalGaps(points: TemporalPoint[], desde: string, hasta: string)
     return map.get(key) ?? {
       anio, mes, semana: null, label,
       viales: 0, unidades: 0, gasto: 0, preparaciones: 0, pacientes: 0, lunesRef: null,
+      gastoPorGrupo: {},
     };
   });
 }
@@ -1283,6 +1299,8 @@ function buildTopMeds(
         sPrep: 0,
         mPac: 0,
         sPac: 0,
+        mGastoPorGrupo: new Map<DiagnosticoGrupo, number>(),
+        sGastoPorGrupo: new Map<DiagnosticoGrupo, number>(),
       };
       m.months.set(mk, ma);
     }
@@ -1291,10 +1309,12 @@ function buildTopMeds(
       ma.mGasto += r.gasto; ma.mViales += r.viales;
       ma.mUnits += r.unidades;
       ma.mPrep += r.preparaciones; ma.mPac += r.pacientes;
+      ma.mGastoPorGrupo.set(r.grupo, (ma.mGastoPorGrupo.get(r.grupo) ?? 0) + r.gasto);
     } else {
       ma.sGasto += r.gasto; ma.sViales += r.viales;
       ma.sUnits += r.unidades;
       ma.sPrep += r.preparaciones; ma.sPac += r.pacientes;
+      ma.sGastoPorGrupo.set(r.grupo, (ma.sGastoPorGrupo.get(r.grupo) ?? 0) + r.gasto);
     }
 
     // Apilado por tipo tumoral (vista total)
