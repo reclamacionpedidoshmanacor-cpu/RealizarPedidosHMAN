@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
 import {
   loadPedidosConRespuestas,
+  loadPedidosCuentasByCn,
   type PedidoPendienteRow,
   type PedidoEstadoFiltro,
 } from '@/lib/pedidos-pendientes';
@@ -45,9 +46,13 @@ export async function GET(req: NextRequest) {
     const limit = parseLimit(req.nextUrl.searchParams.get('limit'));
     const search = parseSearch(req.nextUrl.searchParams.get('search'));
 
-    const [catalogo, pedidos] = await Promise.all([
+    // Traemos siempre TODOS los pedidos (sin filtro de estado) para poder mostrar
+    // correctamente los contadores de pendientes/recibidos/anulados por cada CN.
+    // El filtro de estado se aplica localmente al construir los grupos.
+    const [catalogo, pedidos, cuentasByCn] = await Promise.all([
       listMedicamentosByArea(session.area),
-      loadPedidosConRespuestas({ estado, soloReclamados, limit }),
+      loadPedidosConRespuestas({ estado: 'todos', soloReclamados, limit: Math.max(limit, 3000) }),
+      loadPedidosCuentasByCn(),
     ]);
 
     const medsByCn = new Map<
@@ -84,6 +89,8 @@ export async function GET(req: NextRequest) {
       }
     >();
 
+    // Construimos los grupos con TODOS los pedidos. Los contadores exactos
+    // vienen de cuentasByCn (sin límite); los detalles vienen de pedidos (limitado).
     for (const pedido of pedidos) {
       const cnPedido = toCn6(pedido.cnRaw);
       if (!cnPedido) continue;
@@ -99,36 +106,40 @@ export async function GET(req: NextRequest) {
       }
 
       const groupKey = med.cn;
-      let group = groupsMap.get(groupKey);
-      if (!group) {
-        group = {
+      if (!groupsMap.has(groupKey)) {
+        const cuentas = cuentasByCn.get(cnPedido);
+        groupsMap.set(groupKey, {
           cn: med.cn,
           nombre: med.nombre,
           principioActivo: med.principioActivo,
-          pendientes: 0,
-          recibidos: 0,
-          anulados: 0,
-          reclamados: 0,
+          // Contadores exactos desde el agregado sin límite
+          pendientes: cuentas?.pendientes ?? 0,
+          recibidos:  cuentas?.recibidos  ?? 0,
+          anulados:   cuentas?.anulados   ?? 0,
+          reclamados: cuentas?.reclamados ?? 0,
           detallePendientes: [],
           detalleRecibidos: [],
-        };
-        groupsMap.set(groupKey, group);
+        });
       }
 
-      if (pedido.anulado) group.anulados += 1;
-      else if (pedido.recibido) group.recibidos += 1;
-      else group.pendientes += 1;
-      if (pedido.reclamado) group.reclamados += 1;
-
+      const group = groupsMap.get(groupKey)!;
       const fecha = new Date(pedido.fechaDocumento);
       const enVentana = !Number.isNaN(fecha.getTime()) && fecha >= twoMonthsAgo;
-      if (!enVentana) continue;
-      if (pedido.anulado) continue;
+      if (!enVentana || pedido.anulado) continue;
+      // Siempre rellenamos ambas listas de detalle independientemente del filtro de estado
       if (pedido.recibido) group.detalleRecibidos.push(pedido);
       else group.detallePendientes.push(pedido);
     }
 
-    const grupos = [...groupsMap.values()]
+    // Aplicamos el filtro de estado sobre los grupos ya construidos
+    const gruposFiltrados = [...groupsMap.values()].filter((g) => {
+      if (estado === 'pendientes') return g.pendientes > 0;
+      if (estado === 'recibidos')  return g.recibidos  > 0;
+      if (estado === 'anulados')   return g.anulados   > 0;
+      return true;
+    });
+
+    const grupos = gruposFiltrados
       .sort((a, b) =>
         (a.principioActivo || a.nombre).localeCompare(b.principioActivo || b.nombre, 'es', { sensitivity: 'base' })
       )
@@ -138,17 +149,16 @@ export async function GET(req: NextRequest) {
         detalleRecibidos: g.detalleRecibidos.slice(0, 40),
       }));
 
-    const resumen = grupos.reduce(
-      (acc, g) => {
-        acc.totalOrders += g.pendientes + g.recibidos + g.anulados;
-        acc.pendientes += g.pendientes;
-        acc.recibidos += g.recibidos;
-        acc.anulados += g.anulados;
-        acc.reclamados += g.reclamados;
-        return acc;
-      },
-      { totalOrders: 0, pendientes: 0, recibidos: 0, anulados: 0, reclamados: 0 }
-    );
+    // Resumen global: suma de contadores exactos de todos los CNs del catálogo
+    const resumen = { totalOrders: 0, pendientes: 0, recibidos: 0, anulados: 0, reclamados: 0 };
+    for (const [cn6, cuentas] of cuentasByCn) {
+      if (!medsByCn.has(cn6)) continue;
+      resumen.pendientes  += cuentas.pendientes;
+      resumen.recibidos   += cuentas.recibidos;
+      resumen.anulados    += cuentas.anulados;
+      resumen.reclamados  += cuentas.reclamados;
+      resumen.totalOrders += cuentas.pendientes + cuentas.recibidos + cuentas.anulados;
+    }
 
     return NextResponse.json({
       fuente: 'PedidosPendientes (solo lectura)',

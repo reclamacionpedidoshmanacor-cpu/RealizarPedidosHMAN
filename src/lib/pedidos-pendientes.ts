@@ -675,6 +675,44 @@ export async function loadAlertasPedidosPorCns(
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Conteo exacto de pedidos por CN (todas las órdenes, sin límite).
+// Se usa para mostrar los totales correctos independientemente del filtro.
+// ---------------------------------------------------------------------------
+export type PedidoCuentasCn = {
+  pendientes: number;
+  recibidos: number;
+  anulados: number;
+  reclamados: number;
+};
+
+export async function loadPedidosCuentasByCn(): Promise<Map<string, PedidoCuentasCn>> {
+  const sql = getPedidosReadonlyClient();
+  const rows = (await sql`
+    SELECT
+      lpad(right(regexp_replace(n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') AS cn6,
+      COUNT(*) FILTER (WHERE recibido = false AND anulado = false)::int AS pendientes,
+      COUNT(*) FILTER (WHERE recibido = true  AND anulado = false)::int AS recibidos,
+      COUNT(*) FILTER (WHERE anulado = true)::int                       AS anulados,
+      COUNT(*) FILTER (WHERE reclamado = true)::int                     AS reclamados
+    FROM public.orders
+    WHERE n_mate_prov IS NOT NULL
+      AND regexp_replace(n_mate_prov::text, '[^0-9]', '', 'g') <> ''
+    GROUP BY 1
+  `) as Array<{ cn6: string; pendientes: number; recibidos: number; anulados: number; reclamados: number }>;
+
+  const map = new Map<string, PedidoCuentasCn>();
+  for (const r of rows) {
+    map.set(r.cn6, {
+      pendientes: Number(r.pendientes),
+      recibidos:  Number(r.recibidos),
+      anulados:   Number(r.anulados),
+      reclamados: Number(r.reclamados),
+    });
+  }
+  return map;
+}
+
 export async function loadAlertasPedidosPorCnsSafe(
   cns: string[],
 ): Promise<Record<string, AlertaSuministroCn | null>> {
