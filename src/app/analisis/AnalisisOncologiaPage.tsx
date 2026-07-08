@@ -119,21 +119,22 @@ const SERIES_COLORS = {
   surface:      '#0f172a',
 } as const;
 
-// Paleta de servicios clínicos: colores distintos en tono y luminosidad,
-// sin neón, aptos para contexto sanitario (suficiente contraste entre sí).
+// Paleta de servicios clínicos: rango 500-600 de Tailwind, alternando tonos
+// cálidos y fríos para que las barras apiladas sean fácilmente distinguibles.
+// Sin neón ni saturación extrema; agradable a la vista en contexto sanitario.
 const SERVICE_PALETTE = [
-  '#0d6b8e',  // azul clínico
-  '#7c3aed',  // violeta (hematología dominante)
-  '#c2410c',  // naranja tostado
-  '#166534',  // verde institucional
-  '#be123c',  // rojo vino
-  '#854d0e',  // marrón dorado
-  '#0d9488',  // teal
-  '#6b21a8',  // púrpura
-  '#0f766e',  // teal oscuro
-  '#92400e',  // ámbar oscuro
-  '#1e3a5f',  // marino
-  '#9d174d',  // rosa oscuro
+  '#2563eb',  // blue-600      — azul claro corporativo
+  '#ea580c',  // orange-600    — naranja cálido
+  '#0891b2',  // cyan-600      — cian fresco
+  '#16a34a',  // green-600     — verde claro
+  '#dc2626',  // red-600       — rojo nítido
+  '#7c3aed',  // violet-700    — violeta medio
+  '#d97706',  // amber-600     — ámbar dorado
+  '#0d9488',  // teal-600      — teal
+  '#be185d',  // pink-700      — rosa profundo
+  '#6366f1',  // indigo-500    — índigo suave
+  '#ca8a04',  // yellow-600    — amarillo cálido
+  '#9333ea',  // purple-600    — púrpura vivo
 ] as const;
 
 function hashText(value: string): number {
