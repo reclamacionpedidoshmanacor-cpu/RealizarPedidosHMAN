@@ -352,6 +352,7 @@ export type ServicioCard = {
   pctGasto: number;
   variacionYoy: number | null;
   gruposDominantes: Array<{ grupo: DiagnosticoGrupo; label: string; pctServicio: number }>;
+  gastoPorAnio: Array<{ anio: number; gasto: number; viales: number }>;
 };
 
 export type MedicamentoListItem = {
@@ -1501,6 +1502,7 @@ function buildServiceCards(
     viales: number;
     unidades: number;
     grupos: Map<DiagnosticoGrupo, number>;
+    porAnio: Map<number, { gasto: number; viales: number }>;
   };
   const cur = new Map<string, SAcc>();
   const prev = new Map<string, number>();
@@ -1516,6 +1518,7 @@ function buildServiceCards(
         viales: 0,
         unidades: 0,
         grupos: new Map(),
+        porAnio: new Map(),
       };
       cur.set(r.servicioKey, acc);
     }
@@ -1524,6 +1527,9 @@ function buildServiceCards(
     acc.viales += r.viales;
     acc.unidades += r.unidades;
     acc.grupos.set(r.grupo, (acc.grupos.get(r.grupo) ?? 0) + r.gasto);
+    const ya = acc.porAnio.get(r.anio) ?? { gasto: 0, viales: 0 };
+    ya.gasto += r.gasto; ya.viales += r.viales;
+    acc.porAnio.set(r.anio, ya);
   }
 
   for (const r of baseRows) {
@@ -1542,6 +1548,10 @@ function buildServiceCards(
           pctServicio: acc.gasto > 0 ? (gasto / acc.gasto) * 100 : 0,
         }));
 
+      const gastoPorAnio = [...acc.porAnio.entries()]
+        .sort(([a], [b]) => a - b)
+        .map(([anio, v]) => ({ anio, gasto: v.gasto, viales: v.viales }));
+
       return {
         servicio: acc.label,
         servicioKey: acc.key,
@@ -1552,6 +1562,7 @@ function buildServiceCards(
         pctGasto: totalGastoGlobal > 0 ? (acc.gasto / totalGastoGlobal) * 100 : 0,
         variacionYoy: computeYoy(acc.gasto, prev.get(acc.key) ?? 0),
         gruposDominantes,
+        gastoPorAnio,
       };
     });
 }

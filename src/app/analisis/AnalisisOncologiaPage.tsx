@@ -45,6 +45,9 @@ function defaultDesde(): string {
   return d.toISOString().slice(0, 10);
 }
 
+const PRESET_TODO_PERIODO = 'Todo el período';
+const DESDE_TODO_PERIODO   = '2020-01-01';
+
 function buildPresets(): Preset[] {
   const hasta = defaultHasta();
   const now = new Date();
@@ -55,10 +58,11 @@ function buildPresets(): Preset[] {
   const d12 = new Date(now);
   d12.setFullYear(d12.getFullYear() - 1);
   return [
-    { label: '3 meses', desde: d3.toISOString().slice(0, 10), hasta },
-    { label: '6 meses', desde: d6.toISOString().slice(0, 10), hasta },
-    { label: '12 meses', desde: d12.toISOString().slice(0, 10), hasta },
-    { label: 'Año actual', desde: `${now.getFullYear()}-01-01`, hasta },
+    { label: '3 meses',           desde: d3.toISOString().slice(0, 10), hasta },
+    { label: '6 meses',           desde: d6.toISOString().slice(0, 10), hasta },
+    { label: '12 meses',          desde: d12.toISOString().slice(0, 10), hasta },
+    { label: 'Año actual',        desde: `${now.getFullYear()}-01-01`, hasta },
+    { label: PRESET_TODO_PERIODO, desde: DESDE_TODO_PERIODO,            hasta },
   ];
 }
 
@@ -351,6 +355,16 @@ function ServicioCardUI({
           Predominio: {item.gruposDominantes.slice(0, 2).map((g) => `${g.label} ${g.pctServicio.toFixed(0)}%`).join(' · ')}
         </p>
       )}
+      {item.gastoPorAnio.length > 1 && (
+        <div className="mt-3 border-t border-white/60 pt-2.5 space-y-1">
+          {item.gastoPorAnio.map((r) => (
+            <div key={r.anio} className="flex items-center justify-between gap-2 text-[11px]">
+              <span className="font-semibold text-slate-600">{r.anio}</span>
+              <span className="tabular-nums text-slate-500">{fmtEur(r.gasto)}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </button>
   );
 }
@@ -496,36 +510,110 @@ function DistributionBars({
   );
 }
 
-function GastoAnualRefChart({ data }: { data: TemporalPoint[] }) {
-  const yearly = useMemo(() => {
-    const map = new Map<number, number>();
-    for (const row of data) {
-      map.set(row.anio, (map.get(row.anio) ?? 0) + row.gasto);
-    }
-    return [...map.entries()]
-      .sort(([a], [b]) => a - b)
-      .map(([anio, gasto]) => ({ anio: String(anio), gasto }));
-  }, [data]);
+function GastoAnualRefChart({
+  gastoAnualServicio,
+  onClickAnio,
+  anioSeleccionado,
+}: {
+  gastoAnualServicio: import('@/lib/analisis-neon').GastoAnualServicio[];
+  onClickAnio: (anio: number) => void;
+  anioSeleccionado: number | null;
+}) {
+  const data = useMemo(
+    () =>
+      [...gastoAnualServicio]
+        .sort((a, b) => a.anio - b.anio)
+        .map((r) => ({
+          anio: String(r.anio),
+          anioNum: r.anio,
+          onco: r.gastoOnco,
+          hemato: r.gastoHemato,
+          total: r.gastoTotal,
+          parcial: r.parcial,
+          variacion: r.variacionYoy,
+        })),
+    [gastoAnualServicio],
+  );
 
-  if (!yearly.length) return null;
+  if (!data.length) return null;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handleBarClick = (barData: any) => {
+    if (barData?.anioNum) onClickAnio(Number(barData.anioNum));
+  };
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="mb-4">
-        <h3 className="text-sm font-semibold text-slate-700">Referencia anual del gasto valorizado</h3>
-        <p className="mt-1 text-xs text-slate-400">
-          Agrupa el alcance actual por año natural para contextualizar el importe seleccionado.
-        </p>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-700">Referencia anual del gasto valorizado</h3>
+          <p className="mt-1 text-xs text-slate-400">
+            Haz clic en un año para filtrar el análisis a ese período.{' '}
+            {anioSeleccionado && (
+              <span className="font-medium text-teal-700">Año {anioSeleccionado} seleccionado.</span>
+            )}
+          </p>
+        </div>
+        <div className="flex items-center gap-3 text-[11px]">
+          <span className="flex items-center gap-1">
+            <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: SERIES_COLORS.gasto }} />
+            Onc. sólida
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: SERIES_COLORS.compras }} />
+            Hematología
+          </span>
+        </div>
       </div>
-      <ResponsiveContainer width="100%" height={220}>
-        <BarChart data={yearly} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
+      <ResponsiveContainer width="100%" height={230}>
+        <BarChart
+          data={data}
+          margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
+          style={{ cursor: 'pointer' }}
+        >
           <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-          <XAxis dataKey="anio" tick={{ fontSize: 10, fill: '#64748b' }} />
+          <XAxis
+            dataKey="anio"
+            tick={{ fontSize: 10, fill: '#64748b' }}
+            tickFormatter={(v) => {
+              const r = data.find((d) => d.anio === v);
+              return r?.parcial ? `${v}*` : String(v);
+            }}
+          />
           <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} tickFormatter={(v) => fmtEurShort(Number(v))} width={72} />
-          <Tooltip formatter={(value: unknown) => fmtEur(Number(value))} />
-          <Bar dataKey="gasto" name="Gasto valorizado" fill={SERIES_COLORS.gasto} radius={[6, 6, 0, 0]} />
+          <Tooltip
+            formatter={(value: unknown, name: unknown) => [fmtEur(Number(value)), String(name)]}
+            labelFormatter={(label) => {
+              const r = data.find((d) => d.anio === label);
+              const yoy = r?.variacion != null ? ` (${r.variacion > 0 ? '+' : ''}${r.variacion.toFixed(1)}% vs ant.)` : '';
+              return `${label}${r?.parcial ? ' (año parcial)' : ''}${yoy}`;
+            }}
+          />
+          <Bar dataKey="onco"   name="Onc. sólida"  stackId="a" fill={SERIES_COLORS.gasto}   radius={[0, 0, 0, 0]} onClick={handleBarClick}>
+            {data.map((d) => (
+              <Cell
+                key={d.anio}
+                fill={SERIES_COLORS.gasto}
+                opacity={anioSeleccionado && d.anioNum !== anioSeleccionado ? 0.35 : 0.9}
+              />
+            ))}
+          </Bar>
+          <Bar dataKey="hemato" name="Hematología"  stackId="a" fill={SERIES_COLORS.compras} radius={[6, 6, 0, 0]} onClick={handleBarClick}>
+            {data.map((d) => (
+              <Cell
+                key={d.anio}
+                fill={SERIES_COLORS.compras}
+                opacity={anioSeleccionado && d.anioNum !== anioSeleccionado ? 0.35 : 0.9}
+              />
+            ))}
+          </Bar>
         </BarChart>
       </ResponsiveContainer>
+      {anioSeleccionado && (
+        <p className="mt-2 text-center text-[11px] text-teal-600">
+          Mostrando {anioSeleccionado} · haz clic en otro año o en cualquier preset para cambiar el período
+        </p>
+      )}
     </div>
   );
 }
@@ -787,10 +875,20 @@ function MedicamentoListTable({
 function MedicamentoDetallePanel({
   detalle,
   showWeeklyByDefault,
+  desde,
+  hasta,
 }: {
   detalle: MedicamentoDetalle;
   showWeeklyByDefault: boolean;
+  desde: string;
+  hasta: string;
 }) {
+  const meses = useMemo(() => {
+    const a = new Date(`${desde}T12:00:00`);
+    const b = new Date(`${hasta}T12:00:00`);
+    const raw = (b.getTime() - a.getTime()) / (86400000 * 30.4375);
+    return Math.max(1, raw);
+  }, [desde, hasta]);
   const [modo, setModo] = useState<'mensual' | 'semanal'>(showWeeklyByDefault ? 'semanal' : 'mensual');
 
   useEffect(() => {
@@ -825,8 +923,18 @@ function MedicamentoDetallePanel({
       <div className="p-5 space-y-5">
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <KpiCard label="Consumo valorizado" value={fmtEur(detalle.consumo.totalGasto)} tone="rose" />
-          <KpiCard label="Consumo cajas eq." value={fmtQty(detalle.consumo.totalViales)} sub={`${fmtNum(detalle.consumo.totalUnidades, 0)} uds`} tone="teal" />
-          <KpiCard label="Compras cajas eq." value={fmtQty(detalle.compras.totalViales)} sub={`${fmtNum(detalle.compras.totalUnidades, 0)} uds`} tone="blue" />
+          <KpiCard
+            label="Consumo medio mensual (nº cajas)"
+            value={fmtQty(detalle.consumo.totalViales / meses, 1)}
+            sub={`Total período: ${fmtQty(detalle.consumo.totalViales)} cajas · ${fmtNum(detalle.consumo.totalUnidades, 0)} uds`}
+            tone="teal"
+          />
+          <KpiCard
+            label="Compras media mensual (nº cajas)"
+            value={fmtQty(detalle.compras.totalViales / meses, 1)}
+            sub={`Total período: ${fmtQty(detalle.compras.totalViales)} cajas · ${fmtNum(detalle.compras.totalUnidades, 0)} uds`}
+            tone="blue"
+          />
           <KpiCard label="Compras valorizadas" value={fmtEur(detalle.compras.totalGasto)} tone="violet" />
         </div>
 
@@ -978,6 +1086,7 @@ export default function AnalisisOncologiaPage() {
   const [datos, setDatos] = useState<AnalisisDatos | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [anioSeleccionado, setAnioSeleccionado] = useState<number | null>(null);
 
   const showWeekly = useMemo(() => daysBetween(desde, hasta) <= 186, [desde, hasta]);
 
@@ -1032,6 +1141,21 @@ export default function AnalisisOncologiaPage() {
     setDesde(preset.desde);
     setHasta(preset.hasta);
     setActivePreset(preset.label);
+    setAnioSeleccionado(null);
+  }
+
+  function handleClickAnio(anio: number) {
+    if (anioSeleccionado === anio) {
+      setAnioSeleccionado(null);
+      const preset = presets.find((p) => p.label === PRESET_TODO_PERIODO);
+      if (preset) { setDesde(preset.desde); setHasta(preset.hasta); }
+      setActivePreset(PRESET_TODO_PERIODO);
+    } else {
+      setAnioSeleccionado(anio);
+      setDesde(`${anio}-01-01`);
+      setHasta(`${anio}-12-31`);
+      setActivePreset('');
+    }
   }
 
   function handleSelectServicio(servicio: string | null) {
@@ -1168,7 +1292,11 @@ export default function AnalisisOncologiaPage() {
             <KpiCard label="Medicamentos" value={String(datos.kpis.medicamentosDistintos)} tone="slate" />
           </div>
 
-          <GastoAnualRefChart data={datos.temporalHistorico} />
+          <GastoAnualRefChart
+            gastoAnualServicio={datos.gastoAnualServicio}
+            onClickAnio={handleClickAnio}
+            anioSeleccionado={anioSeleccionado}
+          />
 
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-3">
@@ -1266,7 +1394,7 @@ export default function AnalisisOncologiaPage() {
               onSelect={setCnSel}
             />
             {datos.medicamentoDetalle ? (
-              <MedicamentoDetallePanel detalle={datos.medicamentoDetalle} showWeeklyByDefault={showWeekly} />
+              <MedicamentoDetallePanel detalle={datos.medicamentoDetalle} showWeeklyByDefault={showWeekly} desde={desde} hasta={hasta} />
             ) : (
               <div className="h-full rounded-xl border border-slate-200 bg-slate-50 px-6 py-12 text-center text-sm text-slate-500 flex items-center justify-center">
                 Selecciona un medicamento para abrir su ficha de análisis.

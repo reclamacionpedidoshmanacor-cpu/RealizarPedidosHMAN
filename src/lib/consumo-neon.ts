@@ -391,7 +391,9 @@ function buildSemanasSeries8(
   series: Array<{ semana: number; anio: number; viales: number }>,
 ): MovimientoConsumo['semanasSeries'] {
   const semanasFilled: MovimientoConsumo['semanasSeries'] = [];
-  for (let i = 7; i >= 0; i--) {
+  // i=8..1: las 8 semanas cerradas previas a la actual (i=0 es la semana en curso,
+  // que aparece con consumo 0 porque los datos se vuelcan de forma retrospectiva)
+  for (let i = 8; i >= 1; i--) {
     const d = new Date();
     d.setDate(d.getDate() - i * 7);
     const thursday = new Date(d);
@@ -473,6 +475,7 @@ export async function getMovimientosConsumo(area: string): Promise<MovimientosCo
       CROSS JOIN periods p
       WHERE ic.area = ${area}
         AND cr.fecha > p.start_date
+        AND cr.fecha <= CURRENT_DATE
         AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
       GROUP BY cr.cn
     )
@@ -538,6 +541,7 @@ export async function getMovimientosConsumo(area: string): Promise<MovimientosCo
     WHERE ic.area = ${area}
       AND cr.cn = ANY(${cns})
       AND cr.fecha > (CURRENT_DATE - INTERVAL '56 days')
+      AND cr.fecha <= CURRENT_DATE
       AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
     GROUP BY cr.cn, EXTRACT(ISOYEAR FROM cr.fecha), EXTRACT(WEEK FROM cr.fecha)
     ORDER BY cr.cn, iso_year, iso_week;
@@ -899,13 +903,15 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
     consumo_periodos AS (
       SELECT
         cr.cn,
-        SUM(CASE WHEN cr.fecha > (CURRENT_DATE - INTERVAL '56 days')  THEN cr.viales_dispensados ELSE 0 END)::float  AS reciente,
+        SUM(CASE WHEN cr.fecha > (CURRENT_DATE - INTERVAL '56 days')
+                  AND cr.fecha <= CURRENT_DATE                          THEN cr.viales_dispensados ELSE 0 END)::float  AS reciente,
         SUM(CASE WHEN cr.fecha <= (CURRENT_DATE - INTERVAL '56 days')
                   AND cr.fecha >  (CURRENT_DATE - INTERVAL '112 days') THEN cr.viales_dispensados ELSE 0 END)::float AS anterior
       FROM consumo_registros cr
       JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
       WHERE ic.area = ${area}
         AND cr.fecha > (CURRENT_DATE - INTERVAL '112 days')
+        AND cr.fecha <= CURRENT_DATE
         AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
       GROUP BY cr.cn
     )
@@ -936,7 +942,7 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
 
   if (agrupado.length === 0) return [];
 
-  // Series semanales (últimas 16 semanas) para los CNs encontrados
+  // Series semanales (últimas 8 semanas) para los CNs encontrados
   const cns = agrupado.map(r => r.cn);
   const seriesRows = (await sql`
     SELECT
@@ -949,6 +955,7 @@ export async function getAlertasCompra(area: string): Promise<AlertaCompra[]> {
     WHERE ic.area = ${area}
       AND cr.cn = ANY(${cns})
       AND cr.fecha > (CURRENT_DATE - INTERVAL '56 days')
+      AND cr.fecha <= CURRENT_DATE
       AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
     GROUP BY cr.cn, EXTRACT(ISOYEAR FROM cr.fecha), EXTRACT(WEEK FROM cr.fecha)
     ORDER BY cr.cn, iso_year, iso_week;
