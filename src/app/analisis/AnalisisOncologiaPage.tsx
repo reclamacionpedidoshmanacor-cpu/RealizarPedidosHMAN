@@ -46,7 +46,7 @@ function defaultDesde(): string {
 }
 
 const PRESET_TODO_PERIODO = 'Todo el período';
-const DESDE_TODO_PERIODO   = '2020-01-01';
+const DESDE_TODO_PERIODO   = '2024-01-01';
 
 function buildPresets(): Preset[] {
   const hasta = defaultHasta();
@@ -363,16 +363,35 @@ function ServicioCardUI({
           Predominio: {item.gruposDominantes.slice(0, 2).map((g) => `${g.label} ${g.pctServicio.toFixed(0)}%`).join(' · ')}
         </p>
       )}
-      {item.gastoPorAnio.length > 1 && (
-        <div className="mt-3 border-t border-white/60 pt-2.5 space-y-1">
-          {item.gastoPorAnio.map((r) => (
-            <div key={r.anio} className="flex items-center justify-between gap-2 text-[11px]">
-              <span className="font-semibold text-slate-600">{r.anio}</span>
-              <span className="tabular-nums text-slate-500">{fmtEur(r.gasto)}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      {item.gastoPorAnio.length > 1 && (() => {
+        const totalAnios = item.gastoPorAnio.reduce((s, r) => s + r.gasto, 0);
+        const maxGasto   = Math.max(...item.gastoPorAnio.map((r) => r.gasto));
+        return (
+          <div className="mt-3 border-t border-white/60 pt-2.5 space-y-2.5">
+            {item.gastoPorAnio.map((r) => {
+              const pct    = totalAnios > 0 ? (r.gasto / totalAnios) * 100 : 0;
+              const barPct = maxGasto > 0   ? (r.gasto / maxGasto)  * 100 : 0;
+              return (
+                <div key={r.anio}>
+                  <div className="flex items-center justify-between gap-1 text-[11px] mb-1">
+                    <span className="font-semibold text-slate-700 w-9 shrink-0">{r.anio}</span>
+                    <span className="text-slate-400 shrink-0">({pct.toFixed(1)}%)</span>
+                    <span className="tabular-nums text-slate-700 font-medium ml-auto shrink-0">
+                      {fmtEur(r.gasto)}
+                    </span>
+                  </div>
+                  <div className="h-1.5 w-full rounded-full overflow-hidden" style={{ backgroundColor: hexToRgba(color, 0.15) }}>
+                    <div
+                      className="h-full rounded-full"
+                      style={{ width: `${barPct}%`, backgroundColor: color, opacity: 0.75 }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
     </button>
   );
 }
@@ -527,32 +546,58 @@ function GastoAnualRefChart({
   onClickAnio: (anio: number) => void;
   anioSeleccionado: number | null;
 }) {
-  // Agrupar por año y servicio → formato para barras apiladas
-  const { anios, servicios, chartData } = useMemo(() => {
+  const OTROS_KEY = '__otros__';
+  const OTROS_COLOR = '#94a3b8'; // slate-400 — gris neutro para servicios pequeños
+
+  // Agrupar por año y servicio → formato para barras apiladas.
+  // Servicios con < PCT_THRESHOLD del gasto total se fusionan en "Otros servicios".
+  const PCT_THRESHOLD = 0.03;
+  const { anios, serviciosMostrados, chartData } = useMemo(() => {
     const anioSet = new Set<number>();
-    const servicioSet = new Map<string, string>(); // key → label
+    const totalPorServicio = new Map<string, { label: string; gasto: number }>();
     for (const r of gastoAnualServicioReal) {
       anioSet.add(r.anio);
-      servicioSet.set(r.servicioKey, r.servicio);
+      const prev = totalPorServicio.get(r.servicioKey) ?? { label: r.servicio, gasto: 0 };
+      totalPorServicio.set(r.servicioKey, { label: r.servicio, gasto: prev.gasto + r.gasto });
     }
-    const anios = [...anioSet].sort((a, b) => a - b);
-    const servicios = [...servicioSet.entries()].map(([key, label]) => ({ key, label }));
+    const grandTotal = [...totalPorServicio.values()].reduce((s, v) => s + v.gasto, 0);
 
-    // Por año total para calcular cuál servicio va primero (más gasto)
-    const gastoPorServicio = new Map<string, number>();
-    for (const r of gastoAnualServicioReal) {
-      gastoPorServicio.set(r.servicioKey, (gastoPorServicio.get(r.servicioKey) ?? 0) + r.gasto);
+    const principales: Array<{ key: string; label: string }> = [];
+    const menores:    Array<string> = [];
+    for (const [key, { label, gasto }] of totalPorServicio.entries()) {
+      if (grandTotal > 0 && gasto / grandTotal >= PCT_THRESHOLD) {
+        principales.push({ key, label });
+      } else {
+        menores.push(key);
+      }
     }
-    servicios.sort((a, b) => (gastoPorServicio.get(b.key) ?? 0) - (gastoPorServicio.get(a.key) ?? 0));
+    principales.sort(
+      (a, b) => (totalPorServicio.get(b.key)?.gasto ?? 0) - (totalPorServicio.get(a.key)?.gasto ?? 0),
+    );
+
+    const hayOtros = menores.length > 0;
+    const serviciosMostrados = hayOtros
+      ? [...principales, { key: OTROS_KEY, label: 'Otros servicios' }]
+      : principales;
+
+    const anios = [...anioSet].sort((a, b) => a - b);
+    const rowsByKey = new Map<string, Map<number, number>>();
+    for (const r of gastoAnualServicioReal) {
+      const key = menores.includes(r.servicioKey) ? OTROS_KEY : r.servicioKey;
+      if (!rowsByKey.has(key)) rowsByKey.set(key, new Map());
+      const m = rowsByKey.get(key)!;
+      m.set(r.anio, (m.get(r.anio) ?? 0) + r.gasto);
+    }
 
     const chartData = anios.map((anio) => {
       const row: Record<string, unknown> = { anio: String(anio), anioNum: anio };
-      for (const { key } of servicios) {
-        row[key] = gastoAnualServicioReal.find((r) => r.anio === anio && r.servicioKey === key)?.gasto ?? 0;
+      for (const { key } of serviciosMostrados) {
+        row[key] = rowsByKey.get(key)?.get(anio) ?? 0;
       }
       return row;
     });
-    return { anios, servicios, chartData };
+    return { anios, serviciosMostrados, chartData };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gastoAnualServicioReal]);
 
   if (!chartData.length) return null;
@@ -575,9 +620,12 @@ function GastoAnualRefChart({
           </p>
         </div>
         <div className="flex flex-wrap gap-x-4 gap-y-1">
-          {servicios.slice(0, 8).map(({ key, label }) => (
+          {serviciosMostrados.map(({ key, label }) => (
             <span key={key} className="flex items-center gap-1 text-[11px] text-slate-600">
-              <span className="inline-block h-2.5 w-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getServiceColor(key) }} />
+              <span
+                className="inline-block h-2.5 w-2.5 rounded-sm flex-shrink-0"
+                style={{ backgroundColor: key === OTROS_KEY ? OTROS_COLOR : getServiceColor(key) }}
+              />
               {label}
             </span>
           ))}
@@ -596,22 +644,23 @@ function GastoAnualRefChart({
             formatter={(value: unknown, name: unknown) => [fmtEur(Number(value)), String(name)]}
             labelFormatter={(label) => String(label)}
           />
-          {servicios.map(({ key, label }, idx) => {
-            const isLast = idx === servicios.length - 1;
+          {serviciosMostrados.map(({ key, label }, idx) => {
+            const isLast = idx === serviciosMostrados.length - 1;
+            const fillColor = key === OTROS_KEY ? OTROS_COLOR : getServiceColor(key);
             return (
               <Bar
                 key={key}
                 dataKey={key}
                 name={label}
                 stackId="a"
-                fill={getServiceColor(key)}
+                fill={fillColor}
                 radius={isLast ? [6, 6, 0, 0] : [0, 0, 0, 0]}
                 onClick={handleBarClick}
               >
                 {chartData.map((d) => (
                   <Cell
                     key={String(d.anio)}
-                    fill={getServiceColor(key)}
+                    fill={fillColor}
                     opacity={anioSeleccionado && Number(d.anioNum) !== anioSeleccionado ? 0.35 : 0.9}
                   />
                 ))}
