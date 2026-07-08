@@ -140,6 +140,14 @@ export type GastoAnual = {
   variacionYoy: number | null;
 };
 
+/** Gasto anual por servicio clínico real (campo `servicio` de consumo_registros). */
+export type GastoAnualServicioReal = {
+  anio: number;
+  servicioKey: string;
+  servicio: string;
+  gasto: number;
+};
+
 // Gasto anual histórico desglosado por servicio. La variación YoY del año en curso
 // se calcula contra el MISMO PERÍODO del año anterior (no contra el año completo).
 export type GastoAnualServicio = {
@@ -420,6 +428,7 @@ export type AnalisisDatos = {
   kpis: KpisAnalisis;
   gastoPorAnio: GastoAnual[];
   gastoAnualServicio: GastoAnualServicio[];
+  gastoAnualServicioReal: GastoAnualServicioReal[];
   servicios: ServicioCard[];
   grupos: GrupoCard[];
   medicamentos: MedicamentoListItem[];
@@ -558,6 +567,34 @@ async function getGastoByYear(area: string): Promise<GastoAnual[]> {
       variacionYoy: i > 0 ? computeYoy(g, Number(rows[i - 1]!.gasto)) : null,
     };
   });
+}
+
+// ---------------------------------------------------------------------------
+// Gasto anual por servicio clínico real (campo `servicio` de consumo_registros).
+// Devuelve todos los años y todos los servicios sin filtro de fecha.
+// ---------------------------------------------------------------------------
+async function getGastoAnualPorServicioReal(area: string): Promise<GastoAnualServicioReal[]> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT
+      EXTRACT(YEAR FROM cr.fecha)::int                                           AS anio,
+      COALESCE(NULLIF(TRIM(cr.servicio), ''), 'Sin servicio')                   AS servicio,
+      SUM(cr.viales_dispensados * COALESCE(m.precio_unidad, 0))::float          AS gasto
+    FROM consumo_registros cr
+    JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+    JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
+    WHERE ic.area = ${area}
+      AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
+    GROUP BY EXTRACT(YEAR FROM cr.fecha), COALESCE(NULLIF(TRIM(cr.servicio), ''), 'Sin servicio')
+    ORDER BY EXTRACT(YEAR FROM cr.fecha), gasto DESC
+  `) as Array<{ anio: number; servicio: string; gasto: number }>;
+
+  return rows.map((r) => ({
+    anio: num(r.anio),
+    servicio: String(r.servicio),
+    servicioKey: servicioKey(r.servicio),
+    gasto: Number(r.gasto),
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -1984,11 +2021,12 @@ export async function getAnalisisDatos(
   const { baseDesde, baseHasta } = resolvePeriodoBase(desde, hasta, modo);
   const comparativaEtiqueta = etiquetaComparativa(desde, hasta, baseDesde, baseHasta);
 
-  const [classified, classifiedBase, gastoPorAnio, gastoAnualServicio] = await Promise.all([
+  const [classified, classifiedBase, gastoPorAnio, gastoAnualServicio, gastoAnualServicioReal] = await Promise.all([
     getAnalisisRaw(area, desde, hasta),
     getAnalisisRaw(area, baseDesde, baseHasta),
     getGastoByYear(area),
     getGastoAnualPorServicio(area),
+    getGastoAnualPorServicioReal(area),
   ]);
 
   const areaTotalGasto = classified.reduce((s, r) => s + r.gasto, 0);
@@ -2061,6 +2099,7 @@ export async function getAnalisisDatos(
     kpis,
     gastoPorAnio,
     gastoAnualServicio,
+    gastoAnualServicioReal,
     servicios,
     grupos,
     medicamentos,

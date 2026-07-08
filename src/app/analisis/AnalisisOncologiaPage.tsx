@@ -107,26 +107,33 @@ function fmtDate(iso: string): string {
 }
 
 const SERIES_COLORS = {
-  consumo: '#0f766e',
-  consumoSoft: '#14b8a6',
-  gasto: '#1d4f91',
-  gastoSoft: '#7fb3e6',
-  preparaciones: '#d97706',
-  compras: '#2563eb',
-  comprasSoft: '#38bdf8',
+  consumo:      '#0d9488',  // teal-600: consumo cajas (gráfico evolución)
+  consumoSoft:  '#14b8a6',
+  gasto:        '#1d4f91',  // azul institucional oscuro (gráficos valorizado)
+  gastoTemporal:'#8b5cf6',  // violeta-500: gasto en gráfico evolución mensual (contraste con teal)
+  gastoSoft:    '#7fb3e6',
+  preparaciones:'#b45309',  // ámbar-700: preparaciones (línea)
+  compras:      '#2563eb',
+  comprasSoft:  '#38bdf8',
   comprasGasto: '#7c3aed',
-  surface: '#0f172a',
+  surface:      '#0f172a',
 } as const;
 
+// Paleta de servicios clínicos: colores distintos en tono y luminosidad,
+// sin neón, aptos para contexto sanitario (suficiente contraste entre sí).
 const SERVICE_PALETTE = [
-  '#0f766e',
-  '#0369a1',
-  '#7c3aed',
-  '#c2410c',
-  '#be123c',
-  '#0891b2',
-  '#65a30d',
-  '#ea580c',
+  '#0d6b8e',  // azul clínico
+  '#7c3aed',  // violeta (hematología dominante)
+  '#c2410c',  // naranja tostado
+  '#166534',  // verde institucional
+  '#be123c',  // rojo vino
+  '#854d0e',  // marrón dorado
+  '#0d9488',  // teal
+  '#6b21a8',  // púrpura
+  '#0f766e',  // teal oscuro
+  '#92400e',  // ámbar oscuro
+  '#1e3a5f',  // marino
+  '#9d174d',  // rosa oscuro
 ] as const;
 
 function hashText(value: string): number {
@@ -284,7 +291,7 @@ function TemporalChart({
             dataKey="viales"
             name="Consumo (cajas eq.)"
             fill={SERIES_COLORS.consumo}
-            fillOpacity={0.82}
+            fillOpacity={0.9}
             minPointSize={3}
             radius={[4, 4, 0, 0]}
           />
@@ -300,8 +307,8 @@ function TemporalChart({
             yAxisId="right"
             dataKey="gasto"
             name="Gasto valorizado"
-            fill={SERIES_COLORS.gastoSoft}
-            fillOpacity={0.55}
+            fill={SERIES_COLORS.gastoTemporal}
+            fillOpacity={0.72}
             radius={[4, 4, 0, 0]}
           />
         </ComposedChart>
@@ -511,31 +518,43 @@ function DistributionBars({
 }
 
 function GastoAnualRefChart({
-  gastoAnualServicio,
+  gastoAnualServicioReal,
   onClickAnio,
   anioSeleccionado,
 }: {
-  gastoAnualServicio: import('@/lib/analisis-neon').GastoAnualServicio[];
+  gastoAnualServicioReal: import('@/lib/analisis-neon').GastoAnualServicioReal[];
   onClickAnio: (anio: number) => void;
   anioSeleccionado: number | null;
 }) {
-  const data = useMemo(
-    () =>
-      [...gastoAnualServicio]
-        .sort((a, b) => a.anio - b.anio)
-        .map((r) => ({
-          anio: String(r.anio),
-          anioNum: r.anio,
-          onco: r.gastoOnco,
-          hemato: r.gastoHemato,
-          total: r.gastoTotal,
-          parcial: r.parcial,
-          variacion: r.variacionYoy,
-        })),
-    [gastoAnualServicio],
-  );
+  // Agrupar por año y servicio → formato para barras apiladas
+  const { anios, servicios, chartData } = useMemo(() => {
+    const anioSet = new Set<number>();
+    const servicioSet = new Map<string, string>(); // key → label
+    for (const r of gastoAnualServicioReal) {
+      anioSet.add(r.anio);
+      servicioSet.set(r.servicioKey, r.servicio);
+    }
+    const anios = [...anioSet].sort((a, b) => a - b);
+    const servicios = [...servicioSet.entries()].map(([key, label]) => ({ key, label }));
 
-  if (!data.length) return null;
+    // Por año total para calcular cuál servicio va primero (más gasto)
+    const gastoPorServicio = new Map<string, number>();
+    for (const r of gastoAnualServicioReal) {
+      gastoPorServicio.set(r.servicioKey, (gastoPorServicio.get(r.servicioKey) ?? 0) + r.gasto);
+    }
+    servicios.sort((a, b) => (gastoPorServicio.get(b.key) ?? 0) - (gastoPorServicio.get(a.key) ?? 0));
+
+    const chartData = anios.map((anio) => {
+      const row: Record<string, unknown> = { anio: String(anio), anioNum: anio };
+      for (const { key } of servicios) {
+        row[key] = gastoAnualServicioReal.find((r) => r.anio === anio && r.servicioKey === key)?.gasto ?? 0;
+      }
+      return row;
+    });
+    return { anios, servicios, chartData };
+  }, [gastoAnualServicioReal]);
+
+  if (!chartData.length) return null;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleBarClick = (barData: any) => {
@@ -544,9 +563,9 @@ function GastoAnualRefChart({
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold text-slate-700">Referencia anual del gasto valorizado</h3>
+          <h3 className="text-sm font-semibold text-slate-700">Referencia anual del gasto valorizado por servicio</h3>
           <p className="mt-1 text-xs text-slate-400">
             Haz clic en un año para filtrar el análisis a ese período.{' '}
             {anioSeleccionado && (
@@ -554,64 +573,55 @@ function GastoAnualRefChart({
             )}
           </p>
         </div>
-        <div className="flex items-center gap-3 text-[11px]">
-          <span className="flex items-center gap-1">
-            <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: SERIES_COLORS.gasto }} />
-            Onc. sólida
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: SERIES_COLORS.compras }} />
-            Hematología
-          </span>
+        <div className="flex flex-wrap gap-x-4 gap-y-1">
+          {servicios.slice(0, 8).map(({ key, label }) => (
+            <span key={key} className="flex items-center gap-1 text-[11px] text-slate-600">
+              <span className="inline-block h-2.5 w-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getServiceColor(key) }} />
+              {label}
+            </span>
+          ))}
         </div>
       </div>
-      <ResponsiveContainer width="100%" height={230}>
+      <ResponsiveContainer width="100%" height={240}>
         <BarChart
-          data={data}
+          data={chartData}
           margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
           style={{ cursor: 'pointer' }}
         >
           <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-          <XAxis
-            dataKey="anio"
-            tick={{ fontSize: 10, fill: '#64748b' }}
-            tickFormatter={(v) => {
-              const r = data.find((d) => d.anio === v);
-              return r?.parcial ? `${v}*` : String(v);
-            }}
-          />
+          <XAxis dataKey="anio" tick={{ fontSize: 10, fill: '#64748b' }} />
           <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} tickFormatter={(v) => fmtEurShort(Number(v))} width={72} />
           <Tooltip
             formatter={(value: unknown, name: unknown) => [fmtEur(Number(value)), String(name)]}
-            labelFormatter={(label) => {
-              const r = data.find((d) => d.anio === label);
-              const yoy = r?.variacion != null ? ` (${r.variacion > 0 ? '+' : ''}${r.variacion.toFixed(1)}% vs ant.)` : '';
-              return `${label}${r?.parcial ? ' (año parcial)' : ''}${yoy}`;
-            }}
+            labelFormatter={(label) => String(label)}
           />
-          <Bar dataKey="onco"   name="Onc. sólida"  stackId="a" fill={SERIES_COLORS.gasto}   radius={[0, 0, 0, 0]} onClick={handleBarClick}>
-            {data.map((d) => (
-              <Cell
-                key={d.anio}
-                fill={SERIES_COLORS.gasto}
-                opacity={anioSeleccionado && d.anioNum !== anioSeleccionado ? 0.35 : 0.9}
-              />
-            ))}
-          </Bar>
-          <Bar dataKey="hemato" name="Hematología"  stackId="a" fill={SERIES_COLORS.compras} radius={[6, 6, 0, 0]} onClick={handleBarClick}>
-            {data.map((d) => (
-              <Cell
-                key={d.anio}
-                fill={SERIES_COLORS.compras}
-                opacity={anioSeleccionado && d.anioNum !== anioSeleccionado ? 0.35 : 0.9}
-              />
-            ))}
-          </Bar>
+          {servicios.map(({ key, label }, idx) => {
+            const isLast = idx === servicios.length - 1;
+            return (
+              <Bar
+                key={key}
+                dataKey={key}
+                name={label}
+                stackId="a"
+                fill={getServiceColor(key)}
+                radius={isLast ? [6, 6, 0, 0] : [0, 0, 0, 0]}
+                onClick={handleBarClick}
+              >
+                {chartData.map((d) => (
+                  <Cell
+                    key={String(d.anio)}
+                    fill={getServiceColor(key)}
+                    opacity={anioSeleccionado && Number(d.anioNum) !== anioSeleccionado ? 0.35 : 0.9}
+                  />
+                ))}
+              </Bar>
+            );
+          })}
         </BarChart>
       </ResponsiveContainer>
       {anioSeleccionado && (
-        <p className="mt-2 text-center text-[11px] text-teal-600">
-          Mostrando {anioSeleccionado} · haz clic en otro año o en cualquier preset para cambiar el período
+        <p className="mt-2 text-center text-[11px] text-slate-500">
+          Año {anioSeleccionado} activo · haz clic en otra barra o usa los presets para cambiar el período
         </p>
       )}
     </div>
@@ -1293,7 +1303,7 @@ export default function AnalisisOncologiaPage() {
           </div>
 
           <GastoAnualRefChart
-            gastoAnualServicio={datos.gastoAnualServicio}
+            gastoAnualServicioReal={datos.gastoAnualServicioReal}
             onClickAnio={handleClickAnio}
             anioSeleccionado={anioSeleccionado}
           />
