@@ -322,12 +322,35 @@ function ServicioCardUI({
   item,
   selected,
   onClick,
+  gastoAnualServicioReal,
 }: {
   item: ServicioCard;
   selected: boolean;
   onClick: () => void;
+  gastoAnualServicioReal: import('@/lib/analisis-neon').GastoAnualServicioReal[];
 }) {
   const color = getServiceColor(item.servicioKey);
+
+  // Siempre todos los años disponibles, % respecto al total global de ese año
+  const anioRows = useMemo(() => {
+    const thisServiceByAnio = new Map<number, number>();
+    const totalByAnio = new Map<number, number>();
+    for (const r of gastoAnualServicioReal) {
+      totalByAnio.set(r.anio, (totalByAnio.get(r.anio) ?? 0) + r.gasto);
+      if (r.servicioKey === item.servicioKey) {
+        thisServiceByAnio.set(r.anio, (thisServiceByAnio.get(r.anio) ?? 0) + r.gasto);
+      }
+    }
+    return [...thisServiceByAnio.keys()]
+      .sort((a, b) => a - b)
+      .map((anio) => {
+        const gasto = thisServiceByAnio.get(anio) ?? 0;
+        const yearTotal = totalByAnio.get(anio) ?? 0;
+        const pct = yearTotal > 0 ? (gasto / yearTotal) * 100 : 0;
+        return { anio, gasto, pct };
+      });
+  }, [gastoAnualServicioReal, item.servicioKey]);
+
   return (
     <button
       type="button"
@@ -363,35 +386,27 @@ function ServicioCardUI({
           Predominio: {item.gruposDominantes.slice(0, 2).map((g) => `${g.label} ${g.pctServicio.toFixed(0)}%`).join(' · ')}
         </p>
       )}
-      {item.gastoPorAnio.length > 1 && (() => {
-        const totalAnios = item.gastoPorAnio.reduce((s, r) => s + r.gasto, 0);
-        const maxGasto   = Math.max(...item.gastoPorAnio.map((r) => r.gasto));
-        return (
-          <div className="mt-3 border-t border-white/60 pt-2.5 space-y-2.5">
-            {item.gastoPorAnio.map((r) => {
-              const pct    = totalAnios > 0 ? (r.gasto / totalAnios) * 100 : 0;
-              const barPct = maxGasto > 0   ? (r.gasto / maxGasto)  * 100 : 0;
-              return (
-                <div key={r.anio}>
-                  <div className="flex items-center justify-between gap-1 text-[11px] mb-1">
-                    <span className="font-semibold text-slate-700 w-9 shrink-0">{r.anio}</span>
-                    <span className="text-slate-400 shrink-0">({pct.toFixed(1)}%)</span>
-                    <span className="tabular-nums text-slate-700 font-medium ml-auto shrink-0">
-                      {fmtEur(r.gasto)}
-                    </span>
-                  </div>
-                  <div className="h-1.5 w-full rounded-full overflow-hidden" style={{ backgroundColor: hexToRgba(color, 0.15) }}>
-                    <div
-                      className="h-full rounded-full"
-                      style={{ width: `${barPct}%`, backgroundColor: color, opacity: 0.75 }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        );
-      })()}
+      {anioRows.length > 1 && (
+        <div className="mt-3 border-t border-white/60 pt-2.5 space-y-2.5">
+          {anioRows.map((r) => (
+            <div key={r.anio}>
+              <div className="flex items-center justify-between gap-1 text-[11px] mb-1">
+                <span className="font-semibold text-slate-700 w-9 shrink-0">{r.anio}</span>
+                <span className="text-slate-400 shrink-0">({r.pct.toFixed(1)}%)</span>
+                <span className="tabular-nums text-slate-700 font-medium ml-auto shrink-0">
+                  {fmtEur(r.gasto)}
+                </span>
+              </div>
+              <div className="h-1.5 w-full rounded-full overflow-hidden" style={{ backgroundColor: hexToRgba(color, 0.15) }}>
+                <div
+                  className="h-full rounded-full"
+                  style={{ width: `${Math.min(r.pct, 100)}%`, backgroundColor: color, opacity: 0.75 }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </button>
   );
 }
@@ -546,58 +561,26 @@ function GastoAnualRefChart({
   onClickAnio: (anio: number) => void;
   anioSeleccionado: number | null;
 }) {
-  const OTROS_KEY = '__otros__';
-  const OTROS_COLOR = '#94a3b8'; // slate-400 — gris neutro para servicios pequeños
-
-  // Agrupar por año y servicio → formato para barras apiladas.
-  // Servicios con < PCT_THRESHOLD del gasto total se fusionan en "Otros servicios".
-  const PCT_THRESHOLD = 0.03;
-  const { anios, serviciosMostrados, chartData } = useMemo(() => {
-    const anioSet = new Set<number>();
-    const totalPorServicio = new Map<string, { label: string; gasto: number }>();
+  // Total por año + desglose por servicio ordenado por gasto desc
+  const { chartData, serviciosByAnio } = useMemo(() => {
+    const totalByAnio = new Map<number, number>();
+    const detailByAnio = new Map<number, Array<{ key: string; label: string; gasto: number }>>();
     for (const r of gastoAnualServicioReal) {
-      anioSet.add(r.anio);
-      const prev = totalPorServicio.get(r.servicioKey) ?? { label: r.servicio, gasto: 0 };
-      totalPorServicio.set(r.servicioKey, { label: r.servicio, gasto: prev.gasto + r.gasto });
+      totalByAnio.set(r.anio, (totalByAnio.get(r.anio) ?? 0) + r.gasto);
+      if (!detailByAnio.has(r.anio)) detailByAnio.set(r.anio, []);
+      detailByAnio.get(r.anio)!.push({ key: r.servicioKey, label: r.servicio, gasto: r.gasto });
     }
-    const grandTotal = [...totalPorServicio.values()].reduce((s, v) => s + v.gasto, 0);
-
-    const principales: Array<{ key: string; label: string }> = [];
-    const menores:    Array<string> = [];
-    for (const [key, { label, gasto }] of totalPorServicio.entries()) {
-      if (grandTotal > 0 && gasto / grandTotal >= PCT_THRESHOLD) {
-        principales.push({ key, label });
-      } else {
-        menores.push(key);
-      }
+    const anios = [...totalByAnio.keys()].sort((a, b) => a - b);
+    const chartData = anios.map((anio) => ({
+      anio: String(anio),
+      anioNum: anio,
+      total: totalByAnio.get(anio) ?? 0,
+    }));
+    // Ordenar servicios de mayor a menor gasto para el tooltip
+    for (const [anio, rows] of detailByAnio.entries()) {
+      detailByAnio.set(anio, rows.sort((a, b) => b.gasto - a.gasto));
     }
-    principales.sort(
-      (a, b) => (totalPorServicio.get(b.key)?.gasto ?? 0) - (totalPorServicio.get(a.key)?.gasto ?? 0),
-    );
-
-    const hayOtros = menores.length > 0;
-    const serviciosMostrados = hayOtros
-      ? [...principales, { key: OTROS_KEY, label: 'Otros servicios' }]
-      : principales;
-
-    const anios = [...anioSet].sort((a, b) => a - b);
-    const rowsByKey = new Map<string, Map<number, number>>();
-    for (const r of gastoAnualServicioReal) {
-      const key = menores.includes(r.servicioKey) ? OTROS_KEY : r.servicioKey;
-      if (!rowsByKey.has(key)) rowsByKey.set(key, new Map());
-      const m = rowsByKey.get(key)!;
-      m.set(r.anio, (m.get(r.anio) ?? 0) + r.gasto);
-    }
-
-    const chartData = anios.map((anio) => {
-      const row: Record<string, unknown> = { anio: String(anio), anioNum: anio };
-      for (const { key } of serviciosMostrados) {
-        row[key] = rowsByKey.get(key)?.get(anio) ?? 0;
-      }
-      return row;
-    });
-    return { anios, serviciosMostrados, chartData };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    return { chartData, serviciosByAnio: detailByAnio };
   }, [gastoAnualServicioReal]);
 
   if (!chartData.length) return null;
@@ -607,31 +590,48 @@ function GastoAnualRefChart({
     if (barData?.anioNum) onClickAnio(Number(barData.anioNum));
   };
 
+  // Tooltip personalizado con desglose por servicio
+  function AnualTooltip({
+    active, payload,
+  }: { active?: boolean; payload?: Array<{ payload: { anioNum: number; total: number; anio: string } }> }) {
+    if (!active || !payload?.length) return null;
+    const { anioNum, total, anio } = payload[0]!.payload;
+    const rows = serviciosByAnio.get(anioNum) ?? [];
+    return (
+      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs shadow-lg min-w-[220px]">
+        <p className="font-bold text-slate-800 mb-2">{anio} — {fmtEur(total)}</p>
+        {rows.map((s) => {
+          const pct = total > 0 ? (s.gasto / total) * 100 : 0;
+          return (
+            <div key={s.key} className="flex items-center justify-between gap-3 py-0.5">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="h-2 w-2 rounded-sm flex-shrink-0" style={{ backgroundColor: getServiceColor(s.key) }} />
+                <span className="truncate text-slate-600">{s.label}</span>
+              </div>
+              <span className="tabular-nums font-semibold text-slate-800 flex-shrink-0">
+                {fmtEur(s.gasto)}
+                <span className="ml-1 font-normal text-slate-400">({pct.toFixed(1)}%)</span>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold text-slate-700">Referencia anual del gasto valorizado por servicio</h3>
-          <p className="mt-1 text-xs text-slate-400">
-            Haz clic en un año para filtrar el análisis a ese período.{' '}
-            {anioSeleccionado && (
-              <span className="font-medium text-teal-700">Año {anioSeleccionado} seleccionado.</span>
-            )}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-x-4 gap-y-1">
-          {serviciosMostrados.map(({ key, label }) => (
-            <span key={key} className="flex items-center gap-1 text-[11px] text-slate-600">
-              <span
-                className="inline-block h-2.5 w-2.5 rounded-sm flex-shrink-0"
-                style={{ backgroundColor: key === OTROS_KEY ? OTROS_COLOR : getServiceColor(key) }}
-              />
-              {label}
-            </span>
-          ))}
-        </div>
+      <div className="mb-4">
+        <h3 className="text-sm font-semibold text-slate-700">Referencia anual del gasto valorizado</h3>
+        <p className="mt-1 text-xs text-slate-400">
+          Haz clic en un año para filtrar el análisis a ese período.
+          {anioSeleccionado && (
+            <> <span className="font-medium text-teal-700">Año {anioSeleccionado} seleccionado.</span></>
+          )}
+          {' '}Pasa el cursor sobre cada barra para ver el desglose por servicio.
+        </p>
       </div>
-      <ResponsiveContainer width="100%" height={240}>
+      <ResponsiveContainer width="100%" height={220}>
         <BarChart
           data={chartData}
           margin={{ top: 8, right: 12, left: 0, bottom: 8 }}
@@ -640,38 +640,21 @@ function GastoAnualRefChart({
           <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
           <XAxis dataKey="anio" tick={{ fontSize: 10, fill: '#64748b' }} />
           <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} tickFormatter={(v) => fmtEurShort(Number(v))} width={72} />
-          <Tooltip
-            formatter={(value: unknown, name: unknown) => [fmtEur(Number(value)), String(name)]}
-            labelFormatter={(label) => String(label)}
-          />
-          {serviciosMostrados.map(({ key, label }, idx) => {
-            const isLast = idx === serviciosMostrados.length - 1;
-            const fillColor = key === OTROS_KEY ? OTROS_COLOR : getServiceColor(key);
-            return (
-              <Bar
-                key={key}
-                dataKey={key}
-                name={label}
-                stackId="a"
-                fill={fillColor}
-                radius={isLast ? [6, 6, 0, 0] : [0, 0, 0, 0]}
-                onClick={handleBarClick}
-              >
-                {chartData.map((d) => (
-                  <Cell
-                    key={String(d.anio)}
-                    fill={fillColor}
-                    opacity={anioSeleccionado && Number(d.anioNum) !== anioSeleccionado ? 0.35 : 0.9}
-                  />
-                ))}
-              </Bar>
-            );
-          })}
+          <Tooltip content={<AnualTooltip />} />
+          <Bar dataKey="total" name="Gasto total" radius={[6, 6, 0, 0]} onClick={handleBarClick}>
+            {chartData.map((d) => (
+              <Cell
+                key={d.anio}
+                fill={SERIES_COLORS.gasto}
+                opacity={anioSeleccionado && d.anioNum !== anioSeleccionado ? 0.3 : 0.88}
+              />
+            ))}
+          </Bar>
         </BarChart>
       </ResponsiveContainer>
       {anioSeleccionado && (
         <p className="mt-2 text-center text-[11px] text-slate-500">
-          Año {anioSeleccionado} activo · haz clic en otra barra o usa los presets para cambiar el período
+          Año {anioSeleccionado} activo · haz clic en otra barra o en un preset para cambiar el período
         </p>
       )}
     </div>
@@ -1381,6 +1364,7 @@ export default function AnalisisOncologiaPage() {
                   item={item}
                   selected={servicioSel === item.servicio}
                   onClick={() => handleSelectServicio(servicioSel === item.servicio ? null : item.servicio)}
+                  gastoAnualServicioReal={datos.gastoAnualServicioReal}
                 />
               ))}
             </div>
