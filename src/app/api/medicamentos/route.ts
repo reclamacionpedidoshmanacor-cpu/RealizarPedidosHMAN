@@ -16,8 +16,6 @@ import {
 
 export const runtime = 'nodejs';
 
-const MAX_ALERTAS_EN_CATALOGO = 500;
-
 export async function GET(req: NextRequest) {
   try {
     const session = requireApiSession(req);
@@ -35,10 +33,9 @@ export async function GET(req: NextRequest) {
 
     const rows = await listMedicamentosByArea(area);
     const cns = rows.map((r) => r.cn);
-    const alertas =
-      cns.length <= MAX_ALERTAS_EN_CATALOGO
-        ? await loadAlertasSuministroPorCnsSafe(cns)
-        : {};
+    // Las alertas de suministro/proveedor son relevantes en todas las áreas,
+    // incluido Almacén, cuyo catálogo supera habitualmente los 500 artículos.
+    const alertas = await loadAlertasSuministroPorCnsSafe(cns);
     const enriched = rows.map((row) => ({
       ...row,
       alertaSuministro: alertaSuministroParaCn(alertas, row.cn),

@@ -8,6 +8,16 @@ export async function GET(req: NextRequest) {
   const session = requireApiSession(req);
   if (!session.ok) return session.response;
 
+  // Las tendencias y comparativas de consumo solo aplican al área de Oncología.
+  // Para el resto de áreas conservamos el mismo contrato JSON sin consultar Neon.
+  if (session.area !== 'oncologia') {
+    return NextResponse.json({
+      suben: [],
+      bajan: [],
+      resumen: { totalSuben: 0, totalBajan: 0 },
+    });
+  }
+
   try {
     const data = await getMovimientosConsumo(session.area);
     return NextResponse.json(data);
