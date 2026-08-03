@@ -13,10 +13,10 @@ export async function POST(req: NextRequest) {
 
   const res = NextResponse.json({ ok: true });
   res.cookies.set('auth_session', 'authenticated', {
-    httpOnly: true, sameSite: 'lax', path: '/', maxAge: 60 * 60 * 12, // 12h
+    httpOnly: true, secure: true, sameSite: 'lax', path: '/', maxAge: 60 * 60 * 12, // 12h
   });
   res.cookies.set('area_session', areaId, {
-    httpOnly: false, sameSite: 'lax', path: '/', maxAge: 60 * 60 * 12,
+    httpOnly: false, secure: true, sameSite: 'lax', path: '/', maxAge: 60 * 60 * 12,
   });
   return res;
 }
