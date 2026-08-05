@@ -13,6 +13,10 @@ import { loadPedidosResumenAlmacenPorCns, cnClavePedidos } from '@/lib/pedidos-p
 import { loadAlertasSuministroPorCnsSafe, alertaSuministroParaCn } from '@/lib/alertas-suministro';
 import { isMSE } from '@/lib/utils';
 import {
+  calcularStockUnidadesContadas,
+  stockCajasDesdeUnidades,
+} from '@/lib/cantidades';
+import {
   crearRecuento,
   eliminarLineaPedidoAlmacenPorCnEnSesion,
   getCantidadesPedidoAlmacenParaVista,
@@ -529,11 +533,12 @@ export async function POST(req: NextRequest) {
       }
 
       const unidadesPorCaja = Number(med.unidadesPorCaja) > 0 ? Number(med.unidadesPorCaja) : 1;
-      const extraCajas = Math.floor(unidadesSueltas / unidadesPorCaja);
-      const sueltasNormalizadas = unidadesSueltas % unidadesPorCaja;
-      const cajasNormalizadas = cajas + extraCajas;
-      const stockUnidades = cajasNormalizadas * unidadesPorCaja + sueltasNormalizadas;
-      const stockCajas = stockUnidades / unidadesPorCaja;
+      const stockUnidades = calcularStockUnidadesContadas({
+        cajasEnteras: cajas,
+        unidadesSueltas,
+        unidadesPorCaja,
+      });
+      const stockCajas = stockCajasDesdeUnidades(stockUnidades, unidadesPorCaja);
 
       preparadas.push({
         cn,

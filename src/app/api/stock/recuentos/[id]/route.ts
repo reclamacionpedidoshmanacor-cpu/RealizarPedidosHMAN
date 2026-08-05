@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
 import {
+  normalizeStockUnidades,
+  stockCajasDesdeUnidades,
+} from '@/lib/cantidades';
+import {
   actualizarLineaRecuento,
   eliminarRecuentoPendiente,
   finalizarRecuentoDesdeStock,
@@ -12,11 +16,7 @@ import {
 
 export const runtime = 'nodejs';
 
-function roundTwoDecimals(value: number): number {
-  return Math.round(value * 100) / 100;
-}
-
-type BulkLineaInput = { cn: string; stockCajas: number };
+type BulkLineaInput = { cn: string; stockUnidades: number };
 
 function parseBulkLineas(body: unknown): BulkLineaInput[] | null {
   if (!body || typeof body !== 'object') return null;
@@ -27,13 +27,13 @@ function parseBulkLineas(body: unknown): BulkLineaInput[] | null {
   for (const raw of maybeLineas) {
     if (!raw || typeof raw !== 'object') return null;
     const cn = String((raw as { cn?: unknown }).cn ?? '').trim();
-    const stockCajas = Number((raw as { stockCajas?: unknown }).stockCajas);
+    const stockUnidades = Number((raw as { stockUnidades?: unknown }).stockUnidades);
     if (!cn) return null;
-    if (!Number.isFinite(stockCajas) || stockCajas < 0) return null;
-    dedup.set(cn, roundTwoDecimals(stockCajas));
+    if (!Number.isSafeInteger(stockUnidades) || stockUnidades < 0) return null;
+    dedup.set(cn, normalizeStockUnidades(stockUnidades));
   }
 
-  return [...dedup.entries()].map(([cn, stockCajas]) => ({ cn, stockCajas }));
+  return [...dedup.entries()].map(([cn, stockUnidades]) => ({ cn, stockUnidades }));
 }
 
 export async function GET(
@@ -123,8 +123,8 @@ export async function PATCH(
           const actualizado = await actualizarLineaRecuento(
             recuentoId,
             linea.cn,
-            linea.stockCajas,
-            linea.stockCajas * med.unidadesPorCaja
+            stockCajasDesdeUnidades(linea.stockUnidades, med.unidadesPorCaja),
+            linea.stockUnidades
           );
           if (!actualizado) erroresActualizacion.push(linea.cn);
         }
@@ -175,13 +175,13 @@ export async function PATCH(
     }
 
     const cn = String((body as { cn?: unknown }).cn ?? '').trim();
-    const stockCajasRaw = Number((body as { stockCajas?: unknown }).stockCajas);
-    const stockCajas = roundTwoDecimals(stockCajasRaw);
+    const stockUnidadesRaw = Number((body as { stockUnidades?: unknown }).stockUnidades);
 
     if (!cn) return NextResponse.json({ error: 'CN requerido.' }, { status: 400 });
-    if (!Number.isFinite(stockCajasRaw) || stockCajasRaw < 0) {
-      return NextResponse.json({ error: 'Stock en cajas no valido.' }, { status: 400 });
+    if (!Number.isSafeInteger(stockUnidadesRaw) || stockUnidadesRaw < 0) {
+      return NextResponse.json({ error: 'Las unidades totales deben ser un entero no negativo.' }, { status: 400 });
     }
+    const stockUnidades = normalizeStockUnidades(stockUnidadesRaw);
 
     const med = await getMedicamentoByCnArea(cn, session.area);
     if (!med) {
@@ -189,14 +189,21 @@ export async function PATCH(
     }
 
     const actualizado = await actualizarLineaRecuento(
-      recuentoId, cn, stockCajas, stockCajas * med.unidadesPorCaja
+      recuentoId,
+      cn,
+      stockCajasDesdeUnidades(stockUnidades, med.unidadesPorCaja),
+      stockUnidades
     );
 
     if (!actualizado) {
       return NextResponse.json({ error: 'Linea de recuento no encontrada.' }, { status: 404 });
     }
 
-    return NextResponse.json({ ok: true, stockCajas });
+    return NextResponse.json({
+      ok: true,
+      stockUnidades,
+      stockCajas: stockCajasDesdeUnidades(stockUnidades, med.unidadesPorCaja),
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Error inesperado';
     return NextResponse.json({ error: msg }, { status: 500 });

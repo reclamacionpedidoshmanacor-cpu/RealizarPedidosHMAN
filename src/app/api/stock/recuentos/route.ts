@@ -3,6 +3,11 @@ import { requireApiSession } from '@/lib/api-auth';
 import { parseSapExcel } from '@/lib/sap-parser';
 import { parseManualStockExcel } from '@/lib/manual-stock-parser';
 import {
+  calcularStockUnidadesContadas,
+  normalizeStockUnidades,
+  stockCajasDesdeUnidades,
+} from '@/lib/cantidades';
+import {
   actualizarPreciosCatalogoDesdeSap,
   crearRecuento,
   getLineasRecuento,
@@ -13,10 +18,6 @@ import {
 } from '@/lib/stock-propuesta-neon';
 
 export const runtime = 'nodejs';
-
-function roundOneDecimal(value: number): number {
-  return Math.round(value * 10) / 10;
-}
 
 function roundPrice(value: number): number {
   return Math.round(value * 1000000) / 1000000;
@@ -84,10 +85,17 @@ export async function POST(req: NextRequest) {
 
       if (origen === 'SAP') {
         const sapRow = row as { stockUnidades: number; valorTotal: number | null };
-        const stockCajas = roundOneDecimal(
-          med.unidadesPorCaja > 0 ? sapRow.stockUnidades / med.unidadesPorCaja : 0
-        );
-        lineasInsert.push({ cn: row.cn, stockUnidades: sapRow.stockUnidades, stockCajas, valorTotal: sapRow.valorTotal });
+        let stockUnidades: number;
+        try {
+          stockUnidades = normalizeStockUnidades(sapRow.stockUnidades);
+        } catch {
+          errores.push(
+            `[SAP] CN ${row.cn}: el stock de cierre debe contener unidades totales enteras.`
+          );
+          continue;
+        }
+        const stockCajas = stockCajasDesdeUnidades(stockUnidades, med.unidadesPorCaja);
+        lineasInsert.push({ cn: row.cn, stockUnidades, stockCajas, valorTotal: sapRow.valorTotal });
 
         if (sapRow.valorTotal != null) {
           const valorTotal = Number(sapRow.valorTotal);
@@ -107,12 +115,22 @@ export async function POST(req: NextRequest) {
           }
         }
       } else {
-        const manualRow = row as { stockCajas: number };
-        const stockCajas = roundOneDecimal(manualRow.stockCajas);
+        const manualRow = row as {
+          stockUnidades: number | null;
+          cajasEnteras: number | null;
+          unidadesSueltas: number | null;
+        };
+        const stockUnidades = manualRow.stockUnidades != null
+          ? normalizeStockUnidades(manualRow.stockUnidades)
+          : calcularStockUnidadesContadas({
+              cajasEnteras: manualRow.cajasEnteras ?? 0,
+              unidadesSueltas: manualRow.unidadesSueltas ?? 0,
+              unidadesPorCaja: med.unidadesPorCaja,
+            });
         lineasInsert.push({
           cn: row.cn,
-          stockCajas,
-          stockUnidades: stockCajas * med.unidadesPorCaja,
+          stockCajas: stockCajasDesdeUnidades(stockUnidades, med.unidadesPorCaja),
+          stockUnidades,
           valorTotal: null,
         });
       }

@@ -43,6 +43,15 @@ export async function POST(req: NextRequest) {
     if (rows.length === 0) {
       return NextResponse.json({ error: 'No hay filas para exportar.' }, { status: 400 });
     }
+    if (rows.some((row) => !Number.isInteger(Number(row.manualUnidades)))) {
+      return NextResponse.json(
+        {
+          error:
+            'No se puede exportar: el recuento manual contiene unidades fraccionarias y debe revisarse.',
+        },
+        { status: 409 }
+      );
+    }
 
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Ajustes Inventario');

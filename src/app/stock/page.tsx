@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { normalizeStockCajas } from '@/lib/cantidades';
 
 type RecuentoCabecera = {
   id: number;
@@ -44,43 +45,30 @@ type RecuentoDetalleResponse = {
 };
 
 const stockCajasFormatter = new Intl.NumberFormat('es-ES', {
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 4,
 });
 
 const stockUnidadesFormatter = new Intl.NumberFormat('es-ES', {
   minimumFractionDigits: 0,
-  maximumFractionDigits: 2,
+  maximumFractionDigits: 0,
 });
 
-function roundTwoDecimals(value: number): number {
-  return Math.round(value * 100) / 100;
-}
-
 function formatStockCajas(value: number): string {
-  return stockCajasFormatter.format(roundTwoDecimals(value));
+  return stockCajasFormatter.format(normalizeStockCajas(value));
 }
 
 function formatStockUnidades(value: number): string {
   return stockUnidadesFormatter.format(value);
 }
 
-function parseStockCajasInput(input: string): number | null {
+function parseStockUnidadesInput(input: string): number | null {
   const raw = input.trim();
   if (!raw) return null;
-
-  const compact = raw.replace(/\s/g, '');
-  let normalized = compact;
-
-  if (compact.includes(',')) {
-    normalized = compact.replace(/\./g, '').replace(',', '.');
-  } else if (/^\d{1,3}(\.\d{3})+$/.test(compact)) {
-    normalized = compact.replace(/\./g, '');
-  }
-
+  const normalized = raw.replace(/[\s.]/g, '');
+  if (!/^\d+$/.test(normalized)) return null;
   const value = Number(normalized);
-  if (!Number.isFinite(value) || value < 0) return null;
-  return roundTwoDecimals(value);
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 export default function StockPage() {
@@ -114,7 +102,7 @@ export default function StockPage() {
       setData(payload);
       const nextEdits: Record<string, string> = {};
       for (const row of payload.pendienteLineas as RecuentoLinea[]) {
-        nextEdits[row.cn] = formatStockCajas(row.stockCajas);
+        nextEdits[row.cn] = formatStockUnidades(row.stockUnidades);
       }
       setEdits(nextEdits);
       setHistoricoExpanded({});
@@ -179,33 +167,33 @@ export default function StockPage() {
 
   const normalizeEdit = (cn: string, fallback: number) => {
     setEdits((prev) => {
-      const parsed = parseStockCajasInput(prev[cn] ?? '');
+      const parsed = parseStockUnidadesInput(prev[cn] ?? '');
       return {
         ...prev,
-        [cn]: parsed == null ? formatStockCajas(fallback) : formatStockCajas(parsed),
+        [cn]: parsed == null ? formatStockUnidades(fallback) : formatStockUnidades(parsed),
       };
     });
   };
 
   const saveRecuentoCompleto = async () => {
     if (!data?.pendiente) return;
-    const cambios: Array<{ cn: string; stockCajas: number }> = [];
+    const cambios: Array<{ cn: string; stockUnidades: number }> = [];
     const invalidos: string[] = [];
 
     for (const linea of data.pendienteLineas) {
-      const input = edits[linea.cn] ?? formatStockCajas(linea.stockCajas);
-      const parsed = parseStockCajasInput(input);
+      const input = edits[linea.cn] ?? formatStockUnidades(linea.stockUnidades);
+      const parsed = parseStockUnidadesInput(input);
       if (parsed == null) {
         invalidos.push(linea.cn);
         continue;
       }
-      if (Math.abs(parsed - roundTwoDecimals(linea.stockCajas)) > 0.0001) {
-        cambios.push({ cn: linea.cn, stockCajas: parsed });
+      if (parsed !== linea.stockUnidades) {
+        cambios.push({ cn: linea.cn, stockUnidades: parsed });
       }
     }
 
     if (invalidos.length > 0) {
-      toast.error(`Hay valores de cajas no validos (${invalidos.join(', ')}).`);
+      toast.error(`Hay valores de unidades no válidos (${invalidos.join(', ')}).`);
       return;
     }
 
@@ -531,8 +519,8 @@ export default function StockPage() {
                         <th className="px-3 py-2 text-left">CN</th>
                         <th className="px-3 py-2 text-left">Principio activo</th>
                         <th className="px-3 py-2 text-left">Marca / nombre comercial</th>
-                        <th className="px-3 py-2 text-center">Stock cajas</th>
-                        <th className="px-3 py-2 text-center">Stock unidades</th>
+                        <th className="px-3 py-2 text-center">Cajas equivalentes</th>
+                        <th className="px-3 py-2 text-center">Unidades totales</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -543,35 +531,30 @@ export default function StockPage() {
                           </td>
                           <td className="px-3 py-2 font-semibold text-slate-800">{linea.principioActivo ?? '—'}</td>
                           <td className="px-3 py-2 text-[12px] italic text-slate-400 font-sans">{linea.nombre}</td>
+                          <td className="px-3 py-2 text-center tabular-nums text-slate-500">
+                            {(() => {
+                              const unidades = parseStockUnidadesInput(
+                                edits[linea.cn] ?? formatStockUnidades(linea.stockUnidades)
+                              );
+                              if (unidades == null) return formatStockCajas(linea.stockCajas);
+                              const upc = linea.unidadesPorCaja > 0 ? linea.unidadesPorCaja : 1;
+                              return formatStockCajas(unidades / upc);
+                            })()}
+                          </td>
                           <td className="px-3 py-2 text-center">
                             <input
                               type="text"
-                              inputMode="decimal"
-                              value={edits[linea.cn] ?? formatStockCajas(linea.stockCajas)}
+                              inputMode="numeric"
+                              value={edits[linea.cn] ?? formatStockUnidades(linea.stockUnidades)}
                               onChange={(e) =>
                                 setEdits((prev) => ({
                                   ...prev,
                                   [linea.cn]: e.target.value,
                                 }))
                               }
-                              onBlur={() => normalizeEdit(linea.cn, linea.stockCajas)}
+                              onBlur={() => normalizeEdit(linea.cn, linea.stockUnidades)}
                               className="w-28 rounded border border-slate-300 px-2 py-1 text-center"
                             />
-                          </td>
-                          <td className="px-3 py-2 text-center">
-                            {(() => {
-                              const parsed = parseStockCajasInput(
-                                edits[linea.cn] ?? formatStockCajas(linea.stockCajas)
-                              );
-                              if (parsed == null) return formatStockUnidades(linea.stockUnidades);
-                              const unidadesPreview = parsed * (linea.unidadesPorCaja > 0 ? linea.unidadesPorCaja : 1);
-                              const changed = Math.abs(unidadesPreview - linea.stockUnidades) > 0.0001;
-                              return (
-                                <span className={changed ? 'font-semibold text-indigo-700' : undefined}>
-                                  {formatStockUnidades(unidadesPreview)}
-                                </span>
-                              );
-                            })()}
                           </td>
                         </tr>
                       ))}

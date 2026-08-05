@@ -2,14 +2,13 @@ import { neon } from '@neondatabase/serverless';
 import { calcularCajasPropuestas, buildStockTransitoCajasByCn } from '@/lib/propuesta';
 import { loadCantidadTransitoByCn } from '@/lib/pedidos-pendientes';
 import { ORIGEN_PEDIDO_ALMACEN, isAlmacenArea, nombrePropuestaAlmacen, nombrePropuestaUbicacion, grupoLetrasAlmacenFar, grupoLetrasAlmacenFarFromLetter, ubicacionAlmacenUsaLetras, type AlmacenFarGrupoLetras } from '@/lib/almacen';
-import { roundCajas } from '@/lib/utils';
-
-const NUTRICION_AREA = 'nutricion';
-
-function normalizeCajasSnap(area: string, value: number): number {
-  if (area === NUTRICION_AREA) return roundCajas(value);
-  return Math.round(value);
-}
+import {
+  normalizeNivelStock,
+  normalizePedidoCajas,
+  normalizeStockCajas,
+  normalizeStockUnidades,
+  stockCajasDesdeUnidades,
+} from '@/lib/cantidades';
 
 function getDb() {
   const url = process.env.REALIZAR_PEDIDOS_DATABASE_URL ?? process.env.DATABASE_URL;
@@ -22,104 +21,6 @@ function numOrNull(v: unknown): number | null {
   if (v == null) return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
-}
-
-let ensurePropuestasObservacionesSchemaPromise: Promise<void> | null = null;
-async function ensurePropuestasObservacionesSchema(): Promise<void> {
-  if (!ensurePropuestasObservacionesSchemaPromise) {
-    const sql = getDb();
-    ensurePropuestasObservacionesSchemaPromise = (async () => {
-      await sql`
-        ALTER TABLE propuestas
-        ADD COLUMN IF NOT EXISTS observaciones TEXT;
-      `;
-    })();
-  }
-  await ensurePropuestasObservacionesSchemaPromise;
-}
-
-let ensurePropuestasLineasSchemaPromise: Promise<void> | null = null;
-async function ensurePropuestasLineasSchema(): Promise<void> {
-  if (!ensurePropuestasLineasSchemaPromise) {
-    const sql = getDb();
-    ensurePropuestasLineasSchemaPromise = (async () => {
-      await sql`
-        ALTER TABLE propuestas_lineas
-        ADD COLUMN IF NOT EXISTS stock_transito_snap REAL NOT NULL DEFAULT 0;
-      `;
-      await sql`
-        ALTER TABLE propuestas_lineas
-        ADD COLUMN IF NOT EXISTS proveedor_local BOOLEAN DEFAULT FALSE;
-      `;
-    })();
-  }
-  await ensurePropuestasLineasSchemaPromise;
-}
-
-let ensureNutricionDecimalSchemaPromise: Promise<void> | null = null;
-
-/** Cajas con un decimal en Nutrición: columnas de propuesta y recuento deben aceptar NUMERIC. */
-export async function ensureNutricionDecimalSchema(area: string): Promise<void> {
-  if (area !== NUTRICION_AREA) return;
-  if (!ensureNutricionDecimalSchemaPromise) {
-    const sql = getDb();
-    ensureNutricionDecimalSchemaPromise = (async () => {
-      await sql`
-        ALTER TABLE propuestas_lineas
-          ALTER COLUMN stock_actual TYPE NUMERIC(12,1)
-          USING round(stock_actual::numeric, 1);
-      `;
-      await sql`
-        ALTER TABLE propuestas_lineas
-          ALTER COLUMN stock_minimo_snap TYPE NUMERIC(12,1)
-          USING round(stock_minimo_snap::numeric, 1);
-      `;
-      await sql`
-        ALTER TABLE propuestas_lineas
-          ALTER COLUMN punto_pedido_snap TYPE NUMERIC(12,1)
-          USING round(punto_pedido_snap::numeric, 1);
-      `;
-      await sql`
-        ALTER TABLE propuestas_lineas
-          ALTER COLUMN stock_maximo_snap TYPE NUMERIC(12,1)
-          USING round(stock_maximo_snap::numeric, 1);
-      `;
-      await sql`
-        ALTER TABLE propuestas_lineas
-          ALTER COLUMN stock_objetivo_snap TYPE NUMERIC(12,1)
-          USING round(stock_objetivo_snap::numeric, 1);
-      `;
-      await sql`
-        ALTER TABLE propuestas_lineas
-          ALTER COLUMN cajas_propuestas TYPE NUMERIC(12,1)
-          USING round(cajas_propuestas::numeric, 1);
-      `;
-      await sql`
-        ALTER TABLE propuestas_lineas
-          ALTER COLUMN cajas_validadas TYPE NUMERIC(12,1)
-          USING round(cajas_validadas::numeric, 1);
-      `;
-      await sql`
-        ALTER TABLE propuestas_lineas
-          ALTER COLUMN stock_transito_snap TYPE NUMERIC(12,1)
-          USING round(stock_transito_snap::numeric, 1);
-      `;
-      await sql`
-        ALTER TABLE stock_registros
-          ALTER COLUMN stock_cajas TYPE NUMERIC(12,1)
-          USING round(stock_cajas::numeric, 1);
-      `;
-      await sql`
-        ALTER TABLE stock_registros
-          ALTER COLUMN stock_unidades TYPE NUMERIC(12,2)
-          USING round(stock_unidades::numeric, 2);
-      `;
-    })().catch((err) => {
-      ensureNutricionDecimalSchemaPromise = null;
-      throw err;
-    });
-  }
-  await ensureNutricionDecimalSchemaPromise;
 }
 
 // ---------------------------------------------------------------------------
@@ -372,9 +273,17 @@ export async function insertarLineasRecuento(
 ): Promise<void> {
   const sql = getDb();
   for (const l of lineas) {
+    const stockUnidades = normalizeStockUnidades(l.stockUnidades);
     await sql`
       INSERT INTO stock_registros (importacion_id, cn, stock_unidades, stock_cajas, valor_total)
-      VALUES (${importacionId}, ${l.cn}, ${l.stockUnidades}, ${l.stockCajas}, ${l.valorTotal});
+      SELECT
+        ${importacionId},
+        m.cn,
+        ${stockUnidades},
+        round(${stockUnidades}::numeric / GREATEST(m.unidades_por_caja, 1), 4),
+        ${l.valorTotal}
+      FROM medicamentos m
+      WHERE m.cn = ${l.cn};
     `;
   }
 }
@@ -402,14 +311,23 @@ export async function getRecuentoById(id: number): Promise<{ id: number; area: s
 }
 
 export async function actualizarLineaRecuento(
-  importacionId: number, cn: string, stockCajas: number, stockUnidades: number
+  importacionId: number, cn: string, _stockCajas: number, stockUnidades: number
 ): Promise<boolean> {
+  const unidadesExactas = normalizeStockUnidades(stockUnidades);
   const sql = getDb();
   const rows = (await sql`
-    UPDATE stock_registros
-    SET stock_cajas = ${stockCajas}, stock_unidades = ${stockUnidades}
-    WHERE importacion_id = ${importacionId} AND cn = ${cn}
-    RETURNING id;
+    UPDATE stock_registros sr
+    SET
+      stock_unidades = ${unidadesExactas},
+      stock_cajas = round(
+        ${unidadesExactas}::numeric / GREATEST(m.unidades_por_caja, 1),
+        4
+      )
+    FROM medicamentos m
+    WHERE sr.importacion_id = ${importacionId}
+      AND sr.cn = ${cn}
+      AND m.cn = sr.cn
+    RETURNING sr.id;
   `) as Array<{ id: number }>;
   return rows.length > 0;
 }
@@ -435,9 +353,17 @@ export async function upsertLineaRecuento(
   }
 
   const sql = getDb();
+  const unidadesExactas = normalizeStockUnidades(line.stockUnidades);
   await sql`
     INSERT INTO stock_registros (importacion_id, cn, stock_unidades, stock_cajas, valor_total)
-    VALUES (${importacionId}, ${line.cn}, ${line.stockUnidades}, ${line.stockCajas}, ${line.valorTotal});
+    SELECT
+      ${importacionId},
+      m.cn,
+      ${unidadesExactas},
+      round(${unidadesExactas}::numeric / GREATEST(m.unidades_por_caja, 1), 4),
+      ${line.valorTotal}
+    FROM medicamentos m
+    WHERE m.cn = ${line.cn};
   `;
   return 'inserted';
 }
@@ -516,7 +442,6 @@ export async function sincronizarRecuentoPendienteConCatalogo(
   importacionId: number,
   area: string
 ): Promise<{ updated: number; cnsSinCatalogo: string[] }> {
-  await ensureNutricionDecimalSchema(area);
   const sql = getDb();
   const recuento = (await sql`
     SELECT id
@@ -530,7 +455,10 @@ export async function sincronizarRecuentoPendienteConCatalogo(
 
   const updatedRows = (await sql`
     UPDATE stock_registros sr
-    SET stock_unidades = sr.stock_cajas * m.unidades_por_caja
+    SET stock_cajas = round(
+      sr.stock_unidades::numeric / GREATEST(m.unidades_por_caja, 1),
+      4
+    )
     FROM medicamentos m
     WHERE sr.importacion_id = ${importacionId}
       AND m.cn = sr.cn
@@ -820,7 +748,6 @@ export async function finalizarRecuentoDesdeStock(
 export async function getBorradorPropuesta(
   area: string, importacionStockId: number
 ): Promise<PropuestaCabecera | null> {
-  await ensurePropuestasObservacionesSchema();
   const sql = getDb();
   const rows = (await sql`
     SELECT id, area, estado, fecha_generacion::text, tramitada_en::text, observaciones
@@ -845,7 +772,6 @@ export async function getBorradorPropuestaAlmacenPorNombre(
   importacionStockId: number,
   nombreGrupo: string
 ): Promise<PropuestaCabecera | null> {
-  await ensurePropuestasObservacionesSchema();
   const sql = getDb();
   const rows = (await sql`
     SELECT id, area, estado, fecha_generacion::text, tramitada_en::text, observaciones
@@ -873,7 +799,6 @@ export async function getUltimaPropuestaPorNombre(
   importacionStockId: number,
   nombreGrupo: string
 ): Promise<PropuestaCabecera | null> {
-  await ensurePropuestasObservacionesSchema();
   const sql = getDb();
   const rows = (await sql`
     SELECT id, area, estado, fecha_generacion::text, tramitada_en::text, observaciones
@@ -910,7 +835,6 @@ export async function listBorradoresPropuestaAlmacen(
   area: string,
   importacionStockId: number
 ): Promise<Array<PropuestaCabecera & { totalLineas: number }>> {
-  await ensurePropuestasObservacionesSchema();
   const sql = getDb();
   const rows = (await sql`
     SELECT
@@ -952,7 +876,6 @@ export async function listBloquesPropuestaRecuento(
   const ubicaciones = await listUbicacionesConStockEnRecuento(importacionStockId, area);
   if (ubicaciones.length === 0) return [];
 
-  await ensurePropuestasObservacionesSchema();
   const sql = getDb();
   const propuestasRows = (await sql`
     SELECT
@@ -1052,7 +975,6 @@ export async function crearPropuesta(
   importacionStockId: number,
   observaciones?: string | null
 ): Promise<PropuestaCabecera> {
-  await ensurePropuestasObservacionesSchema();
   const sql = getDb();
   const obs = observaciones?.trim() || null;
   const rows = (await sql`
@@ -1072,7 +994,6 @@ export async function crearPropuesta(
 }
 
 export async function getLineasPropuesta(propuestaId: number): Promise<PropuestaLinea[]> {
-  await ensurePropuestasLineasSchema();
   const sql = getDb();
   const rows = (await sql`
     SELECT pl.id, pl.cn, pl.nombre_medicamento, pl.unidades_por_caja,
@@ -1129,11 +1050,10 @@ export async function getRecuentoConStockParaPropuesta(
   area: string,
   ubicacion?: string | null
 ) {
-  await ensureNutricionDecimalSchema(area);
   const sql = getDb();
   const rows = (await sql`
     SELECT
-      sr.id, sr.cn, sr.stock_cajas,
+      sr.id, sr.cn, sr.stock_unidades,
       m.nombre, m.unidades_por_caja, m.ubicacion,
       m.principio_activo,
       so.stock_minimo, so.punto_pedido, so.stock_maximo
@@ -1143,13 +1063,20 @@ export async function getRecuentoConStockParaPropuesta(
     WHERE sr.importacion_id = ${importacionId}
     ORDER BY sr.cn ASC, sr.id DESC;
   `) as Array<{
-    id: number; cn: string; stock_cajas: string;
+    id: number; cn: string; stock_unidades: string;
     nombre: string; unidades_por_caja: number; ubicacion: string | null; principio_activo: string | null;
     stock_minimo: number | null; punto_pedido: number | null; stock_maximo: number | null;
   }>;
 
-  const dedup = new Map<string, typeof rows[number]>();
-  for (const row of rows) {
+  const normalizedRows = rows.map((row) => ({
+    ...row,
+    stock_cajas: stockCajasDesdeUnidades(
+      Number(row.stock_unidades),
+      Number(row.unidades_por_caja)
+    ),
+  }));
+  const dedup = new Map<string, typeof normalizedRows[number]>();
+  for (const row of normalizedRows) {
     if (!dedup.has(row.cn)) dedup.set(row.cn, row);
   }
   const uniqueRows = [...dedup.values()].sort((a, b) =>
@@ -1194,7 +1121,6 @@ export async function eliminarBorradorPropuestaSinEtiqueta(
   area: string,
   importacionStockId: number
 ): Promise<void> {
-  await ensurePropuestasObservacionesSchema();
   const sql = getDb();
   await sql`
     DELETE FROM propuestas_lineas pl
@@ -1328,11 +1254,10 @@ export async function getRecuentoInactivosParaVisualizacion(
   area: string,
   ubicacion?: string | null
 ) {
-  await ensureNutricionDecimalSchema(area);
   const sql = getDb();
   const rows = (await sql`
     SELECT
-      sr.id, sr.cn, sr.stock_cajas,
+      sr.id, sr.cn, sr.stock_unidades,
       m.nombre, m.principio_activo, m.unidades_por_caja, m.ubicacion,
       so.stock_minimo, so.punto_pedido, so.stock_maximo
     FROM stock_registros sr
@@ -1341,13 +1266,20 @@ export async function getRecuentoInactivosParaVisualizacion(
     WHERE sr.importacion_id = ${importacionId}
     ORDER BY sr.cn ASC, sr.id DESC;
   `) as Array<{
-    id: number; cn: string; stock_cajas: string;
+    id: number; cn: string; stock_unidades: string;
     nombre: string; principio_activo: string | null; unidades_por_caja: number; ubicacion: string | null;
     stock_minimo: number | null; punto_pedido: number | null; stock_maximo: number | null;
   }>;
 
-  const dedup = new Map<string, typeof rows[number]>();
-  for (const row of rows) {
+  const normalizedRows = rows.map((row) => ({
+    ...row,
+    stock_cajas: stockCajasDesdeUnidades(
+      Number(row.stock_unidades),
+      Number(row.unidades_por_caja)
+    ),
+  }));
+  const dedup = new Map<string, typeof normalizedRows[number]>();
+  for (const row of normalizedRows) {
     if (!dedup.has(row.cn)) dedup.set(row.cn, row);
   }
   const uniqueRows = [...dedup.values()].sort((a, b) =>
@@ -1391,10 +1323,10 @@ export async function buildLineasPropuestaParaUi(
   }));
 
   const inactivasUi: PropuestaLineaUI[] = inactivas.map((r, idx) => {
-    const stockActual = normalizeCajasSnap(area, Number(r.stock_cajas));
-    const stockMinimo = normalizeCajasSnap(area, Number(r.stock_minimo ?? 0));
-    const puntoPedido = normalizeCajasSnap(area, Number(r.punto_pedido ?? 0));
-    const stockMaximo = normalizeCajasSnap(area, Number(r.stock_maximo ?? r.stock_minimo ?? 0));
+    const stockActual = normalizeStockCajas(Number(r.stock_cajas));
+    const stockMinimo = normalizeNivelStock(Number(r.stock_minimo ?? 0));
+    const puntoPedido = normalizeNivelStock(Number(r.punto_pedido ?? 0));
+    const stockMaximo = normalizeNivelStock(Number(r.stock_maximo ?? r.stock_minimo ?? 0));
     return {
       id: -(idx + 1),
       cn: r.cn,
@@ -1428,17 +1360,14 @@ export async function insertarLineasPropuesta(
     stockMinimo: number; puntoPedido: number; stockMaximo: number; stockTransito: number;
   }>
 ): Promise<void> {
-  await ensurePropuestasLineasSchema();
-  await ensureNutricionDecimalSchema(area);
   const sql = getDb();
   for (const r of rows) {
-    const stockCajas = normalizeCajasSnap(area, r.stockCajas);
-    const stockMinimo = normalizeCajasSnap(area, r.stockMinimo);
-    const puntoPedido = normalizeCajasSnap(area, r.puntoPedido);
-    const stockMaximo = normalizeCajasSnap(area, r.stockMaximo);
-    const stockTransito = normalizeCajasSnap(area, r.stockTransito);
-    const cajasPropuestas = normalizeCajasSnap(
-      area,
+    const stockCajas = normalizeStockCajas(r.stockCajas);
+    const stockMinimo = normalizeNivelStock(r.stockMinimo);
+    const puntoPedido = normalizeNivelStock(r.puntoPedido);
+    const stockMaximo = normalizeNivelStock(r.stockMaximo);
+    const stockTransito = normalizeStockCajas(r.stockTransito);
+    const cajasPropuestas = normalizePedidoCajas(
       calcularCajasPropuestas(
         stockCajas,
         puntoPedido,
@@ -1468,8 +1397,6 @@ export async function reemplazarLineasPropuestaDesdeRecuento(
   stockTransitoByCn: Record<string, number>,
   ubicacion?: string | null
 ): Promise<number> {
-  await ensurePropuestasLineasSchema();
-  await ensureNutricionDecimalSchema(area);
   const sql = getDb();
   const filas = await getRecuentoConStockParaPropuesta(importacionId, area, ubicacion);
 
@@ -1478,13 +1405,12 @@ export async function reemplazarLineasPropuestaDesdeRecuento(
 
   for (const r of filas) {
     const unidadesPorCaja = Number(r.unidades_por_caja);
-    const stockTransito = normalizeCajasSnap(area, Number(stockTransitoByCn[r.cn] ?? 0));
-    const stockMinimo = normalizeCajasSnap(area, Number(r.stock_minimo ?? 0));
-    const puntoPedido = normalizeCajasSnap(area, Number(r.punto_pedido ?? 0));
-    const stockMaximo = normalizeCajasSnap(area, Number(r.stock_maximo ?? r.stock_minimo ?? 0));
-    const stockActual = normalizeCajasSnap(area, Number(r.stock_cajas));
-    const cajasPropuestas = normalizeCajasSnap(
-      area,
+    const stockTransito = normalizeStockCajas(Number(stockTransitoByCn[r.cn] ?? 0));
+    const stockMinimo = normalizeNivelStock(Number(r.stock_minimo ?? 0));
+    const puntoPedido = normalizeNivelStock(Number(r.punto_pedido ?? 0));
+    const stockMaximo = normalizeNivelStock(Number(r.stock_maximo ?? r.stock_minimo ?? 0));
+    const stockActual = normalizeStockCajas(Number(r.stock_cajas));
+    const cajasPropuestas = normalizePedidoCajas(
       calcularCajasPropuestas(
         stockActual,
         puntoPedido,
@@ -1514,13 +1440,12 @@ export async function actualizarStockTransitoSnapshot(
   propuestaId: number,
   stockTransitoByCn: Record<string, number>
 ): Promise<void> {
-  await ensurePropuestasLineasSchema();
   const sql = getDb();
   const cns = Object.keys(stockTransitoByCn);
   if (cns.length === 0) return;
 
   for (const cn of cns) {
-    const value = Number(stockTransitoByCn[cn] ?? 0);
+    const value = normalizeStockCajas(Number(stockTransitoByCn[cn] ?? 0));
     await sql`
       UPDATE propuestas_lineas
       SET stock_transito_snap = ${value}
@@ -1565,9 +1490,8 @@ export async function actualizarLineaPropuesta(
   ajustado: boolean,
   proveedorLocal?: boolean,
 ): Promise<void> {
-  await ensureNutricionDecimalSchema(area);
   const sql = getDb();
-  const cajas = normalizeCajasSnap(area, cajasValidadas);
+  const cajas = normalizePedidoCajas(cajasValidadas);
   if (proveedorLocal !== undefined) {
     await sql`
       UPDATE propuestas_lineas
@@ -1599,9 +1523,8 @@ export async function actualizarCalculoAutomaticoLineaPropuesta(
   unidadesPorCaja: number,
   area: string
 ): Promise<void> {
-  await ensureNutricionDecimalSchema(area);
   const sql = getDb();
-  const cajas = normalizeCajasSnap(area, cajasPropuestas);
+  const cajas = normalizePedidoCajas(cajasPropuestas);
   await sql`
     UPDATE propuestas_lineas
     SET cajas_propuestas = ${cajas},
@@ -1620,7 +1543,6 @@ export async function getPropuestaById(propuestaId: number): Promise<{
   tramitadaEn: string | null;
   observaciones: string | null;
 } | null> {
-  await ensurePropuestasObservacionesSchema();
   const sql = getDb();
   const rows = (await sql`
     SELECT id, area, estado, importacion_stock_id, fecha_generacion::text, tramitada_en::text, observaciones
@@ -1652,7 +1574,6 @@ export async function sincronizarPropuestaDesdeCatalogoAlmacen(
   propuestaId: number,
   area: string
 ): Promise<SincronizarCatalogoPropuestaResult> {
-  await ensurePropuestasLineasSchema();
   const propuesta = await getPropuestaById(propuestaId);
   if (!propuesta) {
     throw new Error('Propuesta no encontrada.');
@@ -1691,7 +1612,9 @@ export async function sincronizarPropuestaDesdeCatalogoAlmacen(
       continue;
     }
 
-    const cajas = linea.cajasValidadas ?? linea.cajasPropuestas;
+    const cajas = normalizePedidoCajas(
+      linea.cajasValidadas ?? linea.cajasPropuestas
+    );
     const unidadesFinal = Math.round(cajas * med.unidadesPorCaja);
     const nombre = med.nombre || linea.nombreMedicamento;
 
@@ -1732,7 +1655,9 @@ export async function tramitarPropuesta(
   }>;
 
   for (const l of lineas) {
-    const cajasFinales = l.cajas_validadas ?? l.cajas_propuestas;
+    const cajasFinales = normalizePedidoCajas(
+      num(l.cajas_validadas ?? l.cajas_propuestas)
+    );
     await sql`
       UPDATE propuestas_lineas
       SET cajas_validadas = ${cajasFinales},
@@ -1847,7 +1772,6 @@ export type PropuestaResumen = {
 };
 
 export async function listPropuestasByArea(area: string): Promise<PropuestaResumen[]> {
-  await ensurePropuestasObservacionesSchema();
   const sql = getDb();
   const rows = (await sql`
     SELECT
@@ -2055,7 +1979,6 @@ export async function ensureSesionPedidoAlmacen(area: string): Promise<{
 }
 
 export async function getCantidadesPedidoAlmacen(propuestaId: number): Promise<Record<string, number>> {
-  await ensurePropuestasLineasSchema();
   const sql = getDb();
   const rows = (await sql`
     SELECT cn, COALESCE(cajas_validadas, cajas_propuestas) AS cajas
@@ -2090,7 +2013,6 @@ export async function eliminarLineaPedidoAlmacenPorCnEnSesion(
   importacionId: number,
   cn: string
 ): Promise<boolean> {
-  await ensurePropuestasLineasSchema();
   const sql = getDb();
   const deleted = (await sql`
     DELETE FROM propuestas_lineas pl
@@ -2107,7 +2029,6 @@ export async function eliminarLineaPedidoAlmacenPorCn(
   propuestaId: number,
   cn: string
 ): Promise<boolean> {
-  await ensurePropuestasLineasSchema();
   const sql = getDb();
   const deleted = (await sql`
     DELETE FROM propuestas_lineas
@@ -2129,7 +2050,6 @@ export async function upsertLineasPedidoAlmacen(
     stockMaximo: number | null;
   }>
 ): Promise<{ upserted: number; eliminadas: number }> {
-  await ensurePropuestasLineasSchema();
   const sql = getDb();
   let upserted = 0;
   let eliminadas = 0;
@@ -2149,10 +2069,11 @@ export async function upsertLineasPedidoAlmacen(
       continue;
     }
 
-    const stockMin = linea.stockMinimo ?? 0;
-    const punto = linea.puntoPedido ?? 0;
-    const stockMax = linea.stockMaximo ?? 0;
-    const unidadesFinal = linea.cajasPedidas * linea.unidadesPorCaja;
+    const cajasPedidas = normalizePedidoCajas(linea.cajasPedidas);
+    const stockMin = normalizeNivelStock(linea.stockMinimo ?? 0);
+    const punto = normalizeNivelStock(linea.puntoPedido ?? 0);
+    const stockMax = normalizeNivelStock(linea.stockMaximo ?? 0);
+    const unidadesFinal = cajasPedidas * Math.trunc(linea.unidadesPorCaja);
 
     if (existing[0]) {
       await sql`
@@ -2166,8 +2087,8 @@ export async function upsertLineasPedidoAlmacen(
           punto_pedido_snap = ${punto},
           stock_maximo_snap = ${stockMax},
           stock_objetivo_snap = ${stockMax},
-          cajas_propuestas = ${linea.cajasPedidas},
-          cajas_validadas = ${linea.cajasPedidas},
+          cajas_propuestas = ${cajasPedidas},
+          cajas_validadas = ${cajasPedidas},
           unidades_final = ${unidadesFinal},
           ajustado = true,
           motivo_ajuste = NULL,
@@ -2183,7 +2104,7 @@ export async function upsertLineasPedidoAlmacen(
         ) VALUES (
           ${propuestaId}, ${linea.cn}, ${linea.nombre}, ${linea.unidadesPorCaja},
           0, 0, ${stockMin}, ${punto}, ${stockMax}, ${stockMax},
-          ${linea.cajasPedidas}, ${linea.cajasPedidas}, ${unidadesFinal}, true
+          ${cajasPedidas}, ${cajasPedidas}, ${unidadesFinal}, true
         );
       `;
     }

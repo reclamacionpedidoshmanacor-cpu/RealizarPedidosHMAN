@@ -1,4 +1,9 @@
 import { cnClavePedidos } from '@/lib/pedidos-pendientes';
+import {
+  calcularPedidoCajas,
+  normalizeStockCajas,
+  stockUnidadesDesdeCajas,
+} from '@/lib/cantidades';
 
 export const MOTIVOS_AJUSTE = [
   'Prevision aumento de consumo',
@@ -16,33 +21,18 @@ export function calcularCajasPropuestas(
   puntoPedido: number,
   stockMaximo: number,
   stockTransito = 0,
-  unidadesPorCaja = 1,
+  _unidadesPorCaja = 1,
 ): number {
-  const stockDisponible = stockActual + stockTransito;
-  if (stockDisponible > puntoPedido) return 0;
-
-  const faltanteCajas = Math.max(stockMaximo - stockDisponible, 0);
-  if (faltanteCajas <= 0) return 0;
-
-  const upc = Number.isFinite(unidadesPorCaja) && unidadesPorCaja > 0
-    ? Math.trunc(unidadesPorCaja)
-    : 1;
-
-  // Múltiplo de pedido = unidades/caja → pedir siempre cajas completas
-  const faltanteUnidades = Math.ceil(faltanteCajas * upc);
-  const unidadesPedido = Math.ceil(faltanteUnidades / upc) * upc;
-  return unidadesPedido / upc;
+  return calcularPedidoCajas({
+    stockActual,
+    stockTransito,
+    puntoPedido,
+    stockMaximo,
+  });
 }
 
 export function cajasAUnidades(cajas: number, unidadesPorCaja: number): number {
-  const upc = Number.isFinite(unidadesPorCaja) && unidadesPorCaja > 0
-    ? Math.trunc(unidadesPorCaja)
-    : 1;
-  return Math.round(cajas * upc);
-}
-
-function roundThreeDecimals(value: number): number {
-  return Math.round(value * 1000) / 1000;
+  return Math.round(stockUnidadesDesdeCajas(cajas, unidadesPorCaja));
 }
 
 /** Convierte unidades pendientes de pedidos SAP a cajas por CN. */
@@ -62,7 +52,7 @@ export function buildStockTransitoCajasByCn(
     }
     const cajasTransito =
       row.unidadesPorCaja > 0 ? unidadesTransito / row.unidadesPorCaja : unidadesTransito;
-    byCn[row.cn] = cajasTransito > 0 ? roundThreeDecimals(cajasTransito) : 0;
+    byCn[row.cn] = cajasTransito > 0 ? normalizeStockCajas(cajasTransito) : 0;
   }
   return byCn;
 }

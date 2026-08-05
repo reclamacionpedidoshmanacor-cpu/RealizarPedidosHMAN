@@ -29,6 +29,19 @@ export async function POST(req: NextRequest) {
     if (rows.length === 0) {
       return NextResponse.json({ error: 'No hay filas para guardar.' }, { status: 400 });
     }
+    const manualesInvalidas = rows.filter((row) => {
+      const unidades = Number(row.manualUnidades);
+      return !Number.isFinite(unidades) || !Number.isInteger(unidades) || unidades < 0;
+    });
+    if (manualesInvalidas.length > 0) {
+      return NextResponse.json(
+        {
+          error:
+            'No se puede guardar el inventario: las unidades del recuento manual deben ser totales exactos enteros.',
+        },
+        { status: 409 }
+      );
+    }
     if (!body.manualRecuento?.id) {
       return NextResponse.json({ error: 'Falta recuento manual.' }, { status: 400 });
     }

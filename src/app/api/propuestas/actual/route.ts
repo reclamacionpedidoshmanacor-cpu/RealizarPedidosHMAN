@@ -4,7 +4,6 @@ import { isAlmacenArea, ubicacionDesdeEtiquetaPropuesta } from '@/lib/almacen';
 import {
   abrirPropuestaUbicacionDesdeRecuento,
   actualizarCalculoAutomaticoLineaPropuesta,
-  ensureNutricionDecimalSchema,
   buildLineasPropuestaParaUi,
   getPedidoAlmacenPendiente,
   getPropuestaById,
@@ -210,7 +209,6 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    await ensureNutricionDecimalSchema(session.area);
     let bloques = await listBloquesPropuestaRecuento(session.area, recuento.id);
     if (!(propuestaIdParam > 0) && !ubicacionParam) {
       return NextResponse.json({

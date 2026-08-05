@@ -31,9 +31,9 @@ export const medicamentos = sqliteTable('medicamentos', {
 export const stockObjetivo = sqliteTable('stock_objetivo', {
   id:              integer('id').primaryKey({ autoIncrement: true }),
   cn:              text('cn').notNull().references(() => medicamentos.cn),
-  stockMinimo:     integer('stock_minimo').notNull().default(0),     // en cajas
-  puntoPedido:     integer('punto_pedido').notNull().default(0),     // en cajas — nivel que dispara el pedido
-  stockMaximo:     integer('stock_maximo'),                          // en cajas, opcional
+  stockMinimo:     real('stock_minimo').notNull().default(0),        // cajas; admite decimales
+  puntoPedido:     real('punto_pedido').notNull().default(0),        // cajas; nivel que dispara el pedido
+  stockMaximo:     real('stock_maximo'),                             // cajas, opcional
   actualizadoEn:   text('actualizado_en').notNull().default(sql`(datetime('now'))`),
 }, (t) => [unique('uq_stock_objetivo_cn').on(t.cn)]);
 
@@ -73,8 +73,8 @@ export const stockRegistros = sqliteTable('stock_registros', {
   id:              integer('id').primaryKey({ autoIncrement: true }),
   importacionId:   integer('importacion_id').notNull().references(() => importacionesStock.id),
   cn:              text('cn').notNull().references(() => medicamentos.cn),
-  stockUnidades:   real('stock_unidades').notNull(),                 // unidades totales de SAP
-  stockCajas:      real('stock_cajas').notNull(),                    // stock_unidades ÷ unidades_por_caja
+  stockUnidades:   integer('stock_unidades').notNull(),              // fuente de verdad: unidades exactas
+  stockCajas:      real('stock_cajas').notNull(),                    // equivalencia: stock_unidades ÷ unidades_por_caja
   valorTotal:      real('valor_total'),                              // Valor final SAP
 }, (t) => [
   index('idx_stock_importacion').on(t.importacionId),
@@ -107,10 +107,11 @@ export const propuestasLineas = sqliteTable('propuestas_lineas', {
   nombreMedicamento: text('nombre_medicamento'),
   unidadesPorCaja:   integer('unidades_por_caja').notNull().default(1),
   stockActual:       real('stock_actual').notNull(),                 // cajas en el momento de generar
-  stockMinimoSnap:   integer('stock_minimo_snap').notNull().default(0),
-  puntoPedidoSnap:   integer('punto_pedido_snap').notNull().default(0),
-  stockMaximoSnap:   integer('stock_maximo_snap').notNull().default(0),
-  stockObjetivoSnap: integer('stock_objetivo_snap').notNull(),       // stock óptimo snapshot
+  stockTransitoSnap: real('stock_transito_snap').notNull().default(0),
+  stockMinimoSnap:   real('stock_minimo_snap').notNull().default(0),
+  puntoPedidoSnap:   real('punto_pedido_snap').notNull().default(0),
+  stockMaximoSnap:   real('stock_maximo_snap').notNull().default(0),
+  stockObjetivoSnap: real('stock_objetivo_snap').notNull(),          // stock óptimo snapshot
   cajasPropuestas:   integer('cajas_propuestas').notNull(),          // calculado por sistema
   cajasValidadas:    integer('cajas_validadas'),                     // modificado por farmacéutico
   motivoAjuste:      text('motivo_ajuste'),
@@ -121,6 +122,7 @@ export const propuestasLineas = sqliteTable('propuestas_lineas', {
   ajustado:          integer('ajustado', { mode: 'boolean' }).notNull().default(false),
   excluido:          integer('excluido', { mode: 'boolean' }).notNull().default(false),
   observaciones:     text('observaciones'),
+  proveedorLocal:    integer('proveedor_local', { mode: 'boolean' }).notNull().default(false),
 }, (t) => [index('idx_lineas_propuesta').on(t.propuestaId)]);
 
 // ---------------------------------------------------------------------------

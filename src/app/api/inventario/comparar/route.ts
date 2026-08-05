@@ -65,6 +65,24 @@ export async function POST(req: NextRequest) {
       listMedicamentosByArea(session.area),
     ]);
 
+    const manualesInvalidas = manualLineas.filter(
+      (linea) => !Number.isInteger(Number(linea.stockUnidades))
+    );
+    if (manualesInvalidas.length > 0) {
+      const cns = manualesInvalidas.slice(0, 10).map((linea) => linea.cn).join(', ');
+      const resto = manualesInvalidas.length > 10
+        ? ` y ${manualesInvalidas.length - 10} más`
+        : '';
+      return NextResponse.json(
+        {
+          error:
+            `El recuento manual contiene unidades fraccionarias en ${manualesInvalidas.length} artículo(s) ` +
+            `(${cns}${resto}). Un inventario debe usar las unidades exactas contadas, sin redondearlas.`,
+        },
+        { status: 409 }
+      );
+    }
+
     const manualByCn = new Map(manualLineas.map((l) => [l.cn, l]));
     const catalogoByCn = new Map(catalogo.map((m) => [m.cn, m]));
 
@@ -122,9 +140,9 @@ export async function POST(req: NextRequest) {
         unidadesPorCaja: upc,
         precioCaja,
         precioUnidad: round3(precioUnidad),
-        manualUnidades: round3(manualUnidades),
-        sapUnidades: round3(sapUnidades),
-        ajusteUnidades: round3(ajusteUnidades),
+        manualUnidades,
+        sapUnidades,
+        ajusteUnidades,
         manualImporte: round3(manualImporte),
         sapImporte: round3(sapImporte),
         ajusteImporte: round3(ajusteImporte),
@@ -142,9 +160,9 @@ export async function POST(req: NextRequest) {
 
     const resumen = {
       totalLineas: rows.length,
-      totalManualUnidades: round3(rows.reduce((acc, r) => acc + r.manualUnidades, 0)),
-      totalSapUnidades: round3(rows.reduce((acc, r) => acc + r.sapUnidades, 0)),
-      totalAjusteUnidades: round3(rows.reduce((acc, r) => acc + r.ajusteUnidades, 0)),
+      totalManualUnidades: rows.reduce((acc, r) => acc + r.manualUnidades, 0),
+      totalSapUnidades: rows.reduce((acc, r) => acc + r.sapUnidades, 0),
+      totalAjusteUnidades: rows.reduce((acc, r) => acc + r.ajusteUnidades, 0),
       totalManualImporte: round3(rows.reduce((acc, r) => acc + r.manualImporte, 0)),
       totalSapImporte: round3(rows.reduce((acc, r) => acc + r.sapImporte, 0)),
       totalAjusteImporte: round3(rows.reduce((acc, r) => acc + r.ajusteImporte, 0)),

@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
-import { cnFromSapMaterial, isMSE, normalizarCnParaCima, roundCajas } from './utils';
+import { cnFromSapMaterial, isMSE, normalizarCnParaCima } from './utils';
 import type { AreaId } from './areas';
+import { normalizeNivelStock } from './cantidades';
 
 export interface CatalogoRow {
   cn: string;
@@ -142,12 +143,12 @@ function toIntOrNull(val: unknown): number | null {
 function toCajasOrNull(val: unknown): number | null {
   const n = parseDecimalExcel(val);
   if (n == null) return null;
-  return roundCajas(Math.max(0, n));
+  return normalizeNivelStock(n);
 }
 
 function cajasDesdeUdes(udes: number, unidadesPorCaja: number): number {
   if (unidadesPorCaja <= 0) return 0;
-  return roundCajas(udes / unidadesPorCaja);
+  return normalizeNivelStock(udes / unidadesPorCaja);
 }
 
 type NutricionStockKind = 'min' | 'max';
@@ -315,10 +316,10 @@ export function parseCatalogoExcel(buffer: Buffer): CatalogoParseResult {
 
     const cn = cnFromSapMaterial(sapRaw);
     const multiplo = parseInt(String(row[idx.multiplo] ?? '1'), 10);
-    const minimo   = parseInt(String(row[idx.minimo] ?? '0'), 10);
-    const pedido   = parseInt(String(row[idx.pedido] ?? '0'), 10);
+    const minimo   = parseDecimalExcel(row[idx.minimo]) ?? 0;
+    const pedido   = parseDecimalExcel(row[idx.pedido]) ?? 0;
     const maximoRaw = String(row[idx.maximo] ?? '').trim();
-    const maximo   = maximoRaw !== '' ? parseInt(maximoRaw, 10) : null;
+    const maximo   = maximoRaw !== '' ? parseDecimalExcel(row[idx.maximo]) : null;
 
     if (isNaN(multiplo) || multiplo <= 0) {
       errors.push(`Fila ${i + 1}: MultiploPedido inválido ("${row[idx.multiplo]}")`);
@@ -335,9 +336,9 @@ export function parseCatalogoExcel(buffer: Buffer): CatalogoParseResult {
       unidadesPorCaja: multiplo,
       activo:          parseBool(row[idx.activo]),
       mse:             isMSE(cn),
-      stockMinimo:     isNaN(minimo) ? 0 : minimo,
-      puntoPedido:     isNaN(pedido) ? 0 : pedido,
-      stockMaximo:     maximo !== null && isNaN(maximo) ? null : maximo,
+      stockMinimo:     normalizeNivelStock(minimo),
+      puntoPedido:     normalizeNivelStock(pedido),
+      stockMaximo:     maximo == null ? null : normalizeNivelStock(maximo),
     });
   }
 

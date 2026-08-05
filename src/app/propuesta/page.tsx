@@ -118,6 +118,10 @@ function fmtUnidades(value: number) {
   return new Intl.NumberFormat('es-ES', { maximumFractionDigits: 2 }).format(value);
 }
 
+function fmtStockCajas(value: number) {
+  return new Intl.NumberFormat('es-ES', { maximumFractionDigits: 4 }).format(value);
+}
+
 function lineasPedibles(lineas: Linea[]): Linea[] {
   return lineas.filter((linea) => linea.activo !== false);
 }
@@ -273,6 +277,8 @@ export default function PropuestaPage() {
     for (const linea of lineasPedibles(lineas)) {
       const draft   = edits[linea.id];
       if (!draft) continue;
+      if (!Number.isInteger(draft.cajasValidadas) || draft.cajasValidadas < 0)
+        return `"${linea.nombreMedicamento ?? linea.cn}": la cantidad a pedir debe ser un número entero de cajas.`;
       const ajustado = draft.cajasValidadas !== linea.cajasPropuestas;
       if (ajustado && !draft.motivoAjuste)
         return `"${linea.nombreMedicamento ?? linea.cn}": se ajustó la cantidad pero falta el motivo.`;
@@ -797,7 +803,7 @@ export default function PropuestaPage() {
                                     ? 'bg-rose-50 text-rose-800 ring-rose-200'
                                     : 'bg-sky-50 text-sky-800 ring-sky-200'
                               }`}>
-                                {Number(linea.stockActual).toFixed(1)}
+                                {fmtStockCajas(Number(linea.stockActual))}
                               </span>
                             </td>
                             <td className="px-4 py-3 text-center">
@@ -837,7 +843,7 @@ export default function PropuestaPage() {
                                     ? 'bg-rose-50 text-rose-800 ring-rose-200'
                                     : 'bg-sky-50 text-sky-800 ring-sky-200'
                               }`}>
-                                {Number(linea.stockActual).toFixed(1)}
+                                {fmtStockCajas(Number(linea.stockActual))}
                               </span>
                             </td>
                           </>
@@ -849,7 +855,7 @@ export default function PropuestaPage() {
                             <span className="text-slate-400">—</span>
                           ) : (
                             <span className="inline-block rounded-md bg-violet-50 px-3 py-1 text-base font-semibold tabular-nums text-violet-800 ring-1 ring-violet-200 not-italic">
-                              {Number(linea.stockTransito ?? 0).toFixed(1)}
+                              {fmtStockCajas(Number(linea.stockTransito ?? 0))}
                             </span>
                           )}
                         </td>
@@ -887,6 +893,7 @@ export default function PropuestaPage() {
                               <input
                                 type="number"
                                 min={0}
+                                step={1}
                                 value={cajasVal}
                                 onChange={e => setLinea(linea.id, { cajasValidadas: Math.max(Number(e.target.value), 0) })}
                                 className={`w-20 rounded-md border px-2 py-1 text-center text-base font-semibold tabular-nums transition-colors outline-none ${
@@ -1283,7 +1290,7 @@ export default function PropuestaPage() {
                                                   ? 'inline-block rounded-md bg-rose-50 px-2 py-0.5 text-rose-800 ring-1 ring-rose-200'
                                                   : ''
                                             }>
-                                              {Number(linea.stockActual).toFixed(1)}
+                                              {fmtStockCajas(Number(linea.stockActual))}
                                             </span>
                                           </td>
                                           <td className="px-3 py-2 text-center tabular-nums not-italic">
@@ -1295,11 +1302,11 @@ export default function PropuestaPage() {
                                           <td className="px-3 py-2 text-center tabular-nums not-italic">
                                             {fmtUnidades(Number(linea.stockActual) * Number(linea.unidadesPorCaja))}
                                           </td>
-                                          <td className="px-3 py-2 text-center tabular-nums not-italic">{Number(linea.stockActual).toFixed(1)}</td>
+                                          <td className="px-3 py-2 text-center tabular-nums not-italic">{fmtStockCajas(Number(linea.stockActual))}</td>
                                         </>
                                       )}
                                       <td className="px-3 py-2 text-center tabular-nums not-italic">
-                                        {inactiva ? '—' : Number(linea.stockTransito ?? 0).toFixed(1)}
+                                        {inactiva ? '—' : fmtStockCajas(Number(linea.stockTransito ?? 0))}
                                       </td>
                                       <td className="px-3 py-2 text-center tabular-nums not-italic">
                                         {inactiva ? '—' : linea.cajasPropuestas}

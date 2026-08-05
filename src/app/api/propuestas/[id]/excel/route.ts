@@ -3,6 +3,7 @@ import ExcelJS from 'exceljs';
 import { requireApiSession } from '@/lib/api-auth';
 import { getPropuestaById, getLineasParaExcel, marcarExcelGenerado } from '@/lib/stock-propuesta-neon';
 import { toSapCode } from '@/lib/propuesta';
+import { normalizePedidoCajas } from '@/lib/cantidades';
 
 export const runtime = 'nodejs';
 
@@ -11,8 +12,10 @@ function unidadesFinales(linea: {
   cajasValidadas: number | null;
   unidadesPorCaja: number;
 }): number {
-  const cajasFinales = linea.cajasValidadas ?? linea.cajasPropuestas;
-  return Math.round(cajasFinales * linea.unidadesPorCaja);
+  const cajasFinales = normalizePedidoCajas(
+    linea.cajasValidadas ?? linea.cajasPropuestas
+  );
+  return cajasFinales * Math.trunc(linea.unidadesPorCaja);
 }
 
 export async function GET(
