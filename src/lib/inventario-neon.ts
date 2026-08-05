@@ -303,6 +303,19 @@ export async function actualizarNotasInventario(
   };
 }
 
+export async function eliminarInventario(id: number, area: string): Promise<boolean> {
+  const sql = getDb();
+  await ensureTablesInventario();
+
+  const rows = (await sql`
+    DELETE FROM inventarios
+    WHERE id = ${id} AND area = ${area}
+    RETURNING id
+  `) as Array<{ id: number }>;
+
+  return rows.length > 0;
+}
+
 function mapCabecera(r: Record<string, unknown>): InventarioCabecera {
   const warningsRaw = r.warnings;
   let warnings: string[] = [];

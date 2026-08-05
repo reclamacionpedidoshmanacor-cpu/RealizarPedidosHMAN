@@ -91,6 +91,7 @@ export default function InventarioPage() {
   const [savingNotas, setSavingNotas] = useState(false);
   const [loadingGuardados, setLoadingGuardados] = useState(true);
   const [loadingDetalle, setLoadingDetalle] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [guardados, setGuardados] = useState<InventarioGuardadoResumen[]>([]);
   const [resultado, setResultado] = useState<InventarioResultado | null>(null);
   const [notas, setNotas] = useState('');
@@ -255,6 +256,32 @@ export default function InventarioPage() {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
       setLoadingDetalle(false);
+    }
+  };
+
+  const handleEliminarGuardado = async (id: number) => {
+    const confirmed = confirm(
+      `¿Eliminar definitivamente el inventario #${id}?\n\n` +
+      'Se borrará el inventario y sus líneas asociadas. El recuento manual no se eliminará. Esta acción no se puede deshacer.',
+    );
+    if (!confirmed) return;
+
+    setDeletingId(id);
+    try {
+      const res = await fetch(`/api/inventario/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? 'No se pudo eliminar el inventario.');
+
+      setGuardados((prev) => prev.filter((inventario) => inventario.id !== id));
+      if (resultado?.inventarioId === id) {
+        setResultado(null);
+        setNotas('');
+      }
+      toast.success(`Inventario #${id} eliminado.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -473,13 +500,31 @@ export default function InventarioPage() {
                     <td className="px-3 py-2 text-right tabular-nums">{inv.totalLineas}</td>
                     <td className="px-3 py-2 text-right tabular-nums font-medium">{fmtCurrency(inv.totalAjusteImporte)}</td>
                     <td className="px-3 py-2 text-center">
-                      <button
-                        onClick={() => void handleAbrirGuardado(inv.id)}
-                        disabled={loadingDetalle}
-                        className="rounded border border-slate-200 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                      >
-                        Abrir
-                      </button>
+                      <div className="inline-flex items-center gap-1.5">
+                        <button
+                          onClick={() => void handleAbrirGuardado(inv.id)}
+                          disabled={loadingDetalle || deletingId === inv.id}
+                          className="rounded border border-slate-200 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          Abrir
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleEliminarGuardado(inv.id)}
+                          disabled={deletingId !== null}
+                          title={`Eliminar inventario #${inv.id}`}
+                          aria-label={`Eliminar inventario #${inv.id}`}
+                          className="inline-flex h-7 w-7 items-center justify-center rounded border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50"
+                        >
+                          {deletingId === inv.id ? (
+                            <span className="text-[10px]">…</span>
+                          ) : (
+                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5" />
+                            </svg>
+                          )}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

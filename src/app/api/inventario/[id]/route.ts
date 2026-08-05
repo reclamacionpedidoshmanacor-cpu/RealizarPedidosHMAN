@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
-import { actualizarNotasInventario, getInventarioDetalle } from '@/lib/inventario-neon';
+import {
+  actualizarNotasInventario,
+  eliminarInventario,
+  getInventarioDetalle,
+} from '@/lib/inventario-neon';
 
 export const runtime = 'nodejs';
 
@@ -91,6 +95,32 @@ export async function PATCH(
     }
 
     return NextResponse.json({ ok: true, ...updated });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Error inesperado';
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
+}
+
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const session = requireApiSession(req);
+  if (!session.ok) return session.response;
+
+  try {
+    const { id: idRaw } = await params;
+    const id = Number(idRaw);
+    if (!Number.isFinite(id) || id <= 0) {
+      return NextResponse.json({ error: 'ID no válido.' }, { status: 400 });
+    }
+
+    const deleted = await eliminarInventario(id, session.area);
+    if (!deleted) {
+      return NextResponse.json({ error: 'Inventario no encontrado.' }, { status: 404 });
+    }
+
+    return NextResponse.json({ ok: true });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Error inesperado';
     return NextResponse.json({ error: msg }, { status: 500 });
