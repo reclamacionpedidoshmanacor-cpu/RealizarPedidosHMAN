@@ -47,6 +47,8 @@ export type InventarioCabecera = {
   totalLineas: number;
   resumen: InventarioResumen;
   warnings: string[];
+  notas: string | null;
+  notasActualizadasEn: string | null;
 };
 
 export type InventarioLinea = InventarioLineaInput & { id: number };
@@ -69,9 +71,13 @@ export async function ensureTablesInventario() {
       total_manual_importe NUMERIC,
       total_sap_importe NUMERIC,
       total_ajuste_importe NUMERIC,
-      warnings JSONB NOT NULL DEFAULT '[]'::jsonb
+      warnings JSONB NOT NULL DEFAULT '[]'::jsonb,
+      notas TEXT,
+      notas_actualizadas_en TIMESTAMPTZ
     )
   `;
+  await sql`ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS notas TEXT`;
+  await sql`ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS notas_actualizadas_en TIMESTAMPTZ`;
   await sql`
     CREATE TABLE IF NOT EXISTS inventarios_lineas (
       id SERIAL PRIMARY KEY,
@@ -100,6 +106,7 @@ export async function guardarInventario(
   manualRecuento: { id: number; fechaRecuento: string; estado: string; totalLineas: number },
   sapFicheroNombre: string,
   warnings: string[],
+  notas: string | null,
   resumen: InventarioResumen,
   lineas: InventarioLineaInput[],
 ): Promise<number> {
@@ -112,14 +119,14 @@ export async function guardarInventario(
       sap_fichero_nombre, total_lineas,
       total_manual_unidades, total_sap_unidades, total_ajuste_unidades,
       total_manual_importe, total_sap_importe, total_ajuste_importe,
-      warnings
+      warnings, notas, notas_actualizadas_en
     )
     VALUES (
       ${area}, ${manualRecuento.id}, ${manualRecuento.fechaRecuento}, ${manualRecuento.estado},
       ${sapFicheroNombre}, ${resumen.totalLineas},
       ${resumen.totalManualUnidades}, ${resumen.totalSapUnidades}, ${resumen.totalAjusteUnidades},
       ${resumen.totalManualImporte}, ${resumen.totalSapImporte}, ${resumen.totalAjusteImporte},
-      ${JSON.stringify(warnings)}::jsonb
+      ${JSON.stringify(warnings)}::jsonb, ${notas}, ${notas ? new Date().toISOString() : null}
     )
     RETURNING id
   `) as Array<{ id: number }>;
@@ -165,7 +172,7 @@ export async function listInventarios(area: string, limit = 50): Promise<Inventa
       sap_fichero_nombre, guardado_en::text, total_lineas,
       total_manual_unidades, total_sap_unidades, total_ajuste_unidades,
       total_manual_importe, total_sap_importe, total_ajuste_importe,
-      warnings
+      warnings, notas, notas_actualizadas_en::text
     FROM inventarios
     WHERE area = ${area}
     ORDER BY guardado_en DESC
@@ -188,7 +195,7 @@ export async function getInventarioDetalle(
       sap_fichero_nombre, guardado_en::text, total_lineas,
       total_manual_unidades, total_sap_unidades, total_ajuste_unidades,
       total_manual_importe, total_sap_importe, total_ajuste_importe,
-      warnings
+      warnings, notas, notas_actualizadas_en::text
     FROM inventarios
     WHERE id = ${id} AND area = ${area}
   `) as Array<Record<string, unknown>>;
@@ -209,6 +216,29 @@ export async function getInventarioDetalle(
   return {
     cabecera: mapCabecera(cabRows[0]),
     lineas: lineRows.map(mapLinea),
+  };
+}
+
+export async function actualizarNotasInventario(
+  id: number,
+  area: string,
+  notas: string | null,
+): Promise<{ notas: string | null; notasActualizadasEn: string } | null> {
+  const sql = getDb();
+  await ensureTablesInventario();
+
+  const rows = (await sql`
+    UPDATE inventarios
+    SET notas = ${notas}, notas_actualizadas_en = NOW()
+    WHERE id = ${id} AND area = ${area}
+    RETURNING notas, notas_actualizadas_en::text
+  `) as Array<{ notas: string | null; notas_actualizadas_en: string }>;
+
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    notas: row.notas,
+    notasActualizadasEn: row.notas_actualizadas_en,
   };
 }
 
@@ -245,6 +275,8 @@ function mapCabecera(r: Record<string, unknown>): InventarioCabecera {
       totalAjusteImporte: num(r.total_ajuste_importe),
     },
     warnings,
+    notas: r.notas ? String(r.notas) : null,
+    notasActualizadasEn: r.notas_actualizadas_en ? String(r.notas_actualizadas_en) : null,
   };
 }
 

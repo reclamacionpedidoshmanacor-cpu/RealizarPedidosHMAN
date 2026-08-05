@@ -35,11 +35,14 @@ type InventarioGuardadoResumen = {
   guardadoEn: string;
   totalLineas: number;
   totalAjusteImporte: number;
+  notas: string | null;
 };
 
 type InventarioResultado = {
   inventarioId?: number;
   guardadoEn?: string;
+  notas?: string | null;
+  notasActualizadasEn?: string | null;
   manualRecuento: {
     id: number;
     fechaRecuento: string;
@@ -82,10 +85,12 @@ export default function InventarioPage() {
   const [comparing, setComparing] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [savingNotas, setSavingNotas] = useState(false);
   const [loadingGuardados, setLoadingGuardados] = useState(true);
   const [loadingDetalle, setLoadingDetalle] = useState(false);
   const [guardados, setGuardados] = useState<InventarioGuardadoResumen[]>([]);
   const [resultado, setResultado] = useState<InventarioResultado | null>(null);
+  const [notas, setNotas] = useState('');
   const [search, setSearch] = useState('');
 
   const loadRecuentos = async () => {
@@ -118,6 +123,7 @@ export default function InventarioPage() {
         guardadoEn: string;
         totalLineas: number;
         resumen: { totalAjusteImporte: number };
+        notas: string | null;
       }) => ({
         id: inv.id,
         manualRecuentoId: inv.manualRecuentoId,
@@ -126,6 +132,7 @@ export default function InventarioPage() {
         guardadoEn: inv.guardadoEn,
         totalLineas: inv.totalLineas,
         totalAjusteImporte: inv.resumen?.totalAjusteImporte ?? 0,
+        notas: inv.notas ?? null,
       })));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
@@ -165,6 +172,7 @@ export default function InventarioPage() {
       }
       if (!res.ok) throw new Error(data?.error ?? 'No se pudo calcular la comparativa.');
 
+      if (resultado?.inventarioId) setNotas('');
       setResultado(data);
       toast.success(`Comparativa calculada (${data.rows.length} líneas).`);
       if (data.warnings.length > 0) {
@@ -188,13 +196,19 @@ export default function InventarioPage() {
           manualRecuento: resultado.manualRecuento,
           sapFileName: resultado.sapFileName,
           warnings: resultado.warnings,
+          notas,
           resumen: resultado.resumen,
           rows: resultado.rows,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? 'No se pudo guardar el inventario.');
-      setResultado((prev) => prev ? { ...prev, inventarioId: data.inventarioId, guardadoEn: new Date().toISOString() } : prev);
+      setResultado((prev) => prev ? {
+        ...prev,
+        inventarioId: data.inventarioId,
+        guardadoEn: new Date().toISOString(),
+        notas: notas.trim() || null,
+      } : prev);
       await loadGuardados();
       toast.success(`Inventario guardado (#${data.inventarioId}).`);
     } catch (err) {
@@ -213,12 +227,15 @@ export default function InventarioPage() {
       setResultado({
         inventarioId: data.inventarioId,
         guardadoEn: data.guardadoEn,
+        notas: data.notas ?? null,
+        notasActualizadasEn: data.notasActualizadasEn ?? null,
         manualRecuento: data.manualRecuento,
         sapFileName: data.sapFileName,
         warnings: data.warnings ?? [],
         resumen: data.resumen,
         rows: data.rows ?? [],
       });
+      setNotas(data.notas ?? '');
       setSelectedManualId(data.manualRecuento?.id ?? null);
       setSearch('');
       toast.success(`Inventario #${id} cargado.`);
@@ -226,6 +243,32 @@ export default function InventarioPage() {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
       setLoadingDetalle(false);
+    }
+  };
+
+  const handleGuardarNotas = async () => {
+    if (!resultado?.inventarioId) return;
+    setSavingNotas(true);
+    try {
+      const res = await fetch(`/api/inventario/${resultado.inventarioId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notas }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? 'No se pudieron guardar las notas.');
+
+      setResultado((prev) => prev ? {
+        ...prev,
+        notas: data.notas ?? null,
+        notasActualizadasEn: data.notasActualizadasEn ?? null,
+      } : prev);
+      await loadGuardados();
+      toast.success(notas.trim() ? 'Notas actualizadas.' : 'Notas eliminadas.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setSavingNotas(false);
     }
   };
 
@@ -376,6 +419,7 @@ export default function InventarioPage() {
                   <th className="px-3 py-2 text-left">Guardado</th>
                   <th className="px-3 py-2 text-left">Recuento manual</th>
                   <th className="px-3 py-2 text-left">SAP</th>
+                  <th className="px-3 py-2 text-center">Notas</th>
                   <th className="px-3 py-2 text-right">Líneas</th>
                   <th className="px-3 py-2 text-right">Ajuste (€)</th>
                   <th className="px-3 py-2 text-center">Acción</th>
@@ -392,6 +436,18 @@ export default function InventarioPage() {
                     </td>
                     <td className="px-3 py-2 text-slate-600 max-w-[200px] truncate" title={inv.sapFicheroNombre}>
                       {inv.sapFicheroNombre}
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      {inv.notas ? (
+                        <span
+                          title={inv.notas}
+                          className="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800"
+                        >
+                          Con notas
+                        </span>
+                      ) : (
+                        <span className="text-xs text-slate-400">—</span>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums">{inv.totalLineas}</td>
                     <td className="px-3 py-2 text-right tabular-nums font-medium">{fmtCurrency(inv.totalAjusteImporte)}</td>
@@ -436,6 +492,48 @@ export default function InventarioPage() {
               </ul>
             </div>
           )}
+
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <div className="mb-2 flex items-start justify-between gap-3">
+              <div>
+                <label htmlFor="inventario-notas" className="text-sm font-semibold text-slate-800">
+                  Notas del inventario
+                </label>
+                <p className="text-xs text-slate-500">
+                  Añade incidencias o aclaraciones generales. No modifica los cálculos del inventario.
+                </p>
+              </div>
+              <span className="text-xs tabular-nums text-slate-400">{notas.length}/2000</span>
+            </div>
+            <textarea
+              id="inventario-notas"
+              value={notas}
+              maxLength={2000}
+              rows={3}
+              onChange={(e) => setNotas(e.target.value)}
+              placeholder="Ej.: Este inventario contiene errores en el recuento manual y no debe utilizarse como referencia definitiva."
+              className="w-full resize-y rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100"
+            />
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <p className="text-xs text-slate-500">
+                {resultado.inventarioId
+                  ? resultado.notasActualizadasEn
+                    ? `Última actualización: ${fmtDate(resultado.notasActualizadasEn)}`
+                    : 'Puedes añadir o modificar la nota de este inventario guardado.'
+                  : 'La nota se guardará al pulsar Guardar.'}
+              </p>
+              {resultado.inventarioId && (
+                <button
+                  type="button"
+                  onClick={() => void handleGuardarNotas()}
+                  disabled={savingNotas}
+                  className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-900 disabled:opacity-50"
+                >
+                  {savingNotas ? 'Guardando…' : 'Guardar nota'}
+                </button>
+              )}
+            </div>
+          </div>
 
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <input

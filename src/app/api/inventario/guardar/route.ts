@@ -14,6 +14,7 @@ type GuardarBody = {
   };
   sapFileName?: string;
   warnings?: string[];
+  notas?: string | null;
   resumen?: InventarioResumen;
   rows?: InventarioLineaInput[];
 };
@@ -37,6 +38,13 @@ export async function POST(req: NextRequest) {
     if (!body.resumen) {
       return NextResponse.json({ error: 'Falta resumen de la comparativa.' }, { status: 400 });
     }
+    if (body.notas != null && typeof body.notas !== 'string') {
+      return NextResponse.json({ error: 'Las notas no son válidas.' }, { status: 400 });
+    }
+    const notas = body.notas?.trim() || null;
+    if (notas && notas.length > 2000) {
+      return NextResponse.json({ error: 'Las notas no pueden superar 2.000 caracteres.' }, { status: 400 });
+    }
 
     const recuento = await getRecuentoCabeceraById(body.manualRecuento.id);
     if (!recuento) {
@@ -51,6 +59,7 @@ export async function POST(req: NextRequest) {
       body.manualRecuento,
       body.sapFileName.trim(),
       Array.isArray(body.warnings) ? body.warnings.map(String) : [],
+      notas,
       body.resumen,
       rows,
     );
