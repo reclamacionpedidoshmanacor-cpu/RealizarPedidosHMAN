@@ -9,6 +9,7 @@ type RecuentoManualResumen = {
   fechaRecuento: string;
   importadoEn: string;
   totalLineas: number;
+  ubicaciones: string[];
 };
 
 type InventarioRow = {
@@ -35,6 +36,7 @@ type InventarioGuardadoResumen = {
   guardadoEn: string;
   totalLineas: number;
   totalAjusteImporte: number;
+  ubicaciones: string[];
   notas: string | null;
 };
 
@@ -48,6 +50,7 @@ type InventarioResultado = {
     fechaRecuento: string;
     estado: string;
     totalLineas: number;
+    ubicaciones: string[];
   };
   sapFileName: string;
   warnings: string[];
@@ -123,6 +126,7 @@ export default function InventarioPage() {
         guardadoEn: string;
         totalLineas: number;
         resumen: { totalAjusteImporte: number };
+        ubicaciones: string[];
         notas: string | null;
       }) => ({
         id: inv.id,
@@ -132,6 +136,7 @@ export default function InventarioPage() {
         guardadoEn: inv.guardadoEn,
         totalLineas: inv.totalLineas,
         totalAjusteImporte: inv.resumen?.totalAjusteImporte ?? 0,
+        ubicaciones: Array.isArray(inv.ubicaciones) ? inv.ubicaciones : [],
         notas: inv.notas ?? null,
       })));
     } catch (err) {
@@ -173,7 +178,14 @@ export default function InventarioPage() {
       if (!res.ok) throw new Error(data?.error ?? 'No se pudo calcular la comparativa.');
 
       if (resultado?.inventarioId) setNotas('');
-      setResultado(data);
+      const recuentoSeleccionado = recuentos.find((recuento) => recuento.id === selectedManualId);
+      setResultado({
+        ...data,
+        manualRecuento: {
+          ...data.manualRecuento,
+          ubicaciones: recuentoSeleccionado?.ubicaciones ?? [],
+        },
+      });
       toast.success(`Comparativa calculada (${data.rows.length} líneas).`);
       if (data.warnings.length > 0) {
         toast.warning(`Se detectaron ${data.warnings.length} advertencias.`);
@@ -342,7 +354,9 @@ export default function InventarioPage() {
               >
                 {recuentos.map((r) => (
                   <option key={r.id} value={r.id}>
-                    #{r.id} · {fmtDate(r.fechaRecuento)} · {r.totalLineas} líneas · {r.estado}
+                    #{r.id} · {fmtDate(r.fechaRecuento)} · {r.ubicaciones.length > 0
+                      ? r.ubicaciones.join(', ')
+                      : 'Sin ubicación'} · {r.estado}
                   </option>
                 ))}
               </select>
@@ -418,6 +432,7 @@ export default function InventarioPage() {
                   <th className="px-3 py-2 text-left">#</th>
                   <th className="px-3 py-2 text-left">Guardado</th>
                   <th className="px-3 py-2 text-left">Recuento manual</th>
+                  <th className="px-3 py-2 text-left">Ubicaciones</th>
                   <th className="px-3 py-2 text-left">SAP</th>
                   <th className="px-3 py-2 text-center">Notas</th>
                   <th className="px-3 py-2 text-right">Líneas</th>
@@ -433,6 +448,12 @@ export default function InventarioPage() {
                     <td className="px-3 py-2 text-slate-600">
                       #{inv.manualRecuentoId}
                       {inv.manualFechaRecuento ? ` · ${fmtDate(inv.manualFechaRecuento)}` : ''}
+                    </td>
+                    <td
+                      className="px-3 py-2 text-slate-600 max-w-[240px]"
+                      title={inv.ubicaciones.join(', ')}
+                    >
+                      {inv.ubicaciones.length > 0 ? inv.ubicaciones.join(', ') : 'Sin ubicación registrada'}
                     </td>
                     <td className="px-3 py-2 text-slate-600 max-w-[200px] truncate" title={inv.sapFicheroNombre}>
                       {inv.sapFicheroNombre}
@@ -547,7 +568,10 @@ export default function InventarioPage() {
               {resultado.inventarioId
                 ? `Inventario guardado #${resultado.inventarioId}${resultado.guardadoEn ? ` · ${fmtDate(resultado.guardadoEn)}` : ''} · `
                 : 'Sin guardar · '}
-              Recuento manual #{resultado.manualRecuento.id} · SAP: {resultado.sapFileName}
+              Recuento manual #{resultado.manualRecuento.id} · Ubicaciones:{' '}
+              {resultado.manualRecuento.ubicaciones.length > 0
+                ? resultado.manualRecuento.ubicaciones.join(', ')
+                : 'Sin ubicación'} · SAP: {resultado.sapFileName}
             </p>
           </div>
 

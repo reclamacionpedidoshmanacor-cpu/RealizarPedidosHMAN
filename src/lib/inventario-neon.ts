@@ -47,11 +47,40 @@ export type InventarioCabecera = {
   totalLineas: number;
   resumen: InventarioResumen;
   warnings: string[];
+  ubicaciones: string[];
   notas: string | null;
   notasActualizadasEn: string | null;
 };
 
 export type InventarioLinea = InventarioLineaInput & { id: number };
+
+export async function getUbicacionesPorRecuentos(
+  recuentoIds: number[],
+  area: string,
+): Promise<Record<number, string[]>> {
+  if (recuentoIds.length === 0) return {};
+
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT DISTINCT
+      sr.importacion_id,
+      trim(m.ubicacion) AS ubicacion
+    FROM stock_registros sr
+    INNER JOIN medicamentos m ON m.cn = sr.cn AND m.area = ${area}
+    WHERE sr.importacion_id = ANY(${recuentoIds}::integer[])
+      AND m.ubicacion IS NOT NULL
+      AND trim(m.ubicacion) <> ''
+    ORDER BY sr.importacion_id DESC, ubicacion ASC
+  `) as Array<{ importacion_id: number; ubicacion: string }>;
+
+  const result: Record<number, string[]> = {};
+  for (const row of rows) {
+    const id = num(row.importacion_id);
+    if (!result[id]) result[id] = [];
+    result[id].push(String(row.ubicacion));
+  }
+  return result;
+}
 
 export async function ensureTablesInventario() {
   const sql = getDb();
@@ -72,10 +101,12 @@ export async function ensureTablesInventario() {
       total_sap_importe NUMERIC,
       total_ajuste_importe NUMERIC,
       warnings JSONB NOT NULL DEFAULT '[]'::jsonb,
+      ubicaciones TEXT[],
       notas TEXT,
       notas_actualizadas_en TIMESTAMPTZ
     )
   `;
+  await sql`ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS ubicaciones TEXT[]`;
   await sql`ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS notas TEXT`;
   await sql`ALTER TABLE inventarios ADD COLUMN IF NOT EXISTS notas_actualizadas_en TIMESTAMPTZ`;
   await sql`
@@ -119,14 +150,27 @@ export async function guardarInventario(
       sap_fichero_nombre, total_lineas,
       total_manual_unidades, total_sap_unidades, total_ajuste_unidades,
       total_manual_importe, total_sap_importe, total_ajuste_importe,
-      warnings, notas, notas_actualizadas_en
+      warnings, ubicaciones, notas, notas_actualizadas_en
     )
     VALUES (
       ${area}, ${manualRecuento.id}, ${manualRecuento.fechaRecuento}, ${manualRecuento.estado},
       ${sapFicheroNombre}, ${resumen.totalLineas},
       ${resumen.totalManualUnidades}, ${resumen.totalSapUnidades}, ${resumen.totalAjusteUnidades},
       ${resumen.totalManualImporte}, ${resumen.totalSapImporte}, ${resumen.totalAjusteImporte},
-      ${JSON.stringify(warnings)}::jsonb, ${notas}, ${notas ? new Date().toISOString() : null}
+      ${JSON.stringify(warnings)}::jsonb,
+      ARRAY(
+        SELECT ubicacion
+        FROM (
+          SELECT DISTINCT trim(m.ubicacion) AS ubicacion
+          FROM stock_registros sr
+          INNER JOIN medicamentos m ON m.cn = sr.cn AND m.area = ${area}
+          WHERE sr.importacion_id = ${manualRecuento.id}
+            AND m.ubicacion IS NOT NULL
+            AND trim(m.ubicacion) <> ''
+        ) ubicaciones_recuento
+        ORDER BY ubicacion
+      ),
+      ${notas}, ${notas ? new Date().toISOString() : null}
     )
     RETURNING id
   `) as Array<{ id: number }>;
@@ -172,14 +216,25 @@ export async function listInventarios(area: string, limit = 50): Promise<Inventa
       sap_fichero_nombre, guardado_en::text, total_lineas,
       total_manual_unidades, total_sap_unidades, total_ajuste_unidades,
       total_manual_importe, total_sap_importe, total_ajuste_importe,
-      warnings, notas, notas_actualizadas_en::text
+      warnings, ubicaciones, notas, notas_actualizadas_en::text
     FROM inventarios
     WHERE area = ${area}
     ORDER BY guardado_en DESC
     LIMIT ${limit}
   `) as Array<Record<string, unknown>>;
 
-  return rows.map(mapCabecera);
+  const idsSinSnapshot = rows
+    .filter((row) => !Array.isArray(row.ubicaciones))
+    .map((row) => num(row.manual_recuento_id));
+  const ubicacionesActuales = await getUbicacionesPorRecuentos(idsSinSnapshot, area);
+
+  return rows.map((row) => {
+    const cabecera = mapCabecera(row);
+    if (!Array.isArray(row.ubicaciones)) {
+      cabecera.ubicaciones = ubicacionesActuales[cabecera.manualRecuentoId] ?? [];
+    }
+    return cabecera;
+  });
 }
 
 export async function getInventarioDetalle(
@@ -195,7 +250,7 @@ export async function getInventarioDetalle(
       sap_fichero_nombre, guardado_en::text, total_lineas,
       total_manual_unidades, total_sap_unidades, total_ajuste_unidades,
       total_manual_importe, total_sap_importe, total_ajuste_importe,
-      warnings, notas, notas_actualizadas_en::text
+      warnings, ubicaciones, notas, notas_actualizadas_en::text
     FROM inventarios
     WHERE id = ${id} AND area = ${area}
   `) as Array<Record<string, unknown>>;
@@ -213,8 +268,14 @@ export async function getInventarioDetalle(
     ORDER BY principio_activo NULLS LAST, medicamento
   `) as Array<Record<string, unknown>>;
 
+  const cabecera = mapCabecera(cabRows[0]);
+  if (!Array.isArray(cabRows[0].ubicaciones)) {
+    const ubicacionesActuales = await getUbicacionesPorRecuentos([cabecera.manualRecuentoId], area);
+    cabecera.ubicaciones = ubicacionesActuales[cabecera.manualRecuentoId] ?? [];
+  }
+
   return {
-    cabecera: mapCabecera(cabRows[0]),
+    cabecera,
     lineas: lineRows.map(mapLinea),
   };
 }
@@ -275,6 +336,7 @@ function mapCabecera(r: Record<string, unknown>): InventarioCabecera {
       totalAjusteImporte: num(r.total_ajuste_importe),
     },
     warnings,
+    ubicaciones: Array.isArray(r.ubicaciones) ? r.ubicaciones.map(String) : [],
     notas: r.notas ? String(r.notas) : null,
     notasActualizadasEn: r.notas_actualizadas_en ? String(r.notas_actualizadas_en) : null,
   };

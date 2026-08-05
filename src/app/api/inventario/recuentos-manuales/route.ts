@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
+import { getUbicacionesPorRecuentos } from '@/lib/inventario-neon';
 import { listRecuentosManualesByArea } from '@/lib/stock-propuesta-neon';
 
 export const runtime = 'nodejs';
@@ -10,7 +11,16 @@ export async function GET(req: NextRequest) {
 
   try {
     const recuentos = await listRecuentosManualesByArea(session.area);
-    return NextResponse.json({ recuentos });
+    const ubicaciones = await getUbicacionesPorRecuentos(
+      recuentos.map((recuento) => recuento.id),
+      session.area,
+    );
+    return NextResponse.json({
+      recuentos: recuentos.map((recuento) => ({
+        ...recuento,
+        ubicaciones: ubicaciones[recuento.id] ?? [],
+      })),
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Error inesperado';
     return NextResponse.json({ error: msg }, { status: 500 });

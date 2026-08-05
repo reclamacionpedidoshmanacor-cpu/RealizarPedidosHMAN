@@ -31,6 +31,7 @@ export async function GET(
         fechaRecuento: cabecera.manualFechaRecuento ?? '',
         estado: cabecera.manualEstado ?? '',
         totalLineas: cabecera.totalLineas,
+        ubicaciones: cabecera.ubicaciones,
       },
       sapFileName: cabecera.sapFicheroNombre,
       guardadoEn: cabecera.guardadoEn,
