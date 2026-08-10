@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { MOTIVOS_AJUSTE, cajasAUnidades } from '@/lib/propuesta';
 import type { AlertaSuministroCn } from '@/lib/pedidos-pendientes';
@@ -192,6 +192,7 @@ export default function PropuestaPage() {
   const [detalleByPropuesta, setDetalleByPropuesta] = useState<Record<number, PropuestaDetalle>>({});
   const [loadingDetalleId, setLoadingDetalleId] = useState<number | null>(null);
   const [propuestaSeleccionadaId, setPropuestaSeleccionadaId] = useState<number | null>(null);
+  const loadRequestIdRef = useRef(0);
 
   const esAlmacen = getAreaFromCookie() === 'almacen';
   const layoutCompacto = usaPropuestaLayoutCompacto(getAreaFromCookie());
@@ -203,19 +204,24 @@ export default function PropuestaPage() {
 
   // ── Carga propuesta activa ────────────────────────────────────────────────
   const load = async (opts?: { propuestaId?: number | null; ubicacion?: string | null }) => {
+    const requestId = ++loadRequestIdRef.current;
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams();
+      const seleccionaUbicacion = Boolean(opts?.ubicacion);
       const id =
         opts?.propuestaId !== undefined
           ? opts.propuestaId
-          : propuestaSeleccionadaId;
+          : seleccionaUbicacion
+            ? null
+            : propuestaSeleccionadaId;
       if (id) params.set('propuestaId', String(id));
       if (opts?.ubicacion) params.set('ubicacion', opts.ubicacion);
       const qs = params.toString();
       const res = await fetch(`/api/propuestas/actual${qs ? `?${qs}` : ''}`, { cache: 'no-store' });
       const payload = await res.json();
+      if (requestId !== loadRequestIdRef.current) return;
       if (!res.ok) {
         if (res.status === 404) {
           setData(null);
@@ -248,10 +254,11 @@ export default function PropuestaPage() {
       }
       setEdits(nextEdits);
     } catch (err) {
+      if (requestId !== loadRequestIdRef.current) return;
       setData(null);
       setError(err instanceof Error ? err.message : 'Error inesperado al cargar la propuesta.');
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestIdRef.current) setLoading(false);
     }
   };
 
@@ -288,16 +295,41 @@ export default function PropuestaPage() {
     return null;
   };
 
+  const lineaTieneCambios = (linea: Linea, draft: DraftEdit | undefined): boolean => {
+    if (!draft) return false;
+    return (
+      draft.cajasValidadas !== (linea.cajasValidadas ?? linea.cajasPropuestas) ||
+      draft.motivoAjuste !== (linea.motivoAjuste ?? '') ||
+      draft.motivoAjusteOtro !== (linea.motivoAjusteOtro ?? '') ||
+      draft.proveedorLocal !== (linea.proveedorLocal === true)
+    );
+  };
+
+  const hayCambiosSinGuardar = (): boolean =>
+    Boolean(
+      data?.propuesta &&
+      lineasPedibles(data.lineas).some((linea) => lineaTieneCambios(linea, edits[linea.id]))
+    );
+
   const saveAll = async (lineas: Linea[]) => {
-    for (const linea of lineasPedibles(lineas)) {
-      const draft = edits[linea.id];
-      if (!draft) continue;
-      await fetch(`/api/propuestas/lineas/${linea.id}`, {
+    const cambios = lineasPedibles(lineas).filter((linea) =>
+      lineaTieneCambios(linea, edits[linea.id])
+    );
+    await Promise.all(cambios.map(async (linea) => {
+      const draft = edits[linea.id]!;
+      const res = await fetch(`/api/propuestas/lineas/${linea.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(draft),
       });
-    }
+      if (!res.ok) {
+        const payload = await res.json().catch(() => null);
+        throw new Error(
+          payload?.error ??
+          `No se pudo guardar "${linea.nombreMedicamento ?? linea.cn}".`
+        );
+      }
+    }));
   };
 
   // ── Guardar borrador ──────────────────────────────────────────────────────
@@ -309,8 +341,15 @@ export default function PropuestaPage() {
     try {
       await saveAll(data.lineas);
       toast.success('Borrador guardado.');
-      await load({ propuestaId: data.propuesta.id });
-    } catch { toast.error('Error al guardar.'); }
+      if (data.modo === 'por-ubicacion') {
+        setPropuestaSeleccionadaId(null);
+        await load({ propuestaId: null });
+      } else {
+        await load({ propuestaId: data.propuesta.id });
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error al guardar.');
+    }
     finally { setSaving(false); }
   };
 
@@ -347,17 +386,33 @@ export default function PropuestaPage() {
   };
 
   const abrirPropuesta = async (propuestaId: number) => {
+    if (loading || saving || tramiting) return;
+    if (data?.propuesta?.id === propuestaId) return;
+    if (
+      hayCambiosSinGuardar() &&
+      !confirm('Hay cambios sin guardar en la propuesta actual. ¿Quieres descartarlos y abrir otra ubicación?')
+    ) {
+      return;
+    }
     setPropuestaSeleccionadaId(propuestaId);
     await load({ propuestaId });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const abrirBloque = async (bloque: BloqueResumen) => {
+    if (loading || saving || tramiting) return;
     if (bloque.propuestaId) {
       await abrirPropuesta(bloque.propuestaId);
       return;
     }
-    await load({ ubicacion: bloque.ubicacion });
+    if (
+      hayCambiosSinGuardar() &&
+      !confirm('Hay cambios sin guardar en la propuesta actual. ¿Quieres descartarlos y abrir otra ubicación?')
+    ) {
+      return;
+    }
+    setPropuestaSeleccionadaId(null);
+    await load({ propuestaId: null, ubicacion: bloque.ubicacion });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -381,9 +436,9 @@ export default function PropuestaPage() {
           ? 'Propuesta tramitada y recuento marcado como generado.'
           : 'Propuesta tramitada correctamente.'
       );
-      if (usaBloquesPorUbicacion) {
-        setPropuestaSeleccionadaId(data.propuesta.id);
-        await load({ propuestaId: data.propuesta.id });
+      if (data.modo === 'por-ubicacion') {
+        setPropuestaSeleccionadaId(null);
+        await load({ propuestaId: null });
       } else {
         setData(prev =>
           prev && prev.propuesta
@@ -570,11 +625,12 @@ export default function PropuestaPage() {
                       key={bloque.ubicacion}
                       type="button"
                       onClick={() => void abrirBloque(bloque)}
+                      disabled={loading || saving || tramiting}
                       className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
                         data.propuesta?.id === bloque.propuestaId
                           ? 'border-teal-600 bg-teal-50 font-semibold text-teal-800'
                           : 'border-slate-200 bg-white text-slate-600 hover:border-teal-300 hover:bg-teal-50/50'
-                      }`}
+                      } disabled:cursor-wait disabled:opacity-50`}
                     >
                       <span>{bloque.ubicacion}</span>
                       <span className={`ml-2 rounded-full border px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide ${bloqueEstadoClass(bloque.estado)}`}>
@@ -598,11 +654,12 @@ export default function PropuestaPage() {
                       key={b.id}
                       type="button"
                       onClick={() => void abrirPropuesta(b.id)}
+                      disabled={loading || saving || tramiting}
                       className={`rounded-lg border px-3 py-1.5 text-sm transition-colors ${
                         data.propuesta?.id === b.id
                           ? 'border-teal-600 bg-teal-50 font-semibold text-teal-800'
                           : 'border-slate-200 bg-white text-slate-600 hover:border-teal-300 hover:bg-teal-50/50'
-                      }`}
+                      } disabled:cursor-wait disabled:opacity-50`}
                     >
                       {etiquetaPropuesta(b.observaciones, b.id)}
                       <span className="ml-1.5 text-xs text-slate-400">({b.totalLineas})</span>

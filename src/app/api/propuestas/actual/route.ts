@@ -111,6 +111,12 @@ export async function GET(req: NextRequest) {
   try {
     const propuestaIdParam = Number(req.nextUrl.searchParams.get('propuestaId'));
     const ubicacionParam = req.nextUrl.searchParams.get('ubicacion')?.trim() ?? '';
+    if (propuestaIdParam > 0 && ubicacionParam) {
+      return NextResponse.json(
+        { error: 'Selecciona una propuesta o una ubicación, no ambas simultáneamente.' },
+        { status: 400 }
+      );
+    }
 
     if (isAlmacenArea(session.area)) {
       const pedido = await getPedidoAlmacenPendiente(session.area);
