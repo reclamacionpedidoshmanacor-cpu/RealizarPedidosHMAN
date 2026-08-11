@@ -56,10 +56,28 @@ type ApiResponse = {
   faltantesInactivosUbicacion?: number;
 };
 
-/* ─── tipos reposición (solo UPE) ─── */
+/* ─── tipos reposición (UPE y Oncología) ─── */
 type ReposicionBorrador = { id: number; totalLineas: number; fechaCreacion: string } | null;
 type ReposicionDraftLinea = { cantidadCajas: number };
-type ReposicionDetalleLinea = { ubicacion: string; cn: string; cantidadCajas: number };
+type ReposicionCatalogoItem = {
+  id: number;
+  ubicacionDestino: string;
+  codigo: string;
+  cn: string | null;
+  principioActivo: string | null;
+  nombre: string;
+  unidadPedido: 'cajas' | 'unidades';
+  stockMaximo: number | null;
+  puntoPedido: number | null;
+  notas: string | null;
+  activo: boolean;
+};
+type ReposicionDetalleLinea = {
+  ubicacion: string;
+  catalogoId: number | null;
+  codigo: string;
+  cantidadCajas: number;
+};
 type ReposicionDetalleResponse = {
   cabecera: { id: number; totalLineas: number; fechaCreacion: string };
   lineas: ReposicionDetalleLinea[];
@@ -251,8 +269,9 @@ export default function RecuentoManualPage() {
   const [editando, setEditando] = useState(false);
   const [inactivandoCn, setInactivandoCn] = useState<string | null>(null);
 
-  /* ── estado reposición (solo UPE) ── */
+  /* ── estado reposición (UPE y Oncología) ── */
   const [repoBorrador, setRepoBorrador] = useState<ReposicionBorrador>(null);
+  const [repoCatalogo, setRepoCatalogo] = useState<ReposicionCatalogoItem[]>([]);
   const [repoUbicacionesUsadas, setRepoUbicacionesUsadas] = useState<string[]>([]);
   const [repoDraft, setRepoDraft] = useState<Record<string, ReposicionDraftLinea>>({});
   const [repoBaselineDraft, setRepoBaselineDraft] = useState<Record<string, ReposicionDraftLinea>>({});
@@ -781,7 +800,7 @@ export default function RecuentoManualPage() {
     }
   };
 
-  /* ════════ REPOSICIÓN (solo UPE) ════════ */
+  /* ════════ REPOSICIÓN (UPE y Oncología) ════════ */
 
   const cargarEstadoReposicion = async () => {
     const resRepo = await fetch('/api/reposicion', { cache: 'no-store' });
@@ -811,7 +830,9 @@ export default function RecuentoManualPage() {
       const ub = String(linea.ubicacion ?? '').trim();
       if (!ub) continue;
       if (!byUbicacion[ub]) byUbicacion[ub] = {};
-      byUbicacion[ub][String(linea.cn)] = Number(linea.cantidadCajas ?? 0);
+      if (linea.catalogoId != null) {
+        byUbicacion[ub][String(linea.catalogoId)] = Number(linea.cantidadCajas ?? 0);
+      }
     }
     setRepoLineasByUbicacion(byUbicacion);
     setRepoUbicacionesUsadas(Object.keys(byUbicacion).sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' })));
@@ -820,10 +841,11 @@ export default function RecuentoManualPage() {
   const iniciarReposicion = async () => {
     setLoading(true);
     try {
-      /* Cargamos ubicaciones (reutilizamos el API de recuento-manual) */
-      const res = await fetch('/api/recuento-manual', { cache: 'no-store' });
-      const payload = (await res.json()) as ApiResponse;
-      setData(payload);
+      const res = await fetch('/api/reposicion/catalogo', { cache: 'no-store' });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo cargar el catálogo de reposición.');
+      const catalogo = (payload.items ?? []) as ReposicionCatalogoItem[];
+      setRepoCatalogo(catalogo.filter((item) => item.activo));
 
       /* Comprobamos si hay borrador activo y cargamos sus líneas */
       await cargarEstadoReposicion();
@@ -838,16 +860,13 @@ export default function RecuentoManualPage() {
   const seleccionarUbicacionRepo = async (ub: string) => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/recuento-manual?ubicacion=${encodeURIComponent(ub)}`, { cache: 'no-store' });
-      const payload = (await res.json()) as ApiResponse;
-      setData(payload);
       setUbicacion(ub);
 
       /* Si la ubicación ya existe en borrador, precargar valores guardados */
       const saved = repoLineasByUbicacion[ub] ?? {};
       const nextDraft: Record<string, ReposicionDraftLinea> = {};
-      for (const med of payload.medicamentos.filter((m) => m.activo)) {
-        nextDraft[med.cn] = { cantidadCajas: Number(saved[med.cn] ?? 0) };
+      for (const item of repoCatalogo.filter((row) => row.activo && row.ubicacionDestino === ub)) {
+        nextDraft[String(item.id)] = { cantidadCajas: Number(saved[String(item.id)] ?? 0) };
       }
       setRepoDraft(nextDraft);
       setRepoBaselineDraft({ ...nextDraft });
@@ -870,17 +889,23 @@ export default function RecuentoManualPage() {
   }, [repoDraft, repoBaselineDraft]);
 
   const handleGuardarUbicacionRepo = async () => {
-    if (!data || !ubicacion) return;
-    const medicamentosActivos = (data.medicamentos ?? []).filter((med) => med.activo);
-    const lineas = medicamentosActivos
-      .map((med) => ({ cn: med.cn, cantidadCajas: repoDraft[med.cn]?.cantidadCajas ?? 0 }))
-      .filter((l) => l.cantidadCajas > 0);
+    if (!ubicacion) return;
+    const medicamentosActivos = repoCatalogo.filter(
+      (item) => item.activo && item.ubicacionDestino === ubicacion,
+    );
+    const lineas = medicamentosActivos.map((item) => ({
+      catalogoId: item.id,
+      cantidadCajas: repoDraft[String(item.id)]?.cantidadCajas ?? 0,
+    }));
 
-    if (lineas.length === 0) { toast.info('Introduce al menos una cantidad.'); return; }
+    if (!lineas.some((linea) => linea.cantidadCajas > 0)) {
+      toast.info('Introduce al menos una cantidad.');
+      return;
+    }
 
-    const excedidas = medicamentosActivos.filter((med) => {
-      const qty = repoDraft[med.cn]?.cantidadCajas ?? 0;
-      return med.stockMaximo != null && qty > med.stockMaximo;
+    const excedidas = medicamentosActivos.filter((item) => {
+      const qty = repoDraft[String(item.id)]?.cantidadCajas ?? 0;
+      return item.stockMaximo != null && qty > item.stockMaximo;
     });
 
     if (excedidas.length > 0) {
@@ -918,7 +943,7 @@ export default function RecuentoManualPage() {
       const res = await fetch(`/api/reposicion/${repoBorrador.id}/finalizar`, { method: 'POST' });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo finalizar el pedido.');
-      toast.success('✅ Pedido de reposición finalizado. Puedes descargarlo en la pestaña Stock.');
+      toast.success('✅ Pedido de reposición finalizado. Puedes gestionarlo en la pestaña Reposición.');
       setRepoBorrador(null);
       setRepoUbicacionesUsadas([]);
       setRepoLineasByUbicacion({});
@@ -941,7 +966,7 @@ export default function RecuentoManualPage() {
     }
   };
 
-  /* ── Deep-link desde Stock: /recuento-manual?area=upe&modo=reposicion ── */
+  /* ── Deep-link: /recuento-manual?area=upe|oncologia&modo=reposicion ── */
   useEffect(() => {
     if (deepLinkHandledRef.current) return;
     if (typeof window === 'undefined') return;
@@ -960,7 +985,7 @@ export default function RecuentoManualPage() {
 
     const run = async () => {
       await seleccionarArea(targetArea);
-      if (targetArea === 'upe') {
+      if (targetArea === 'upe' || targetArea === 'oncologia') {
         await iniciarReposicion();
       }
     };
@@ -1081,8 +1106,8 @@ export default function RecuentoManualPage() {
           )}
         </div>
 
-        {/* Botón especial solo para UPE */}
-        {area === 'upe' && (
+        {/* Pedido interno a Farmacia */}
+        {(area === 'upe' || area === 'oncologia') && (
           <div className="pt-4 border-t-2 border-slate-200 space-y-3">
             <h3 className="text-xl font-bold text-slate-600">Circuito especial</h3>
             <button onClick={() => void iniciarReposicion()} disabled={loading}
@@ -1367,7 +1392,9 @@ export default function RecuentoManualPage() {
 
   /* ── REPOSICIÓN: Selección de ubicación ── */
   if (step === 'reposicion-ubicacion') {
-    const ubicaciones = data?.ubicaciones ?? [];
+    const ubicaciones = [...new Set(
+      repoCatalogo.filter((item) => item.activo).map((item) => item.ubicacionDestino),
+    )].sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }));
     return (
       <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 flex flex-col p-6 gap-6">
         <div className="flex items-center gap-4">
@@ -1376,7 +1403,7 @@ export default function RecuentoManualPage() {
             ← Volver
           </button>
           <div>
-            <p className="text-base text-orange-500 font-semibold">Pedido a Farmacia — Pac. Externos</p>
+            <p className="text-base text-orange-500 font-semibold">Pedido a Farmacia — {areaConfig.label}</p>
             <h2 className="text-3xl font-extrabold text-orange-700">🛒 Solicitar Reposición</h2>
           </div>
         </div>
@@ -1431,11 +1458,15 @@ export default function RecuentoManualPage() {
 
   /* ── REPOSICIÓN: Introducir cantidades ── */
   if (step === 'reposicion-recuento') {
-    const medicamentos = (data?.medicamentos ?? []).filter((med) => med.activo);
-    const repoHasAnyQty = medicamentos.some((med) => (repoDraft[med.cn]?.cantidadCajas ?? 0) > 0);
-    const repoOverMaxCount = medicamentos.filter((med) => {
-      const qty = repoDraft[med.cn]?.cantidadCajas ?? 0;
-      return med.stockMaximo != null && qty > med.stockMaximo;
+    const medicamentos = repoCatalogo.filter(
+      (item) => item.activo && item.ubicacionDestino === ubicacion,
+    );
+    const repoHasAnyQty = medicamentos.some(
+      (item) => (repoDraft[String(item.id)]?.cantidadCajas ?? 0) > 0,
+    );
+    const repoOverMaxCount = medicamentos.filter((item) => {
+      const qty = repoDraft[String(item.id)]?.cantidadCajas ?? 0;
+      return item.stockMaximo != null && qty > item.stockMaximo;
     }).length;
 
     return (
@@ -1453,7 +1484,7 @@ export default function RecuentoManualPage() {
 
         <div className="flex-1 px-4 pt-4 space-y-3">
           <p className="text-base text-slate-500 font-semibold">
-            {medicamentos.length} medicamento{medicamentos.length !== 1 ? 's' : ''} — indica cuántas cajas necesitas
+            {medicamentos.length} artículo{medicamentos.length !== 1 ? 's' : ''} — indica la cantidad que necesitas
           </p>
           {loading ? (
             <p className="text-2xl text-slate-500 animate-pulse text-center py-20">Cargando…</p>
@@ -1461,13 +1492,14 @@ export default function RecuentoManualPage() {
             <p className="text-2xl font-bold text-amber-700 text-center py-10">No hay medicamentos en esta ubicación.</p>
           ) : (
             medicamentos.map((med, idx) => {
-              const qty = repoDraft[med.cn]?.cantidadCajas ?? 0;
+              const key = String(med.id);
+              const qty = repoDraft[key]?.cantidadCajas ?? 0;
               const changed = qty > 0;
               const overMax = med.stockMaximo != null && qty > med.stockMaximo;
               return (
-                <RepoMedCard key={med.cn} med={med} cantidadCajas={qty} changed={changed} overMax={overMax}
+                <RepoMedCard key={med.id} med={med} cantidadCajas={qty} changed={changed} overMax={overMax}
                   index={idx + 1} total={medicamentos.length}
-                  onChange={(v) => setRepoDraft((prev) => ({ ...prev, [med.cn]: { cantidadCajas: v } }))} />
+                  onChange={(v) => setRepoDraft((prev) => ({ ...prev, [key]: { cantidadCajas: v } }))} />
               );
             })
           )}
@@ -2064,7 +2096,7 @@ function AlmacenMedCard({
 function RepoMedCard({
   med, cantidadCajas, changed, overMax, index, total, onChange,
 }: {
-  med: MedicamentoManual; cantidadCajas: number; changed: boolean;
+  med: ReposicionCatalogoItem; cantidadCajas: number; changed: boolean;
   overMax: boolean;
   index: number; total: number; onChange: (v: number) => void;
 }) {
@@ -2078,21 +2110,29 @@ function RepoMedCard({
           {med.principioActivo && <p className="text-lg italic text-slate-400 leading-tight mt-0.5 truncate">{med.nombre}</p>}
         </div>
         <div className="flex flex-col items-end gap-1 shrink-0">
-          <span className="font-mono text-base bg-slate-100 text-slate-500 rounded-lg px-2 py-1">CN {med.cn}</span>
+          <span className="font-mono text-base bg-slate-100 text-slate-500 rounded-lg px-2 py-1">
+            {med.cn ? `CN ${med.cn}` : med.codigo}
+          </span>
           <span className="text-sm text-slate-400">{index}/{total}</span>
         </div>
       </div>
 
       {med.stockMaximo != null && (
         <p className="text-base text-slate-500 mb-3">
-          Stock máximo de referencia: <strong className="text-slate-700">{med.stockMaximo} cajas</strong>
+          Stock máximo de referencia: <strong className="text-slate-700">{med.stockMaximo} {med.unidadPedido}</strong>
         </p>
+      )}
+      {med.puntoPedido != null && (
+        <p className="text-sm text-slate-500 mb-2">Punto de pedido orientativo: {med.puntoPedido} {med.unidadPedido}</p>
+      )}
+      {med.notas && (
+        <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800 mb-3">Nota: {med.notas}</p>
       )}
 
       <div className="space-y-1">
         <label className={`block text-sm font-bold uppercase tracking-wider ${
           overMax ? 'text-rose-600' : changed ? 'text-emerald-600' : 'text-orange-600'
-        }`}>📦 Cajas a pedir</label>
+        }`}>📦 {med.unidadPedido === 'unidades' ? 'Unidades' : 'Cajas'} a pedir</label>
         <input type="number" inputMode="numeric" min={0} step={1}
           value={cantidadCajas === 0 ? '' : cantidadCajas} placeholder="0"
           onChange={(e) => onChange(toIntInput(e.target.value))}
@@ -2104,7 +2144,7 @@ function RepoMedCard({
       </div>
       {overMax ? (
         <p className="mt-3 text-sm font-semibold text-rose-600">
-          ⚠ Supera stock máximo ({med.stockMaximo} cajas)
+          ⚠ Supera stock máximo ({med.stockMaximo} {med.unidadPedido})
         </p>
       ) : changed ? (
         <p className="mt-3 text-sm font-semibold text-emerald-600">✔ Cantidad añadida</p>

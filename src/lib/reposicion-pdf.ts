@@ -102,7 +102,8 @@ export async function buildReposicionPdf(
   pedidoId: number,
   fechaCreacion: string,
   fechaFinalizado: string | null,
-  lineas: ReposicionLinea[]
+  lineas: ReposicionLinea[],
+  area = 'upe',
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   const regular = await doc.embedFont(StandardFonts.Helvetica);
@@ -112,7 +113,8 @@ export async function buildReposicionPdf(
 
   w.text('ALBARAN DE REPOSICION', MARGIN, { size: 18, font: bold, color: rgb(0.05, 0.2, 0.45) });
   w.moveDown(22);
-  w.text('Servicio de Farmacia Hospitalaria - Hospital de Manacor - Pacientes Externos', MARGIN, {
+  const areaLabel = area === 'oncologia' ? 'Oncologia' : 'Pacientes Externos';
+  w.text(`Servicio de Farmacia Hospitalaria - Hospital de Manacor - ${areaLabel}`, MARGIN, {
     size: 11,
     font: regular,
     color: rgb(0.35, 0.35, 0.35),
@@ -145,7 +147,7 @@ export async function buildReposicionPdf(
         { text: 'CN', x: COL.cn, maxWidth: COL_W.cn, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
         { text: 'Principio activo', x: COL.pa, maxWidth: COL_W.pa, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
         { text: 'Medicamento', x: COL.med, maxWidth: COL_W.med, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
-        { text: 'Cajas', x: COL.qty, maxWidth: COL_W.qty, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4), align: 'right' },
+        { text: 'Cantidad', x: COL.qty, maxWidth: COL_W.qty, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4), align: 'right' },
       ],
       18
     );
@@ -159,10 +161,23 @@ export async function buildReposicionPdf(
           { text: safe(l.cn), x: COL.cn, maxWidth: COL_W.cn, size: 9 },
           { text: safe(l.principioActivo ?? '-'), x: COL.pa, maxWidth: COL_W.pa, size: 9 },
           { text: safe(l.nombre), x: COL.med, maxWidth: COL_W.med, size: 9, font: oblique, color: rgb(0.35, 0.35, 0.35) },
-          { text: String(l.cantidadCajas), x: COL.qty, maxWidth: COL_W.qty, size: 9, font: bold, align: 'right' },
+          { text: `${l.cantidadCajas} ${l.unidadPedido === 'unidades' ? 'ud.' : 'caj.'}`, x: COL.qty, maxWidth: COL_W.qty, size: 8, font: bold, align: 'right' },
         ],
         18
       );
+      if (l.notas) {
+        w.textRow(
+          [{
+            text: `Nota: ${safe(l.notas)}`,
+            x: COL.pa,
+            maxWidth: COL_W.pa + COL_W.med,
+            size: 8,
+            font: oblique,
+            color: rgb(0.45, 0.25, 0.05),
+          }],
+          14,
+        );
+      }
     }
 
     w.moveDown(6);
@@ -170,14 +185,13 @@ export async function buildReposicionPdf(
     w.moveDown(14);
   }
 
-  const totalCajas = lineas.reduce((s, l) => s + l.cantidadCajas, 0);
   w.ensureSpace(40);
-  w.text(`Total líneas: ${lineas.length}   |   Total cajas: ${totalCajas}`, PAGE_W - MARGIN - 200, {
+  w.text(`Total lineas: ${lineas.length}`, PAGE_W - MARGIN - 120, {
     size: 10,
     font: bold,
   });
   w.moveDown(20);
-  w.text('Documento generado automaticamente - Pacientes Externos', MARGIN, {
+  w.text(`Documento generado automaticamente - ${areaLabel}`, MARGIN, {
     size: 8,
     font: regular,
     color: rgb(0.6, 0.6, 0.6),

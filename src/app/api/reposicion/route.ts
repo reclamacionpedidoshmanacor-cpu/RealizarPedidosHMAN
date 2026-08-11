@@ -6,12 +6,14 @@ import {
   getHistorialReposicion,
   getPedidoBorrador,
   crearPedidoBorrador,
-  upsertLineasReposicion,
+  reemplazarLineasReposicionUbicacion,
   type LineaInput,
 } from '@/lib/reposicion-neon';
-import { listMedicamentosByArea } from '@/lib/catalogo-neon';
-
-const AREA_UPE = 'upe';
+import {
+  isReposicionArea,
+  listReposicionCatalogo,
+  type ReposicionArea,
+} from '@/lib/reposicion-catalogo-neon';
 
 async function getAreaFromCookie(): Promise<AreaId | null> {
   const jar = await cookies();
@@ -20,7 +22,7 @@ async function getAreaFromCookie(): Promise<AreaId | null> {
 }
 
 async function requireReposicionArea(): Promise<
-  | { ok: true; area: typeof AREA_UPE }
+  | { ok: true; area: ReposicionArea }
   | { ok: false; response: NextResponse }
 > {
   const area = await getAreaFromCookie();
@@ -30,11 +32,11 @@ async function requireReposicionArea(): Promise<
       response: NextResponse.json({ error: 'Area no seleccionada o no valida.' }, { status: 400 }),
     };
   }
-  if (area !== AREA_UPE) {
+  if (!isReposicionArea(area)) {
     return {
       ok: false,
       response: NextResponse.json(
-        { error: 'Pedidos de reposición solo disponibles para Pac. Externos.' },
+        { error: 'Pedidos de reposición solo disponibles para UPE y Oncología.' },
         { status: 403 }
       ),
     };
@@ -72,7 +74,7 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json() as {
       ubicacion: string;
-      lineas: { cn: string; cantidadCajas: number }[];
+      lineas: { catalogoId: number; cantidadCajas: number }[];
     };
 
     if (!body.ubicacion || !Array.isArray(body.lineas)) {
@@ -85,31 +87,45 @@ export async function POST(req: NextRequest) {
       borrador = await crearPedidoBorrador(area);
     }
 
-    // Enriquecer con datos del catálogo (principio activo, nombre, stock máximo)
-    const catalogo = await listMedicamentosByArea(area);
-    const catMap = new Map(catalogo.map((m) => [m.cn, m]));
+    const catalogo = await listReposicionCatalogo(area);
+    const catMap = new Map(catalogo.map((item) => [item.id, item]));
 
     const lineasInput: LineaInput[] = [];
     const errores: string[] = [];
 
     for (const l of body.lineas) {
-      if (l.cantidadCajas <= 0) continue; // ignorar ceros
-      const med = catMap.get(l.cn);
-      if (!med) {
-        errores.push(`CN ${l.cn} no encontrado en el catálogo.`);
+      if (!Number.isInteger(l.cantidadCajas) || l.cantidadCajas < 0) {
+        errores.push(`Cantidad no válida para la configuración ${l.catalogoId}.`);
+        continue;
+      }
+      if (l.cantidadCajas === 0) continue;
+      const item = catMap.get(Number(l.catalogoId));
+      if (!item || item.ubicacionDestino !== body.ubicacion) {
+        errores.push(`Configuración ${l.catalogoId} no encontrada en esta ubicación.`);
         continue;
       }
       lineasInput.push({
         ubicacion: body.ubicacion,
-        cn: l.cn,
-        principioActivo: med.principioActivo ?? null,
-        nombre: med.nombre,
+        cn: item.cn ?? item.codigo,
+        codigo: item.codigo,
+        tipo: item.tipo,
+        areaOrigen: item.areaOrigen,
+        principioActivo: item.principioActivo,
+        nombre: item.nombre,
         cantidadCajas: l.cantidadCajas,
-        stockMaximo: med.stockMaximo ?? null,
+        stockMaximo: item.stockMaximo,
+        puntoPedido: item.puntoPedido,
+        notas: item.notas,
+        unidadPedido: item.unidadPedido,
+        catalogoId: item.id,
       });
     }
 
-    const { upserted } = await upsertLineasReposicion(borrador.id, lineasInput);
+    const { upserted } = await reemplazarLineasReposicionUbicacion(
+      borrador.id,
+      body.ubicacion,
+      lineasInput,
+    );
 
     return NextResponse.json({ pedidoId: borrador.id, upserted, errores });
   } catch (err) {

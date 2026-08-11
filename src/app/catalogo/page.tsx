@@ -1607,7 +1607,7 @@ export default function CatalogoPage() {
                     </td>
                     <td className="px-4 py-3 text-center">
                       <div className="flex items-center justify-center gap-1">
-                        {esAlmacen && med.activo && med.ubicacion && (
+                        {med.activo && (
                           <button
                             onClick={() => setSustitucionMed(med)}
                             className="rounded-lg border border-violet-200 p-1.5 text-violet-500 hover:text-violet-800 hover:border-violet-400 transition-colors"

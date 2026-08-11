@@ -11,10 +11,14 @@ type Settings = {
   smtp_pass: string;
   smtp_from: string;
   smtp_reply_to: string;
-  repo_email_to: string;
-  repo_email_cc: string;
-  repo_email_subject: string;
-  repo_email_body: string;
+  repo_email_to_upe: string;
+  repo_email_cc_upe: string;
+  repo_email_subject_upe: string;
+  repo_email_body_upe: string;
+  repo_email_to_oncologia: string;
+  repo_email_cc_oncologia: string;
+  repo_email_subject_oncologia: string;
+  repo_email_body_oncologia: string;
 };
 
 const DEFAULT_SETTINGS: Settings = {
@@ -25,11 +29,16 @@ const DEFAULT_SETTINGS: Settings = {
   smtp_pass: '',
   smtp_from: '',
   smtp_reply_to: '',
-  repo_email_to: '',
-  repo_email_cc: '',
-  repo_email_subject: 'Pedido de reposicion UPE #{pedido_id} - {fecha}',
-  repo_email_body:
+  repo_email_to_upe: '',
+  repo_email_cc_upe: '',
+  repo_email_subject_upe: 'Pedido de reposicion UPE #{pedido_id} - {fecha}',
+  repo_email_body_upe:
     'Adjuntamos albaran de reposicion para preparacion en Farmacia.\n\nPedido: #{pedido_id}\nFecha: {fecha}\nLineas: {lineas}\n\nGracias.',
+  repo_email_to_oncologia: '',
+  repo_email_cc_oncologia: '',
+  repo_email_subject_oncologia: 'Pedido de reposicion Oncologia #{pedido_id} - {fecha}',
+  repo_email_body_oncologia:
+    'Adjuntamos albaran de reposicion de Oncologia para preparacion en Farmacia.\n\nPedido: #{pedido_id}\nFecha: {fecha}\nLineas: {lineas}\n\nGracias.',
 };
 
 export default function ConfigPage() {
@@ -44,7 +53,16 @@ export default function ConfigPage() {
         const res = await fetch('/api/settings', { cache: 'no-store' });
         const payload = await res.json();
         if (!res.ok) throw new Error(payload?.error ?? 'No se pudo cargar configuración.');
-        setSettings((prev) => ({ ...prev, ...payload }));
+        setSettings((prev) => ({
+          ...prev,
+          ...payload,
+          repo_email_to_upe: payload.repo_email_to_upe || payload.repo_email_to || prev.repo_email_to_upe,
+          repo_email_cc_upe: payload.repo_email_cc_upe || payload.repo_email_cc || prev.repo_email_cc_upe,
+          repo_email_subject_upe:
+            payload.repo_email_subject_upe || payload.repo_email_subject || prev.repo_email_subject_upe,
+          repo_email_body_upe:
+            payload.repo_email_body_upe || payload.repo_email_body || prev.repo_email_body_upe,
+        }));
       } catch (error) {
         toast.error(error instanceof Error ? error.message : 'Error inesperado');
       } finally {
@@ -164,45 +182,18 @@ export default function ConfigPage() {
         </div>
       </section>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-4 space-y-4">
-        <h2 className="text-base font-semibold text-slate-800">Email de reposición</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Field label="Destinatarios (TO)">
-            <input
-              value={settings.repo_email_to}
-              onChange={(e) => change('repo_email_to', e.target.value)}
-              placeholder="destino1@hospital.com, destino2@hospital.com"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-            />
-          </Field>
-          <Field label="Copia (CC)">
-            <input
-              value={settings.repo_email_cc}
-              onChange={(e) => change('repo_email_cc', e.target.value)}
-              placeholder="cc1@hospital.com, cc2@hospital.com"
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-            />
-          </Field>
-        </div>
-        <Field label="Asunto">
-          <input
-            value={settings.repo_email_subject}
-            onChange={(e) => change('repo_email_subject', e.target.value)}
-            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-          />
-        </Field>
-        <Field label="Cuerpo del email">
-          <textarea
-            value={settings.repo_email_body}
-            onChange={(e) => change('repo_email_body', e.target.value)}
-            rows={7}
-            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-          />
-        </Field>
-        <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-          Variables disponibles: <code>{'{pedido_id}'}</code>, <code>{'{fecha}'}</code>, <code>{'{lineas}'}</code>
-        </div>
-      </section>
+      <EmailAreaSection
+        title="Email de reposición — UPE"
+        prefix="upe"
+        settings={settings}
+        change={change}
+      />
+      <EmailAreaSection
+        title="Email de reposición — Oncología"
+        prefix="oncologia"
+        settings={settings}
+        change={change}
+      />
 
       <div className="flex justify-end">
         <button
@@ -214,6 +205,64 @@ export default function ConfigPage() {
         </button>
       </div>
     </div>
+  );
+}
+
+function EmailAreaSection({
+  title,
+  prefix,
+  settings,
+  change,
+}: {
+  title: string;
+  prefix: 'upe' | 'oncologia';
+  settings: Settings;
+  change: (key: keyof Settings, value: string) => void;
+}) {
+  const toKey = `repo_email_to_${prefix}` as keyof Settings;
+  const ccKey = `repo_email_cc_${prefix}` as keyof Settings;
+  const subjectKey = `repo_email_subject_${prefix}` as keyof Settings;
+  const bodyKey = `repo_email_body_${prefix}` as keyof Settings;
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white p-4 space-y-4">
+      <h2 className="text-base font-semibold text-slate-800">{title}</h2>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <Field label="Destinatarios (TO)">
+          <input
+            value={settings[toKey]}
+            onChange={(e) => change(toKey, e.target.value)}
+            placeholder="destino1@hospital.com, destino2@hospital.com"
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          />
+        </Field>
+        <Field label="Copia (CC)">
+          <input
+            value={settings[ccKey]}
+            onChange={(e) => change(ccKey, e.target.value)}
+            placeholder="cc1@hospital.com, cc2@hospital.com"
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          />
+        </Field>
+      </div>
+      <Field label="Asunto">
+        <input
+          value={settings[subjectKey]}
+          onChange={(e) => change(subjectKey, e.target.value)}
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+        />
+      </Field>
+      <Field label="Cuerpo del email">
+        <textarea
+          value={settings[bodyKey]}
+          onChange={(e) => change(bodyKey, e.target.value)}
+          rows={6}
+          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+        />
+      </Field>
+      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+        Variables: <code>{'{pedido_id}'}</code>, <code>{'{fecha}'}</code>, <code>{'{lineas}'}</code>
+      </div>
+    </section>
   );
 }
 

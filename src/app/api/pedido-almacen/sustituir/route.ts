@@ -67,6 +67,7 @@ export async function POST(req: NextRequest) {
           unidadesPorCaja: body.unidadesPorCaja != null ? Number(body.unidadesPorCaja) : undefined,
         }
       : undefined,
+    origen: 'pasillo',
   });
 
   if (!outcome.ok) {

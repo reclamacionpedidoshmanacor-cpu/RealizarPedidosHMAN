@@ -33,7 +33,8 @@ export async function GET(
       result.cabecera.id,
       result.cabecera.fechaCreacion,
       result.cabecera.fechaFinalizado,
-      result.lineas
+      result.lineas,
+      result.cabecera.area,
     );
 
     const filename = buildReposicionPdfFilename(pedidoId, result.cabecera.fechaCreacion);

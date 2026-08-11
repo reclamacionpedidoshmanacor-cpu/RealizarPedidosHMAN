@@ -8,6 +8,7 @@ import {
   upsertStockObjetivo,
 } from './catalogo-neon';
 import { isMSE, normalizarCnParaCima } from './utils';
+import { registrarIntercambio, type GrupoIntercambio } from './cn-equivalencia-neon';
 
 export type DatosNuevoSustitucion = {
   nombre: string;
@@ -33,6 +34,7 @@ export type SustitucionCnAlmacenResult = {
   puntoPedido: number | null;
   stockMaximo: number | null;
   consumoMedio: number | null;
+  grupoIntercambio: GrupoIntercambio;
 };
 
 function resolverDatosNuevo(
@@ -62,6 +64,7 @@ export async function sustituirCnEnCatalogoAlmacen(params: {
   cnNuevoRaw: string;
   ubicacion: string;
   datosNuevo?: DatosNuevoSustitucion;
+  origen?: 'catalogo' | 'pasillo';
 }): Promise<{ ok: true; result: SustitucionCnAlmacenResult } | { ok: false; err: SustitucionCnAlmacenError }> {
   const { area, cnViejo, cnNuevoRaw, ubicacion, datosNuevo } = params;
 
@@ -75,7 +78,7 @@ export async function sustituirCnEnCatalogoAlmacen(params: {
 
   const viejo = await getMedicamentoByCn(cnViejo);
   if (!viejo || viejo.area !== area) {
-    return { ok: false, err: { status: 404, error: `CN ${cnViejo} no encontrado en el catálogo de Almacén.` } };
+    return { ok: false, err: { status: 404, error: `CN ${cnViejo} no encontrado en el catálogo del área activa.` } };
   }
   if ((viejo.ubicacion ?? '').trim() !== ubicacion) {
     return { ok: false, err: { status: 400, error: 'El medicamento anterior no pertenece a esta ubicación.' } };
@@ -158,6 +161,13 @@ export async function sustituirCnEnCatalogoAlmacen(params: {
     activo: false,
   });
 
+  const grupoIntercambio = await registrarIntercambio({
+    area,
+    ubicacion,
+    cnAnterior: cnViejo,
+    cnNuevo,
+    origen: params.origen ?? 'catalogo',
+  });
   const stockFinal = await getStockObjetivoByCn(cnNuevo);
   const nuevoFinal = await getMedicamentoByCn(cnNuevo);
 
@@ -175,6 +185,7 @@ export async function sustituirCnEnCatalogoAlmacen(params: {
       puntoPedido: stockFinal?.puntoPedido ?? null,
       stockMaximo: stockFinal?.stockMaximo ?? null,
       consumoMedio: nuevoFinal?.consumoMedio ?? viejo.consumoMedio ?? null,
+      grupoIntercambio,
     },
   };
 }

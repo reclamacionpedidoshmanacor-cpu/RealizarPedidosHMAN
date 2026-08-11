@@ -123,6 +123,7 @@ export const propuestasLineas = sqliteTable('propuestas_lineas', {
   excluido:          integer('excluido', { mode: 'boolean' }).notNull().default(false),
   observaciones:     text('observaciones'),
   proveedorLocal:    integer('proveedor_local', { mode: 'boolean' }).notNull().default(false),
+  requiereRevisionCn: integer('requiere_revision_cn', { mode: 'boolean' }).notNull().default(false),
 }, (t) => [index('idx_lineas_propuesta').on(t.propuestaId)]);
 
 // ---------------------------------------------------------------------------

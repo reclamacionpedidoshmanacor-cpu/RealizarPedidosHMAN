@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isAlmacenArea } from '@/lib/almacen';
 import { requireApiSession } from '@/lib/api-auth';
 import { sustituirCnEnCatalogoAlmacen } from '@/lib/sustitucion-cn-almacen';
 
@@ -8,9 +7,6 @@ export const runtime = 'nodejs';
 export async function POST(req: NextRequest) {
   const session = requireApiSession(req);
   if (!session.ok) return session.response;
-  if (!isAlmacenArea(session.area)) {
-    return NextResponse.json({ error: 'Sustitución de catálogo solo disponible en Almacén.' }, { status: 403 });
-  }
 
   const body = (await req.json()) as {
     cnViejo?: unknown;
@@ -26,8 +22,8 @@ export async function POST(req: NextRequest) {
   const cnNuevoRaw = String(body.cnNuevo ?? '').trim();
   const ubicacion = String(body.ubicacion ?? '').trim();
 
-  if (!cnViejo || !cnNuevoRaw || !ubicacion) {
-    return NextResponse.json({ error: 'CN anterior, CN nuevo y ubicación son obligatorios.' }, { status: 400 });
+  if (!cnViejo || !cnNuevoRaw) {
+    return NextResponse.json({ error: 'CN anterior y CN nuevo son obligatorios.' }, { status: 400 });
   }
 
   const tieneDatosEditados =
@@ -49,6 +45,7 @@ export async function POST(req: NextRequest) {
           unidadesPorCaja: body.unidadesPorCaja != null ? Number(body.unidadesPorCaja) : undefined,
         }
       : undefined,
+    origen: 'catalogo',
   });
 
   if (!outcome.ok) {
@@ -61,6 +58,7 @@ export async function POST(req: NextRequest) {
     ok: true,
     cnViejo: result.cnViejo,
     cnNuevo: result.cnNuevo,
+    grupoIntercambio: result.grupoIntercambio,
     medicamento: {
       cn: result.cnNuevo,
       nombre: result.nombre,

@@ -59,8 +59,13 @@ export async function sendReposicionEmail(pedidoId: number): Promise<{ success: 
     if (pedido.lineas.length === 0) return { success: false, error: 'El pedido no tiene líneas.' };
 
     const settings = await getSettings();
-    const to = splitEmails(settings.repo_email_to);
-    const cc = splitEmails(settings.repo_email_cc);
+    const area = pedido.cabecera.area === 'oncologia' ? 'oncologia' : 'upe';
+    const to = splitEmails(
+      settings[`repo_email_to_${area}`] || (area === 'upe' ? settings.repo_email_to : ''),
+    );
+    const cc = splitEmails(
+      settings[`repo_email_cc_${area}`] || (area === 'upe' ? settings.repo_email_cc : ''),
+    );
     const replyTo = splitEmails(settings.smtp_reply_to);
 
     if (to.length === 0) {
@@ -71,9 +76,14 @@ export async function sendReposicionEmail(pedidoId: number): Promise<{ success: 
     const from = settings.smtp_from || settings.smtp_user || process.env.SMTP_FROM || process.env.SMTP_USER || '';
     if (!from) return { success: false, error: 'Falta remitente SMTP (smtp_from / SMTP_FROM).' };
 
-    const subjectTemplate = settings.repo_email_subject || 'Pedido de reposicion UPE #{pedido_id} - {fecha}';
+    const areaLabel = area === 'oncologia' ? 'Oncologia' : 'UPE';
+    const subjectTemplate =
+      settings[`repo_email_subject_${area}`] ||
+      (area === 'upe' ? settings.repo_email_subject : '') ||
+      `Pedido de reposicion ${areaLabel} #{pedido_id} - {fecha}`;
     const bodyTemplate =
-      settings.repo_email_body ||
+      settings[`repo_email_body_${area}`] ||
+      (area === 'upe' ? settings.repo_email_body : '') ||
       'Adjuntamos albaran de reposicion para preparacion en Farmacia.\n\nPedido: #{pedido_id}\nFecha: {fecha}\nLineas: {lineas}\n\nGracias.';
 
     const fecha = new Date(pedido.cabecera.fechaCreacion).toLocaleDateString('es-ES');
@@ -97,7 +107,8 @@ export async function sendReposicionEmail(pedidoId: number): Promise<{ success: 
       pedido.cabecera.id,
       pedido.cabecera.fechaCreacion,
       pedido.cabecera.fechaFinalizado,
-      pedido.lineas
+      pedido.lineas,
+      pedido.cabecera.area,
     );
     const filename = buildReposicionPdfFilename(pedido.cabecera.id, pedido.cabecera.fechaCreacion);
     const domain = from.split('@')[1] || 'hospital.local';

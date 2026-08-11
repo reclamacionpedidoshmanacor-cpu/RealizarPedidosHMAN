@@ -20,6 +20,14 @@ const ALLOWED_KEYS = [
   'repo_email_cc',
   'repo_email_subject',
   'repo_email_body',
+  'repo_email_to_upe',
+  'repo_email_cc_upe',
+  'repo_email_subject_upe',
+  'repo_email_body_upe',
+  'repo_email_to_oncologia',
+  'repo_email_cc_oncologia',
+  'repo_email_subject_oncologia',
+  'repo_email_body_oncologia',
 ] as const;
 
 const updateSchema = z.object({

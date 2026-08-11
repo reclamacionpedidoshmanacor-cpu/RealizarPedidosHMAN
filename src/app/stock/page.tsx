@@ -90,8 +90,8 @@ export default function StockPage() {
   const [deletingHistoricoId, setDeletingHistoricoId] = useState<number | null>(null);
   const [sendingEmailId, setSendingEmailId] = useState<number | null>(null);
 
-  /* ── Pedidos de Reposición (solo UPE) ── */
-  const [reposicion, setReposicion] = useState<{ borrador: ReposicionCabecera | null; historial: ReposicionCabecera[] } | null>(null);
+  /* ── Pedidos de Reposición (UPE y Oncología) ── */
+  const [reposicion, setReposicion] = useState<{ area: string; borrador: ReposicionCabecera | null; historial: ReposicionCabecera[] } | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -126,8 +126,12 @@ export default function StockPage() {
       if (res.status === 403) { setReposicion(null); return; }
       const payload = await res.json();
       if (!res.ok) return;
-      setReposicion({ borrador: payload.borrador ?? null, historial: payload.historial ?? [] });
-    } catch { /* área no UPE: silencioso */ }
+      setReposicion({
+        area: String(payload.area ?? ''),
+        borrador: payload.borrador ?? null,
+        historial: payload.historial ?? [],
+      });
+    } catch { /* área sin reposición: silencioso */ }
   };
 
   const upload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -680,15 +684,17 @@ export default function StockPage() {
         </>
       )}
 
-      {/* ══ Pedidos de Reposición (solo área Pac. Externos) ══ */}
+      {/* Acceso heredado; la gestión completa está en la pestaña Reposición. */}
       {reposicion !== null && (
         <section className="space-y-3">
           <div className="flex items-center justify-between gap-2">
             <div>
               <h2 className="text-lg font-bold text-slate-800">Pedidos de Reposición</h2>
-              <p className="text-xs text-slate-500">Solo disponible para el área de Pacientes Externos</p>
+              <p className="text-xs text-slate-500">La gestión completa está disponible en la pestaña Reposición.</p>
             </div>
-            <span className="rounded-full bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-700">Pac. Externos</span>
+            <span className="rounded-full bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-700">
+              {reposicion.area === 'oncologia' ? 'Oncología' : 'Pac. Externos'}
+            </span>
           </div>
 
           {/* Borrador activo */}
@@ -705,7 +711,7 @@ export default function StockPage() {
                 ⬇ Descargar PDF
               </a>
               <Link
-                href="/recuento-manual?area=upe&modo=reposicion"
+                href={`/recuento-manual?area=${reposicion.area}&modo=reposicion`}
                 className="rounded-lg border border-teal-300 bg-white px-3 py-1.5 text-xs font-semibold text-teal-700 hover:bg-teal-50"
               >
                 ✎ Editar pedido
@@ -764,7 +770,7 @@ export default function StockPage() {
                           </a>
                           {rep.estado === 'borrador' && (
                             <Link
-                              href="/recuento-manual?area=upe&modo=reposicion"
+                              href={`/recuento-manual?area=${reposicion.area}&modo=reposicion`}
                               className="inline-flex items-center gap-1 rounded-lg border border-teal-300 px-2 py-1 text-xs font-semibold text-teal-700 hover:bg-teal-50"
                             >
                               ✎ Editar pedido

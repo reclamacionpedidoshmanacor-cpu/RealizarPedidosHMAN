@@ -239,6 +239,65 @@ export async function getMedicamentoByCn(cn: string): Promise<MedicamentoBase | 
   };
 }
 
+export async function searchMedicamentosTodasAreas(
+  query: string,
+  limit = 30,
+): Promise<MedicamentoBase[]> {
+  await ensureMedicamentosSchema();
+  const sql = getCatalogoClient();
+  const term = query.trim();
+  if (!term) return [];
+  const rows = (await sql`
+    SELECT
+      cn, nombre, principio_activo, presentacion, via, area, ubicacion,
+      unidades_por_caja, activo, comprable, mse, tipo_mse, precio_unidad,
+      precio_caja, consumo_medio
+    FROM public.medicamentos
+    WHERE cn ILIKE ${`%${term}%`}
+       OR nombre ILIKE ${`%${term}%`}
+       OR principio_activo ILIKE ${`%${term}%`}
+    ORDER BY
+      CASE WHEN cn = ${term} THEN 0 ELSE 1 END,
+      activo DESC,
+      principio_activo NULLS LAST,
+      nombre
+    LIMIT ${Math.min(Math.max(limit, 1), 100)}
+  `) as Array<{
+    cn: string;
+    nombre: string;
+    principio_activo: string | null;
+    presentacion: string | null;
+    via: string | null;
+    area: string;
+    ubicacion: string | null;
+    unidades_por_caja: number;
+    activo: boolean;
+    comprable: boolean;
+    mse: boolean;
+    tipo_mse: string | null;
+    precio_unidad: string | number | null;
+    precio_caja: string | number | null;
+    consumo_medio: number | string | null;
+  }>;
+  return rows.map((row) => ({
+    cn: row.cn,
+    nombre: row.nombre,
+    principioActivo: row.principio_activo,
+    presentacion: row.presentacion?.trim() || null,
+    via: row.via,
+    area: row.area,
+    ubicacion: row.ubicacion,
+    unidadesPorCaja: Number(row.unidades_por_caja),
+    activo: row.activo,
+    comprable: row.comprable,
+    mse: isMSE(row.cn),
+    tipoMse: row.tipo_mse?.trim() || null,
+    precioUnidad: numOrNull(row.precio_unidad),
+    precioCaja: numOrNull(row.precio_caja),
+    consumoMedio: numOrNull(row.consumo_medio),
+  }));
+}
+
 export async function getStockObjetivoByCn(cn: string): Promise<StockObjetivo | null> {
   const sql = getCatalogoClient();
   const rows = (await sql`

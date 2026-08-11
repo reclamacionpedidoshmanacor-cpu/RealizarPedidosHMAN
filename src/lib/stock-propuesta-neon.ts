@@ -1500,7 +1500,8 @@ export async function actualizarLineaPropuesta(
           motivo_ajuste_otro = ${motivoAjusteOtro},
           ajustado = ${ajustado},
           unidades_final = ${unidadesFinal},
-          proveedor_local = ${proveedorLocal}
+          proveedor_local = ${proveedorLocal},
+          requiere_revision_cn = FALSE
       WHERE id = ${lineaId} AND propuesta_id = ${propuestaId};
     `;
   } else {
@@ -1510,7 +1511,8 @@ export async function actualizarLineaPropuesta(
           motivo_ajuste = ${motivoAjuste},
           motivo_ajuste_otro = ${motivoAjusteOtro},
           ajustado = ${ajustado},
-          unidades_final = ${unidadesFinal}
+          unidades_final = ${unidadesFinal},
+          requiere_revision_cn = FALSE
       WHERE id = ${lineaId} AND propuesta_id = ${propuestaId};
     `;
   }
@@ -1647,12 +1649,20 @@ export async function tramitarPropuesta(
   const sql = getDb();
 
   const lineas = (await sql`
-    SELECT id, cajas_propuestas, cajas_validadas, unidades_por_caja
+    SELECT id, cajas_propuestas, cajas_validadas, unidades_por_caja,
+           COALESCE(requiere_revision_cn, FALSE) AS requiere_revision_cn
     FROM propuestas_lineas WHERE propuesta_id = ${propuestaId};
   `) as Array<{
     id: number; cajas_propuestas: number;
     cajas_validadas: number | null; unidades_por_caja: number;
+    requiere_revision_cn: boolean;
   }>;
+
+  if (lineas.some((linea) => linea.requiere_revision_cn)) {
+    throw new Error(
+      'Hay líneas con un CN intercambiado. Revisa y guarda sus cantidades antes de tramitar.',
+    );
+  }
 
   for (const l of lineas) {
     const cajasFinales = normalizePedidoCajas(

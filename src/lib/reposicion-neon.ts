@@ -1,4 +1,5 @@
 import { neon } from '@neondatabase/serverless';
+import { ensureReposicionCatalogoSchema } from '@/lib/reposicion-catalogo-neon';
 
 function getDb() {
   const url = process.env.REALIZAR_PEDIDOS_DATABASE_URL ?? process.env.DATABASE_URL;
@@ -8,6 +9,7 @@ function getDb() {
 
 /* ─── Auto-creación de tablas ─── */
 export async function ensureTablesReposicion() {
+  await ensureReposicionCatalogoSchema();
   const sql = getDb();
   await sql`
     CREATE TABLE IF NOT EXISTS pedidos_reposicion (
@@ -32,6 +34,38 @@ export async function ensureTablesReposicion() {
       UNIQUE (pedido_id, cn)
     )
   `;
+  await sql`ALTER TABLE pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS catalogo_id INTEGER;`;
+  await sql`ALTER TABLE pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS codigo_item TEXT;`;
+  await sql`ALTER TABLE pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS tipo_item TEXT NOT NULL DEFAULT 'medicamento';`;
+  await sql`ALTER TABLE pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS area_origen TEXT;`;
+  await sql`ALTER TABLE pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS unidad_pedido TEXT NOT NULL DEFAULT 'cajas';`;
+  await sql`ALTER TABLE pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS punto_pedido NUMERIC;`;
+  await sql`ALTER TABLE pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS notas TEXT;`;
+  await sql`UPDATE pedidos_reposicion_lineas SET codigo_item = cn WHERE codigo_item IS NULL;`;
+  await sql`
+    ALTER TABLE pedidos_reposicion_lineas
+    DROP CONSTRAINT IF EXISTS pedidos_reposicion_lineas_pedido_id_cn_key
+  `;
+  await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_reposicion_linea_pedido_ubicacion_codigo
+    ON pedidos_reposicion_lineas (pedido_id, ubicacion, codigo_item)
+  `;
+  await sql`
+    UPDATE pedidos_reposicion_lineas l
+    SET catalogo_id = rc.id,
+        codigo_item = rc.codigo,
+        tipo_item = rc.tipo,
+        area_origen = rc.area_origen,
+        unidad_pedido = rc.unidad_pedido,
+        punto_pedido = rc.punto_pedido,
+        notas = rc.notas
+    FROM pedidos_reposicion p, reposicion_catalogo rc
+    WHERE p.id = l.pedido_id
+      AND rc.area_destino = p.area
+      AND rc.ubicacion_destino = l.ubicacion
+      AND rc.cn = l.cn
+      AND l.catalogo_id IS NULL
+  `;
 }
 
 /* ─── TIPOS ─── */
@@ -53,6 +87,13 @@ export type ReposicionLinea = {
   nombre: string;
   cantidadCajas: number;
   stockMaximo: number | null;
+  puntoPedido: number | null;
+  notas: string | null;
+  codigo: string;
+  tipo: 'medicamento' | 'formula';
+  areaOrigen: string | null;
+  unidadPedido: 'cajas' | 'unidades';
+  catalogoId: number | null;
 };
 
 /* ─── CONSULTAS ─── */
@@ -92,7 +133,9 @@ export async function getPedidoConLineas(
   `;
   if (!cab[0]) return null;
   const lin = await sql`
-    SELECT id, pedido_id, ubicacion, cn, principio_activo, nombre, cantidad_cajas, stock_maximo
+    SELECT id, pedido_id, ubicacion, cn, principio_activo, nombre, cantidad_cajas,
+           stock_maximo, punto_pedido, notas, codigo_item, tipo_item, area_origen,
+           unidad_pedido, catalogo_id
     FROM pedidos_reposicion_lineas
     WHERE pedido_id = ${id}
     ORDER BY ubicacion, principio_activo, nombre
@@ -117,6 +160,13 @@ export type LineaInput = {
   nombre: string;
   cantidadCajas: number;
   stockMaximo: number | null;
+  puntoPedido: number | null;
+  notas: string | null;
+  codigo: string;
+  tipo: 'medicamento' | 'formula';
+  areaOrigen: string | null;
+  unidadPedido: 'cajas' | 'unidades';
+  catalogoId: number | null;
 };
 
 export async function upsertLineasReposicion(
@@ -128,22 +178,45 @@ export async function upsertLineasReposicion(
   for (const l of lineas) {
     await sql`
       INSERT INTO pedidos_reposicion_lineas
-        (pedido_id, ubicacion, cn, principio_activo, nombre, cantidad_cajas, stock_maximo)
+        (pedido_id, ubicacion, cn, principio_activo, nombre, cantidad_cajas,
+         stock_maximo, punto_pedido, notas, codigo_item, tipo_item, area_origen,
+         unidad_pedido, catalogo_id)
       VALUES
         (${pedidoId}, ${l.ubicacion}, ${l.cn}, ${l.principioActivo ?? null},
-         ${l.nombre}, ${l.cantidadCajas}, ${l.stockMaximo ?? null})
-      ON CONFLICT (pedido_id, cn)
+         ${l.nombre}, ${l.cantidadCajas}, ${l.stockMaximo ?? null},
+         ${l.puntoPedido ?? null}, ${l.notas ?? null}, ${l.codigo}, ${l.tipo},
+         ${l.areaOrigen ?? null}, ${l.unidadPedido}, ${l.catalogoId ?? null})
+      ON CONFLICT (pedido_id, ubicacion, codigo_item)
       DO UPDATE SET
-        ubicacion = EXCLUDED.ubicacion,
+        cn = EXCLUDED.cn,
         principio_activo = EXCLUDED.principio_activo,
         nombre = EXCLUDED.nombre,
         cantidad_cajas = EXCLUDED.cantidad_cajas,
-        stock_maximo = EXCLUDED.stock_maximo
+        stock_maximo = EXCLUDED.stock_maximo,
+        punto_pedido = EXCLUDED.punto_pedido,
+        notas = EXCLUDED.notas,
+        tipo_item = EXCLUDED.tipo_item,
+        area_origen = EXCLUDED.area_origen,
+        unidad_pedido = EXCLUDED.unidad_pedido,
+        catalogo_id = EXCLUDED.catalogo_id
     `;
     upserted++;
   }
   await recalcularTotalLineas(pedidoId);
   return { upserted };
+}
+
+export async function reemplazarLineasReposicionUbicacion(
+  pedidoId: number,
+  ubicacion: string,
+  lineas: LineaInput[],
+): Promise<{ upserted: number }> {
+  const sql = getDb();
+  await sql`
+    DELETE FROM pedidos_reposicion_lineas
+    WHERE pedido_id = ${pedidoId} AND ubicacion = ${ubicacion}
+  `;
+  return upsertLineasReposicion(pedidoId, lineas.filter((linea) => linea.cantidadCajas > 0));
 }
 
 export async function finalizarPedido(id: number): Promise<ReposicionCabecera> {
@@ -191,5 +264,12 @@ function mapLinea(r: Record<string, unknown>): ReposicionLinea {
     nombre: String(r.nombre),
     cantidadCajas: Number(r.cantidad_cajas),
     stockMaximo: r.stock_maximo != null ? Number(r.stock_maximo) : null,
+    puntoPedido: r.punto_pedido != null ? Number(r.punto_pedido) : null,
+    notas: r.notas ? String(r.notas) : null,
+    codigo: String(r.codigo_item ?? r.cn),
+    tipo: r.tipo_item === 'formula' ? 'formula' : 'medicamento',
+    areaOrigen: r.area_origen ? String(r.area_origen) : null,
+    unidadPedido: r.unidad_pedido === 'unidades' ? 'unidades' : 'cajas',
+    catalogoId: r.catalogo_id == null ? null : Number(r.catalogo_id),
   };
 }
