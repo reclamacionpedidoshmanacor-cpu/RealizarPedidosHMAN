@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname, useRouter } from 'next/navigation';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { AREA_IDS } from '@/lib/areas';
 import { cn } from '@/lib/utils';
 
 const AREA_LABELS: Record<string, string> = {
@@ -111,15 +112,55 @@ export default function Navbar() {
   const pathname = usePathname();
   const router = useRouter();
   const [area, setArea] = useState('');
+  const [areaMenuOpen, setAreaMenuOpen] = useState(false);
+  const [cambiandoArea, setCambiandoArea] = useState('');
+  const areaMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const a = document.cookie.split(';').find(c => c.trim().startsWith('area_session='))?.split('=')[1] ?? '';
     setArea(a);
   }, [pathname]);
 
+  useEffect(() => {
+    if (!areaMenuOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (!areaMenuRef.current?.contains(event.target as Node)) setAreaMenuOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setAreaMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [areaMenuOpen]);
+
   const handleLogout = async () => {
     await fetch('/api/auth', { method: 'DELETE' });
     router.push('/login');
+  };
+
+  const cambiarArea = async (nueva: string) => {
+    if (nueva === area) {
+      setAreaMenuOpen(false);
+      return;
+    }
+    setCambiandoArea(nueva);
+    try {
+      const res = await fetch('/api/auth/area', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ area: nueva }),
+      });
+      if (!res.ok) throw new Error('No se pudo cambiar de área.');
+      // Recarga completa para que todas las vistas relean el área activa.
+      window.location.assign('/inicio');
+    } catch {
+      setCambiandoArea('');
+      setAreaMenuOpen(false);
+    }
   };
 
   if (pathname === '/login' || pathname.startsWith('/recuento-manual')) return null;
@@ -147,10 +188,50 @@ export default function Navbar() {
           {/* Área activa + logout — pegados al logo */}
           <div className="flex items-center gap-2 shrink-0">
             {area && (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-teal-50 border border-teal-200 px-3 py-1 text-xs font-semibold text-teal-700">
-                <span className="h-1.5 w-1.5 rounded-full bg-teal-500" />
-                {AREA_LABELS[area] ?? area}
-              </span>
+              <div className="relative" ref={areaMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => setAreaMenuOpen(open => !open)}
+                  title="Cambiar de área"
+                  aria-haspopup="menu"
+                  aria-expanded={areaMenuOpen}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-teal-200 bg-teal-50 px-3 py-1 text-xs font-semibold text-teal-700 transition-colors hover:border-teal-300 hover:bg-teal-100"
+                >
+                  <span className="h-1.5 w-1.5 rounded-full bg-teal-500" />
+                  {AREA_LABELS[area] ?? area}
+                  <svg className={cn('h-3 w-3 transition-transform', areaMenuOpen && 'rotate-180')} fill="none" viewBox="0 0 24 24" strokeWidth="2.5" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                  </svg>
+                </button>
+                {areaMenuOpen && (
+                  <div role="menu" className="absolute left-0 top-full z-50 mt-2 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
+                    <p className="border-b border-slate-100 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      Cambiar de área
+                    </p>
+                    {AREA_IDS.map(id => (
+                      <button
+                        key={id}
+                        role="menuitem"
+                        disabled={Boolean(cambiandoArea)}
+                        onClick={() => cambiarArea(id)}
+                        className={cn(
+                          'flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm transition-colors disabled:opacity-50',
+                          id === area ? 'bg-teal-50 font-semibold text-teal-700' : 'text-slate-600 hover:bg-slate-50'
+                        )}
+                      >
+                        {AREA_LABELS[id] ?? id}
+                        {cambiandoArea === id
+                          ? <span className="text-xs text-slate-400">Cambiando…</span>
+                          : id === area && (
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                            </svg>
+                          )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
             <button
               onClick={handleLogout}
