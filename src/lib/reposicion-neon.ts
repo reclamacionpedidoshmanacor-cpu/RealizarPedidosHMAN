@@ -69,6 +69,14 @@ export async function ensureTablesReposicion() {
       AND l.catalogo_id IS NULL
   `;
   await sql`
+    UPDATE pedidos_reposicion_lineas l
+    SET ubicacion_origen = rc.ubicacion_origen
+    FROM reposicion_catalogo rc
+    WHERE rc.id = l.catalogo_id
+      AND l.ubicacion_origen IS NULL
+      AND rc.ubicacion_origen IS NOT NULL
+  `;
+  await sql`
     UPDATE pedidos_reposicion_lineas
     SET nombre = 'SOLUCIÓN DE MUCOSITIS',
         principio_activo = 'SOLUCIÓN DE MUCOSITIS'

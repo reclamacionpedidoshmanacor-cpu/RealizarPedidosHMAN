@@ -131,14 +131,14 @@ export async function buildReposicionPdf(
   if (logo) {
     const logoW = (logo.width * LOGO_H) / logo.height;
     w.image(logo, MARGIN, logoW, LOGO_H);
-    w.moveDown(LOGO_H + 14);
+    w.moveDown(LOGO_H + 20);
   }
 
-  w.text('ALBARAN DE REPOSICION', MARGIN, { size: 18, font: bold, color: rgb(0.05, 0.2, 0.45) });
-  w.moveDown(24);
-  const areaLabel = area === 'oncologia' ? 'ONCOLOGIA' : 'PACIENTES EXTERNOS';
+  w.text('ALBARÁN DE REPOSICIÓN', MARGIN, { size: 18, font: bold, color: rgb(0.05, 0.2, 0.45) });
+  w.moveDown(26);
+  const areaLabel = area === 'oncologia' ? 'ONCOLOGÍA' : 'PACIENTES EXTERNOS';
   w.text(areaLabel, MARGIN, { size: 20, font: bold, color: rgb(0, 0, 0) });
-  w.moveDown(18);
+  w.moveDown(20);
   w.text('Servicio de Farmacia Hospitalaria - Hospital de Manacor', MARGIN, {
     size: 10,
     font: regular,
