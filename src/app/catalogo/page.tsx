@@ -24,6 +24,41 @@ interface Medicamento {
 
 type SortKey = 'principioActivo' | 'nombre' | 'cn' | 'ubicacion' | 'puntoPedido';
 type SortDir = 'asc' | 'desc';
+type CatalogColumnKey =
+  | 'cn'
+  | 'principioActivo'
+  | 'nombre'
+  | 'via'
+  | 'ubicacion'
+  | 'unidadesPorCaja'
+  | 'presentacion'
+  | 'consumoMedio'
+  | 'stockMinimo'
+  | 'puntoPedido'
+  | 'stockMaximo'
+  | 'precioCaja'
+  | 'activo'
+  | 'acciones';
+
+const CATALOGO_COLUMN_WIDTHS: Record<CatalogColumnKey, number> = {
+  cn: 160,
+  principioActivo: 220,
+  nombre: 220,
+  via: 90,
+  ubicacion: 160,
+  unidadesPorCaja: 100,
+  presentacion: 220,
+  consumoMedio: 120,
+  stockMinimo: 90,
+  puntoPedido: 110,
+  stockMaximo: 90,
+  precioCaja: 115,
+  activo: 80,
+  acciones: 120,
+};
+
+const MIN_COLUMN_WIDTH = 70;
+const MAX_COLUMN_WIDTH = 640;
 
 type RevisionPendiente = {
   id: number;
@@ -196,6 +231,15 @@ export default function CatalogoPage() {
   const [sustitucionMed, setSustitucionMed] = useState<Medicamento | null>(null);
   const [sustituyendo, setSustituyendo] = useState(false);
   const [area, setArea] = useState('');
+  const [columnWidths, setColumnWidths] = useState<Record<CatalogColumnKey, number>>({
+    ...CATALOGO_COLUMN_WIDTHS,
+  });
+  const columnWidthsRef = useRef(columnWidths);
+  const resizingColumnRef = useRef<{
+    key: CatalogColumnKey;
+    startX: number;
+    startWidth: number;
+  } | null>(null);
   const [page, setPage] = useState(1);
   const fileRef = useRef<HTMLInputElement>(null);
   const consumoMedioFileRef = useRef<HTMLInputElement>(null);
@@ -320,6 +364,66 @@ export default function CatalogoPage() {
   useEffect(() => {
     setArea(getArea());
   }, []);
+
+  useEffect(() => {
+    if (!area || typeof window === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(`catalogo:column-widths:${area}`);
+      const parsed = raw ? JSON.parse(raw) as Partial<Record<CatalogColumnKey, number>> : {};
+      const restored = { ...CATALOGO_COLUMN_WIDTHS };
+      for (const key of Object.keys(CATALOGO_COLUMN_WIDTHS) as CatalogColumnKey[]) {
+        const value = Number(parsed[key]);
+        if (Number.isFinite(value)) {
+          restored[key] = Math.min(MAX_COLUMN_WIDTH, Math.max(MIN_COLUMN_WIDTH, value));
+        }
+      }
+      columnWidthsRef.current = restored;
+      setColumnWidths(restored);
+    } catch {
+      columnWidthsRef.current = { ...CATALOGO_COLUMN_WIDTHS };
+      setColumnWidths({ ...CATALOGO_COLUMN_WIDTHS });
+    }
+  }, [area]);
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      const active = resizingColumnRef.current;
+      if (!active) return;
+      const nextWidth = Math.min(
+        MAX_COLUMN_WIDTH,
+        Math.max(MIN_COLUMN_WIDTH, active.startWidth + event.clientX - active.startX),
+      );
+      const next = { ...columnWidthsRef.current, [active.key]: nextWidth };
+      columnWidthsRef.current = next;
+      setColumnWidths(next);
+    };
+
+    const handlePointerUp = () => {
+      if (!resizingColumnRef.current) return;
+      resizingColumnRef.current = null;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      if (area) {
+        try {
+          window.localStorage.setItem(
+            `catalogo:column-widths:${area}`,
+            JSON.stringify(columnWidthsRef.current),
+          );
+        } catch {
+          // El ajuste visual sigue funcionando aunque el navegador bloquee localStorage.
+        }
+      }
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [area]);
 
   useEffect(() => {
     if (!area) return;
@@ -862,15 +966,116 @@ export default function CatalogoPage() {
   const activos = meds.filter(m => m.activo).length;
   const mseCount = meds.filter(m => isMSE(m.cn)).length;
 
+  const catalogColumns: CatalogColumnKey[] = [
+    'cn',
+    'principioActivo',
+    'nombre',
+    ...(!esAlmacen ? ['via' as const] : []),
+    'ubicacion',
+    'unidadesPorCaja',
+    ...(esAlmacen ? ['presentacion' as const, 'consumoMedio' as const] : []),
+    'stockMinimo',
+    'puntoPedido',
+    'stockMaximo',
+    'precioCaja',
+    'activo',
+    'acciones',
+  ];
+  const catalogTableWidth = catalogColumns.reduce((total, key) => total + columnWidths[key], 0);
+
+  const persistColumnWidths = (next: Record<CatalogColumnKey, number>) => {
+    columnWidthsRef.current = next;
+    setColumnWidths(next);
+    if (area && typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(`catalogo:column-widths:${area}`, JSON.stringify(next));
+      } catch {
+        // El ajuste visual sigue funcionando aunque el navegador bloquee localStorage.
+      }
+    }
+  };
+
+  const startColumnResize = (
+    event: React.PointerEvent<HTMLSpanElement>,
+    key: CatalogColumnKey,
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+    resizingColumnRef.current = {
+      key,
+      startX: event.clientX,
+      startWidth: columnWidthsRef.current[key],
+    };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+
+  const resetColumnWidth = (key: CatalogColumnKey) => {
+    persistColumnWidths({
+      ...columnWidthsRef.current,
+      [key]: CATALOGO_COLUMN_WIDTHS[key],
+    });
+  };
+
+  const resizeHandle = (key: CatalogColumnKey) => (
+    <span
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={`Cambiar ancho de la columna ${key}`}
+      tabIndex={0}
+      title="Arrastra para cambiar el ancho · doble clic para restablecer"
+      onClick={(event) => event.stopPropagation()}
+      onPointerDown={(event) => startColumnResize(event, key)}
+      onDoubleClick={(event) => {
+        event.stopPropagation();
+        resetColumnWidth(key);
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+        event.preventDefault();
+        event.stopPropagation();
+        const delta = event.key === 'ArrowRight' ? 12 : -12;
+        persistColumnWidths({
+          ...columnWidthsRef.current,
+          [key]: Math.min(
+            MAX_COLUMN_WIDTH,
+            Math.max(MIN_COLUMN_WIDTH, columnWidthsRef.current[key] + delta),
+          ),
+        });
+      }}
+      className="absolute inset-y-0 right-0 z-10 w-2 translate-x-1/2 cursor-col-resize touch-none outline-none after:absolute after:inset-y-2 after:left-1/2 after:w-px after:bg-slate-300 hover:after:bg-teal-500 focus:after:w-0.5 focus:after:bg-teal-600"
+    />
+  );
+
   const thSort = (key: SortKey, label: string, align: 'left' | 'center' = 'left') => (
     <th
-      className={`px-4 py-3 text-${align} cursor-pointer select-none group`}
+      className={cn(
+        'relative px-4 py-3 cursor-pointer select-none group',
+        align === 'center' ? 'text-center' : 'text-left',
+      )}
       onClick={() => handleSort(key)}
     >
       <span className="inline-flex items-center gap-0.5 text-xs font-semibold text-slate-500 uppercase tracking-wide group-hover:text-teal-700 transition-colors">
         {label}
         <SortIcon dir={sortKey === key ? sortDir : null} />
       </span>
+      {resizeHandle(key)}
+    </th>
+  );
+
+  const thPlain = (
+    key: CatalogColumnKey,
+    label: string,
+    align: 'left' | 'center' = 'left',
+  ) => (
+    <th
+      className={cn(
+        'relative px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide',
+        align === 'center' ? 'text-center' : 'text-left',
+      )}
+    >
+      {label}
+      {resizeHandle(key)}
     </th>
   );
 
@@ -1227,6 +1432,9 @@ export default function CatalogoPage() {
       </div>
 
       {/* Tabla */}
+      <p className="mb-1.5 text-right text-[11px] text-slate-400">
+        Arrastra el borde de una cabecera para ajustar su ancho · doble clic para restablecerlo.
+      </p>
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
         {loading ? (
           <div className="flex items-center justify-center py-20 text-slate-400 text-sm">Cargando catálogo…</div>
@@ -1239,33 +1447,37 @@ export default function CatalogoPage() {
             <p className="text-xs mt-1">Importa un catálogo Excel o ajusta los filtros</p>
           </div>
         ) : (
-          <table className="min-w-full text-sm">
+          <table
+            className="table-fixed text-sm"
+            style={{ width: `${catalogTableWidth}px`, minWidth: '100%' }}
+          >
+            <colgroup>
+              {catalogColumns.map((key) => (
+                <col key={key} style={{ width: `${columnWidths[key]}px` }} />
+              ))}
+            </colgroup>
             <thead>
               <tr className="border-b border-slate-100 bg-slate-50">
                 {thSort('cn', 'CN')}
                 {thSort('principioActivo', 'Principio activo')}
                 {thSort('nombre', 'Nombre / Marca')}
                 {!esAlmacen && (
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Vía</th>
+                  thPlain('via', 'Vía')
                 )}
                 {thSort('ubicacion', 'Ubicación')}
-                <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">Uds/caja</th>
+                {thPlain('unidadesPorCaja', 'Uds/caja', 'center')}
                 {esAlmacen && (
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wide">Presentación</th>
+                  thPlain('presentacion', 'Presentación')
                 )}
                 {esAlmacen && (
-                  <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">Consumo medio</th>
+                  thPlain('consumoMedio', 'Consumo medio', 'center')
                 )}
-                <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                  Mín{esAlmacen ? ' (opt.)' : ''}
-                </th>
+                {thPlain('stockMinimo', `Mín${esAlmacen ? ' (opt.)' : ''}`, 'center')}
                 {thSort('puntoPedido', esAlmacen ? 'Pto.Ped (opt.)' : 'Pto.Ped', 'center')}
-                <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">
-                  Máx{esAlmacen ? ' (opt.)' : ''}
-                </th>
-                <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">Precio/caja</th>
-                <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">Activo</th>
-                <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase tracking-wide">Acciones</th>
+                {thPlain('stockMaximo', `Máx${esAlmacen ? ' (opt.)' : ''}`, 'center')}
+                {thPlain('precioCaja', 'Precio/caja', 'center')}
+                {thPlain('activo', 'Activo', 'center')}
+                {thPlain('acciones', 'Acciones', 'center')}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -1346,10 +1558,10 @@ export default function CatalogoPage() {
                         <BadgeSuministro alerta={med.alertaSuministro} />
                       </span>
                     </td>
-                    <td className="px-4 py-3 font-medium text-slate-800 max-w-[200px] truncate" title={med.principioActivo ?? ''}>
+                    <td className="px-4 py-3 font-medium text-slate-800 truncate" title={med.principioActivo ?? ''}>
                       {med.principioActivo ?? '—'}
                     </td>
-                    <td className="px-4 py-3 text-slate-600 max-w-[180px] truncate" title={med.nombre}>
+                    <td className="px-4 py-3 text-slate-600 truncate" title={med.nombre}>
                       {med.nombre}
                     </td>
                     {!esAlmacen && (
@@ -1366,7 +1578,7 @@ export default function CatalogoPage() {
                       {esAlmacen && med.unidadesPorCaja <= 0 ? '—' : med.unidadesPorCaja}
                     </td>
                     {esAlmacen && (
-                      <td className="px-4 py-3 text-xs text-slate-500 max-w-[180px] truncate" title={med.presentacion ?? ''}>
+                      <td className="px-4 py-3 text-xs text-slate-500 truncate" title={med.presentacion ?? ''}>
                         {med.presentacion ?? '—'}
                       </td>
                     )}
