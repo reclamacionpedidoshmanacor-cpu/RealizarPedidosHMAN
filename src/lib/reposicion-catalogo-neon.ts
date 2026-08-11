@@ -22,6 +22,7 @@ export type ReposicionCatalogoItem = {
   cn: string | null;
   tipo: 'medicamento' | 'formula';
   areaOrigen: string | null;
+  ubicacionOrigen: string | null;
   principioActivo: string | null;
   nombre: string;
   unidadesPorCaja: number;
@@ -66,6 +67,7 @@ export async function ensureReposicionCatalogoSchema(): Promise<void> {
         CREATE INDEX IF NOT EXISTS idx_reposicion_catalogo_area
         ON reposicion_catalogo (area_destino, activo, ubicacion_destino)
       `;
+      await sql`ALTER TABLE reposicion_catalogo ADD COLUMN IF NOT EXISTS ubicacion_origen TEXT;`;
       await sql`
         INSERT INTO reposicion_catalogo (
           area_destino, ubicacion_destino, codigo, cn, tipo, area_origen,
@@ -122,6 +124,13 @@ export async function ensureReposicionCatalogoSchema(): Promise<void> {
         )
         ON CONFLICT (area_destino, ubicacion_destino, codigo) DO NOTHING
       `;
+      await sql`
+        UPDATE reposicion_catalogo rc
+        SET ubicacion_origen = m.ubicacion
+        FROM medicamentos m
+        WHERE m.cn = rc.cn
+          AND rc.ubicacion_origen IS DISTINCT FROM m.ubicacion
+      `;
     })().catch((error) => {
       ensurePromise = null;
       throw error;
@@ -139,6 +148,7 @@ function mapItem(row: Record<string, unknown>): ReposicionCatalogoItem {
     cn: row.cn ? String(row.cn) : null,
     tipo: row.tipo === 'formula' ? 'formula' : 'medicamento',
     areaOrigen: row.area_origen ? String(row.area_origen) : null,
+    ubicacionOrigen: row.ubicacion_origen ? String(row.ubicacion_origen) : null,
     principioActivo: row.principio_activo ? String(row.principio_activo) : null,
     nombre: String(row.nombre),
     unidadesPorCaja: Math.max(1, Number(row.unidades_por_caja) || 1),
@@ -211,6 +221,7 @@ export async function upsertReposicionCatalogoItem(
   const cn = input.cn?.trim() || null;
   let codigo = input.codigo?.trim() || cn || '';
   let areaOrigen: string | null = null;
+  let ubicacionOrigen: string | null = null;
   let nombre = input.nombre?.trim() || '';
   let principioActivo = input.principioActivo?.trim() || null;
   let unidadesPorCaja = Math.max(1, Math.trunc(Number(input.unidadesPorCaja) || 1));
@@ -221,6 +232,7 @@ export async function upsertReposicionCatalogoItem(
     if (!medicamento) throw new Error(`CN ${cn} no encontrado en ningún catálogo.`);
     codigo = cn;
     areaOrigen = medicamento.area;
+    ubicacionOrigen = medicamento.ubicacion?.trim() || null;
     nombre = medicamento.nombre;
     principioActivo = medicamento.principioActivo;
     unidadesPorCaja = Math.max(1, Number(medicamento.unidadesPorCaja) || 1);
@@ -240,6 +252,7 @@ export async function upsertReposicionCatalogoItem(
             cn = ${cn},
             tipo = ${tipo},
             area_origen = ${areaOrigen},
+            ubicacion_origen = ${ubicacionOrigen},
             principio_activo = ${principioActivo},
             nombre = ${nombre},
             unidades_por_caja = ${unidadesPorCaja},
@@ -255,12 +268,12 @@ export async function upsertReposicionCatalogoItem(
     : await sql`
         INSERT INTO reposicion_catalogo (
           area_destino, ubicacion_destino, codigo, cn, tipo, area_origen,
-          principio_activo, nombre, unidades_por_caja, unidad_pedido,
+          ubicacion_origen, principio_activo, nombre, unidades_por_caja, unidad_pedido,
           stock_maximo, punto_pedido, notas, activo
         )
         VALUES (
           ${input.areaDestino}, ${ubicacion}, ${codigo}, ${cn}, ${tipo}, ${areaOrigen},
-          ${principioActivo}, ${nombre}, ${unidadesPorCaja},
+          ${ubicacionOrigen}, ${principioActivo}, ${nombre}, ${unidadesPorCaja},
           ${input.unidadPedido === 'unidades' ? 'unidades' : 'cajas'},
           ${stockMaximo}, ${puntoPedido}, ${input.notas?.trim() || null}, ${input.activo ?? true}
         )
@@ -269,6 +282,7 @@ export async function upsertReposicionCatalogoItem(
           cn = EXCLUDED.cn,
           tipo = EXCLUDED.tipo,
           area_origen = EXCLUDED.area_origen,
+          ubicacion_origen = EXCLUDED.ubicacion_origen,
           principio_activo = EXCLUDED.principio_activo,
           nombre = EXCLUDED.nombre,
           unidades_por_caja = EXCLUDED.unidades_por_caja,
@@ -313,6 +327,7 @@ export async function remapReposicionCatalogoCn(
     SET cn = ${cnNuevo},
         codigo = ${cnNuevo},
         area_origen = ${medicamento.area},
+        ubicacion_origen = ${medicamento.ubicacion?.trim() || null},
         principio_activo = ${medicamento.principioActivo},
         nombre = ${medicamento.nombre},
         unidades_por_caja = ${Math.max(1, medicamento.unidadesPorCaja || 1)},

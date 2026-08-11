@@ -110,6 +110,7 @@ export async function POST(req: NextRequest) {
         codigo: item.codigo,
         tipo: item.tipo,
         areaOrigen: item.areaOrigen,
+        ubicacionOrigen: item.ubicacionOrigen,
         principioActivo: item.principioActivo,
         nombre: item.nombre,
         cantidadCajas: l.cantidadCajas,

@@ -61,7 +61,9 @@ ALTER TABLE public.pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS catalogo_i
 ALTER TABLE public.pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS codigo_item TEXT;
 ALTER TABLE public.pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS tipo_item TEXT NOT NULL DEFAULT 'medicamento';
 ALTER TABLE public.pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS area_origen TEXT;
+ALTER TABLE public.pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS ubicacion_origen TEXT;
 ALTER TABLE public.pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS unidad_pedido TEXT NOT NULL DEFAULT 'cajas';
+ALTER TABLE public.reposicion_catalogo ADD COLUMN IF NOT EXISTS ubicacion_origen TEXT;
 ALTER TABLE public.pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS punto_pedido NUMERIC;
 ALTER TABLE public.pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS notas TEXT;
 
@@ -132,6 +134,7 @@ SET catalogo_id = rc.id,
     codigo_item = rc.codigo,
     tipo_item = rc.tipo,
     area_origen = rc.area_origen,
+    ubicacion_origen = rc.ubicacion_origen,
     unidad_pedido = rc.unidad_pedido,
     punto_pedido = rc.punto_pedido,
     notas = rc.notas
@@ -141,5 +144,17 @@ WHERE p.id = l.pedido_id
   AND rc.ubicacion_destino = l.ubicacion
   AND rc.cn = l.cn
   AND l.catalogo_id IS NULL;
+
+UPDATE public.reposicion_catalogo rc
+SET ubicacion_origen = m.ubicacion
+FROM public.medicamentos m
+WHERE m.cn = rc.cn
+  AND rc.ubicacion_origen IS DISTINCT FROM m.ubicacion;
+
+UPDATE public.pedidos_reposicion_lineas l
+SET ubicacion_origen = rc.ubicacion_origen
+FROM public.reposicion_catalogo rc
+WHERE rc.id = l.catalogo_id
+  AND l.ubicacion_origen IS NULL;
 
 COMMIT;

@@ -128,8 +128,8 @@ export async function buildReposicionPdf(
   w.text(meta, MARGIN, { size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
   w.moveDown(18);
 
-  const COL = { cn: MARGIN, pa: MARGIN + 65, med: MARGIN + 230, qty: MARGIN + USABLE_W - 45 };
-  const COL_W = { cn: 60, pa: 160, med: 165, qty: 45 };
+  const COL = { cn: MARGIN, med: MARGIN + 65, origen: MARGIN + 275, qty: MARGIN + USABLE_W - 45 };
+  const COL_W = { cn: 60, med: 205, origen: 125, qty: 45 };
 
   const porUbicacion = new Map<string, ReposicionLinea[]>();
   for (const l of lineas) {
@@ -139,14 +139,14 @@ export async function buildReposicionPdf(
 
   for (const [ubicacion, items] of porUbicacion) {
     w.ensureSpace(60);
-    w.text(`Ubicacion: ${safe(ubicacion)}`, MARGIN, { size: 12, font: bold, color: rgb(0.07, 0.23, 0.52) });
+    w.text(`Ubicacion destino: ${safe(ubicacion)}`, MARGIN, { size: 12, font: bold, color: rgb(0.07, 0.23, 0.52) });
     w.moveDown(16);
 
     w.textRow(
       [
         { text: 'CN', x: COL.cn, maxWidth: COL_W.cn, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
-        { text: 'Principio activo', x: COL.pa, maxWidth: COL_W.pa, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
-        { text: 'Medicamento', x: COL.med, maxWidth: COL_W.med, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
+        { text: 'Marca', x: COL.med, maxWidth: COL_W.med, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
+        { text: 'Ubicacion origen', x: COL.origen, maxWidth: COL_W.origen, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
         { text: 'Cantidad', x: COL.qty, maxWidth: COL_W.qty, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4), align: 'right' },
       ],
       18
@@ -158,9 +158,16 @@ export async function buildReposicionPdf(
     for (const l of items) {
       w.textRow(
         [
-          { text: safe(l.cn), x: COL.cn, maxWidth: COL_W.cn, size: 9 },
-          { text: safe(l.principioActivo ?? '-'), x: COL.pa, maxWidth: COL_W.pa, size: 9 },
-          { text: safe(l.nombre), x: COL.med, maxWidth: COL_W.med, size: 9, font: oblique, color: rgb(0.35, 0.35, 0.35) },
+          { text: safe(l.tipo === 'formula' ? l.codigo : l.cn), x: COL.cn, maxWidth: COL_W.cn, size: 9 },
+          { text: safe(l.nombre), x: COL.med, maxWidth: COL_W.med, size: 9 },
+          {
+            text: safe(l.ubicacionOrigen ?? (l.tipo === 'formula' ? 'Elaboracion propia' : '-')),
+            x: COL.origen,
+            maxWidth: COL_W.origen,
+            size: 9,
+            font: oblique,
+            color: rgb(0.35, 0.35, 0.35),
+          },
           { text: `${l.cantidadCajas} ${l.unidadPedido === 'unidades' ? 'ud.' : 'caj.'}`, x: COL.qty, maxWidth: COL_W.qty, size: 8, font: bold, align: 'right' },
         ],
         18
@@ -169,8 +176,8 @@ export async function buildReposicionPdf(
         w.textRow(
           [{
             text: `Nota: ${safe(l.notas)}`,
-            x: COL.pa,
-            maxWidth: COL_W.pa + COL_W.med,
+            x: COL.med,
+            maxWidth: COL_W.med + COL_W.origen,
             size: 8,
             font: oblique,
             color: rgb(0.45, 0.25, 0.05),

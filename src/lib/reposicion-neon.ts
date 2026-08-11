@@ -38,6 +38,7 @@ export async function ensureTablesReposicion() {
   await sql`ALTER TABLE pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS codigo_item TEXT;`;
   await sql`ALTER TABLE pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS tipo_item TEXT NOT NULL DEFAULT 'medicamento';`;
   await sql`ALTER TABLE pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS area_origen TEXT;`;
+  await sql`ALTER TABLE pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS ubicacion_origen TEXT;`;
   await sql`ALTER TABLE pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS unidad_pedido TEXT NOT NULL DEFAULT 'cajas';`;
   await sql`ALTER TABLE pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS punto_pedido NUMERIC;`;
   await sql`ALTER TABLE pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS notas TEXT;`;
@@ -56,6 +57,7 @@ export async function ensureTablesReposicion() {
         codigo_item = rc.codigo,
         tipo_item = rc.tipo,
         area_origen = rc.area_origen,
+        ubicacion_origen = rc.ubicacion_origen,
         unidad_pedido = rc.unidad_pedido,
         punto_pedido = rc.punto_pedido,
         notas = rc.notas
@@ -92,6 +94,7 @@ export type ReposicionLinea = {
   codigo: string;
   tipo: 'medicamento' | 'formula';
   areaOrigen: string | null;
+  ubicacionOrigen: string | null;
   unidadPedido: 'cajas' | 'unidades';
   catalogoId: number | null;
 };
@@ -135,7 +138,7 @@ export async function getPedidoConLineas(
   const lin = await sql`
     SELECT id, pedido_id, ubicacion, cn, principio_activo, nombre, cantidad_cajas,
            stock_maximo, punto_pedido, notas, codigo_item, tipo_item, area_origen,
-           unidad_pedido, catalogo_id
+           ubicacion_origen, unidad_pedido, catalogo_id
     FROM pedidos_reposicion_lineas
     WHERE pedido_id = ${id}
     ORDER BY ubicacion, principio_activo, nombre
@@ -165,6 +168,7 @@ export type LineaInput = {
   codigo: string;
   tipo: 'medicamento' | 'formula';
   areaOrigen: string | null;
+  ubicacionOrigen: string | null;
   unidadPedido: 'cajas' | 'unidades';
   catalogoId: number | null;
 };
@@ -180,12 +184,13 @@ export async function upsertLineasReposicion(
       INSERT INTO pedidos_reposicion_lineas
         (pedido_id, ubicacion, cn, principio_activo, nombre, cantidad_cajas,
          stock_maximo, punto_pedido, notas, codigo_item, tipo_item, area_origen,
-         unidad_pedido, catalogo_id)
+         ubicacion_origen, unidad_pedido, catalogo_id)
       VALUES
         (${pedidoId}, ${l.ubicacion}, ${l.cn}, ${l.principioActivo ?? null},
          ${l.nombre}, ${l.cantidadCajas}, ${l.stockMaximo ?? null},
          ${l.puntoPedido ?? null}, ${l.notas ?? null}, ${l.codigo}, ${l.tipo},
-         ${l.areaOrigen ?? null}, ${l.unidadPedido}, ${l.catalogoId ?? null})
+         ${l.areaOrigen ?? null}, ${l.ubicacionOrigen ?? null}, ${l.unidadPedido},
+         ${l.catalogoId ?? null})
       ON CONFLICT (pedido_id, ubicacion, codigo_item)
       DO UPDATE SET
         cn = EXCLUDED.cn,
@@ -197,6 +202,7 @@ export async function upsertLineasReposicion(
         notas = EXCLUDED.notas,
         tipo_item = EXCLUDED.tipo_item,
         area_origen = EXCLUDED.area_origen,
+        ubicacion_origen = EXCLUDED.ubicacion_origen,
         unidad_pedido = EXCLUDED.unidad_pedido,
         catalogo_id = EXCLUDED.catalogo_id
     `;
@@ -269,6 +275,7 @@ function mapLinea(r: Record<string, unknown>): ReposicionLinea {
     codigo: String(r.codigo_item ?? r.cn),
     tipo: r.tipo_item === 'formula' ? 'formula' : 'medicamento',
     areaOrigen: r.area_origen ? String(r.area_origen) : null,
+    ubicacionOrigen: r.ubicacion_origen ? String(r.ubicacion_origen) : null,
     unidadPedido: r.unidad_pedido === 'unidades' ? 'unidades' : 'cajas',
     catalogoId: r.catalogo_id == null ? null : Number(r.catalogo_id),
   };
