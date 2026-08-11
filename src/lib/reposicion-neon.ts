@@ -68,6 +68,13 @@ export async function ensureTablesReposicion() {
       AND rc.cn = l.cn
       AND l.catalogo_id IS NULL
   `;
+  await sql`
+    UPDATE pedidos_reposicion_lineas
+    SET nombre = 'SOLUCIÓN DE MUCOSITIS',
+        principio_activo = 'SOLUCIÓN DE MUCOSITIS'
+    WHERE codigo_item = 'FM-MUCOSITIS'
+      AND nombre <> 'SOLUCIÓN DE MUCOSITIS'
+  `;
 }
 
 /* ─── TIPOS ─── */

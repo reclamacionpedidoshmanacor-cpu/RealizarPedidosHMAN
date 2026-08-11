@@ -125,9 +125,21 @@ INSERT INTO public.reposicion_catalogo (
 )
 VALUES (
   'oncologia', 'Cajonera NEA', 'FM-MUCOSITIS', 'formula',
-  'Solución de mucositis', 'Solución de mucositis', 1, 'unidades', 3, 2
+  'SOLUCIÓN DE MUCOSITIS', 'SOLUCIÓN DE MUCOSITIS', 1, 'unidades', 3, 2
 )
 ON CONFLICT (area_destino, ubicacion_destino, codigo) DO NOTHING;
+
+UPDATE public.reposicion_catalogo
+SET nombre = 'SOLUCIÓN DE MUCOSITIS',
+    principio_activo = 'SOLUCIÓN DE MUCOSITIS'
+WHERE codigo = 'FM-MUCOSITIS'
+  AND nombre <> 'SOLUCIÓN DE MUCOSITIS';
+
+UPDATE public.pedidos_reposicion_lineas
+SET nombre = 'SOLUCIÓN DE MUCOSITIS',
+    principio_activo = 'SOLUCIÓN DE MUCOSITIS'
+WHERE codigo_item = 'FM-MUCOSITIS'
+  AND nombre <> 'SOLUCIÓN DE MUCOSITIS';
 
 UPDATE public.pedidos_reposicion_lineas l
 SET catalogo_id = rc.id,

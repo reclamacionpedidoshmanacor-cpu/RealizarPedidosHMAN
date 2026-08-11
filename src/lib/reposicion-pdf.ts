@@ -1,7 +1,11 @@
-import { PDFDocument, StandardFonts, rgb, PDFFont, PDFPage } from 'pdf-lib';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { PDFDocument, StandardFonts, rgb, PDFFont, PDFImage, PDFPage } from 'pdf-lib';
 import type { ReposicionLinea } from '@/lib/reposicion-neon';
 
 const MARGIN = 50;
+const LOGO_PATH = path.join(process.cwd(), 'public', 'Logo-Hospital-neg-MANACOR.jpg');
+const LOGO_H = 40;
 const PAGE_W = 595.28;
 const PAGE_H = 841.89;
 const USABLE_W = PAGE_W - MARGIN * 2;
@@ -38,6 +42,10 @@ class PageWriter {
 
   moveDown(pts: number) {
     this.y -= pts;
+  }
+
+  image(img: PDFImage, x: number, width: number, height: number) {
+    this.page.drawImage(img, { x, y: this.y - height, width, height });
   }
 
   line(color = rgb(0.8, 0.8, 0.8), thickness = 0.5) {
@@ -98,6 +106,14 @@ export function buildReposicionPdfFilename(pedidoId: number, fechaCreacion: stri
   return `albaran-reposicion-${pedidoId}-${fecha}.pdf`;
 }
 
+async function loadLogo(doc: PDFDocument): Promise<PDFImage | null> {
+  try {
+    return await doc.embedJpg(await readFile(LOGO_PATH));
+  } catch {
+    return null;
+  }
+}
+
 export async function buildReposicionPdf(
   pedidoId: number,
   fechaCreacion: string,
@@ -110,12 +126,21 @@ export async function buildReposicionPdf(
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
   const oblique = await doc.embedFont(StandardFonts.HelveticaOblique);
   const w = new PageWriter(doc, regular, bold);
+  const logo = await loadLogo(doc);
+
+  if (logo) {
+    const logoW = (logo.width * LOGO_H) / logo.height;
+    w.image(logo, MARGIN, logoW, LOGO_H);
+    w.moveDown(LOGO_H + 14);
+  }
 
   w.text('ALBARAN DE REPOSICION', MARGIN, { size: 18, font: bold, color: rgb(0.05, 0.2, 0.45) });
-  w.moveDown(22);
-  const areaLabel = area === 'oncologia' ? 'Oncologia' : 'Pacientes Externos';
-  w.text(`Servicio de Farmacia Hospitalaria - Hospital de Manacor - ${areaLabel}`, MARGIN, {
-    size: 11,
+  w.moveDown(24);
+  const areaLabel = area === 'oncologia' ? 'ONCOLOGIA' : 'PACIENTES EXTERNOS';
+  w.text(areaLabel, MARGIN, { size: 20, font: bold, color: rgb(0, 0, 0) });
+  w.moveDown(18);
+  w.text('Servicio de Farmacia Hospitalaria - Hospital de Manacor', MARGIN, {
+    size: 10,
     font: regular,
     color: rgb(0.35, 0.35, 0.35),
     maxWidth: USABLE_W,
@@ -128,8 +153,8 @@ export async function buildReposicionPdf(
   w.text(meta, MARGIN, { size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
   w.moveDown(18);
 
-  const COL = { cn: MARGIN, med: MARGIN + 65, origen: MARGIN + 275, qty: MARGIN + USABLE_W - 45 };
-  const COL_W = { cn: 60, med: 205, origen: 125, qty: 45 };
+  const COL = { cn: MARGIN, med: MARGIN + 75, qty: MARGIN + USABLE_W - 55 };
+  const COL_W = { cn: 70, med: USABLE_W - 75 - 60, qty: 55 };
 
   const porUbicacion = new Map<string, ReposicionLinea[]>();
   for (const l of lineas) {
@@ -138,58 +163,62 @@ export async function buildReposicionPdf(
   }
 
   for (const [ubicacion, items] of porUbicacion) {
-    w.ensureSpace(60);
-    w.text(`Ubicacion destino: ${safe(ubicacion)}`, MARGIN, { size: 12, font: bold, color: rgb(0.07, 0.23, 0.52) });
-    w.moveDown(16);
+    w.ensureSpace(80);
+    w.text(`Ubicacion destino: ${safe(ubicacion)}`, MARGIN, { size: 13, font: bold, color: rgb(0.07, 0.23, 0.52) });
+    w.moveDown(18);
 
-    w.textRow(
-      [
-        { text: 'CN', x: COL.cn, maxWidth: COL_W.cn, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
-        { text: 'Marca', x: COL.med, maxWidth: COL_W.med, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
-        { text: 'Ubicacion origen', x: COL.origen, maxWidth: COL_W.origen, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
-        { text: 'Cantidad', x: COL.qty, maxWidth: COL_W.qty, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4), align: 'right' },
-      ],
-      18
-    );
-
-    w.line();
-    w.moveDown(10);
-
+    const porOrigen = new Map<string, ReposicionLinea[]>();
     for (const l of items) {
-      w.textRow(
-        [
-          { text: safe(l.tipo === 'formula' ? l.codigo : l.cn), x: COL.cn, maxWidth: COL_W.cn, size: 9 },
-          { text: safe(l.nombre), x: COL.med, maxWidth: COL_W.med, size: 9 },
-          {
-            text: safe(l.ubicacionOrigen ?? (l.tipo === 'formula' ? 'Elaboracion propia' : '-')),
-            x: COL.origen,
-            maxWidth: COL_W.origen,
-            size: 9,
-            font: oblique,
-            color: rgb(0.35, 0.35, 0.35),
-          },
-          { text: `${l.cantidadCajas} ${l.unidadPedido === 'unidades' ? 'ud.' : 'caj.'}`, x: COL.qty, maxWidth: COL_W.qty, size: 8, font: bold, align: 'right' },
-        ],
-        18
-      );
-      if (l.notas) {
-        w.textRow(
-          [{
-            text: `Nota: ${safe(l.notas)}`,
-            x: COL.med,
-            maxWidth: COL_W.med + COL_W.origen,
-            size: 8,
-            font: oblique,
-            color: rgb(0.45, 0.25, 0.05),
-          }],
-          14,
-        );
-      }
+      const origen = l.ubicacionOrigen ?? (l.tipo === 'formula' ? 'Elaboracion propia' : 'Sin ubicacion asignada');
+      if (!porOrigen.has(origen)) porOrigen.set(origen, []);
+      porOrigen.get(origen)!.push(l);
     }
 
-    w.moveDown(6);
-    w.line(rgb(0.7, 0.7, 0.7), 0.3);
-    w.moveDown(14);
+    for (const [origen, filas] of [...porOrigen].sort((a, b) => a[0].localeCompare(b[0], 'es'))) {
+      w.ensureSpace(60);
+      w.text(`Ubicacion origen: ${safe(origen)}`, MARGIN + 10, { size: 11, font: bold, color: rgb(0.2, 0.2, 0.2) });
+      w.moveDown(16);
+
+      w.textRow(
+        [
+          { text: 'CN', x: COL.cn, maxWidth: COL_W.cn, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
+          { text: 'Marca', x: COL.med, maxWidth: COL_W.med, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
+          { text: 'Cantidad', x: COL.qty, maxWidth: COL_W.qty, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4), align: 'right' },
+        ],
+        14
+      );
+
+      w.line();
+      w.moveDown(10);
+
+      for (const l of filas) {
+        w.textRow(
+          [
+            { text: safe(l.tipo === 'formula' ? l.codigo : l.cn), x: COL.cn, maxWidth: COL_W.cn, size: 9 },
+            { text: safe(l.nombre), x: COL.med, maxWidth: COL_W.med, size: 9 },
+            { text: `${l.cantidadCajas} ${l.unidadPedido === 'unidades' ? 'ud.' : 'caj.'}`, x: COL.qty, maxWidth: COL_W.qty, size: 9, font: bold, align: 'right' },
+          ],
+          17
+        );
+        if (l.notas) {
+          w.textRow(
+            [{
+              text: `Nota: ${safe(l.notas)}`,
+              x: COL.med,
+              maxWidth: COL_W.med,
+              size: 8,
+              font: oblique,
+              color: rgb(0.45, 0.25, 0.05),
+            }],
+            14,
+          );
+        }
+      }
+
+      w.moveDown(4);
+      w.line(rgb(0.85, 0.85, 0.85), 0.3);
+      w.moveDown(16);
+    }
   }
 
   w.ensureSpace(40);
@@ -198,7 +227,7 @@ export async function buildReposicionPdf(
     font: bold,
   });
   w.moveDown(20);
-  w.text(`Documento generado automaticamente - ${areaLabel}`, MARGIN, {
+  w.text(`Documento generado automaticamente - ${areaLabel.toLowerCase()}`, MARGIN, {
     size: 8,
     font: regular,
     color: rgb(0.6, 0.6, 0.6),
