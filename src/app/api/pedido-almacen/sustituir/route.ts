@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isAlmacenArea } from '@/lib/almacen';
+import { isAlmacenArea, ubicacionAlmacenUsaRecuentoStock } from '@/lib/almacen';
 import { requireApiSessionOrArea } from '@/lib/api-auth';
 import { registrarRevisionPendiente } from '@/lib/catalogo-revision-neon';
 import { getStockObjetivoByCn } from '@/lib/catalogo-neon';
@@ -47,6 +47,12 @@ export async function POST(req: NextRequest) {
 
   if (!cnViejo || !cnNuevoRaw || !ubicacion) {
     return NextResponse.json({ error: 'CN anterior, CN nuevo y ubicación son obligatorios.' }, { status: 400 });
+  }
+  if (ubicacionAlmacenUsaRecuentoStock(ubicacion)) {
+    return NextResponse.json(
+      { error: 'Esta ubicación utiliza recuento de stock y no admite sustituciones del pedido directo.' },
+      { status: 400 }
+    );
   }
 
   const tieneDatosEditados =

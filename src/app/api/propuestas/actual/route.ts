@@ -8,7 +8,7 @@ import {
   getPedidoAlmacenPendiente,
   getPropuestaById,
   getRecuentoCabeceraById,
-  listBorradoresPropuestaAlmacen,
+  listBorradoresActivosAlmacen,
   listBloquesPropuestaRecuento,
   getPendienteRecuento,
   getLineasPropuesta,
@@ -40,7 +40,7 @@ async function attachAlertasLineas<T extends { cn: string }>(lineas: T[]) {
   }));
 }
 
-type BorradorItem = Awaited<ReturnType<typeof listBorradoresPropuestaAlmacen>>[number];
+type BorradorItem = Awaited<ReturnType<typeof listBorradoresActivosAlmacen>>[number];
 
 function seleccionarBorrador(
   borradores: BorradorItem[],
@@ -120,17 +120,19 @@ export async function GET(req: NextRequest) {
 
     if (isAlmacenArea(session.area)) {
       const pedido = await getPedidoAlmacenPendiente(session.area);
-      if (!pedido) {
-        return NextResponse.json(
-          { error: 'No hay pedido de almacén en curso. Registra líneas desde Recuento Manual.' },
-          { status: 404 }
-        );
-      }
-
-      const borradores = await listBorradoresPropuestaAlmacen(session.area, pedido.id);
+      const borradores = await listBorradoresActivosAlmacen(session.area);
       const propuesta = seleccionarBorrador(borradores, propuestaIdParam);
 
       if (!propuesta) {
+        if (!pedido) {
+          return NextResponse.json(
+            {
+              error:
+                'No hay pedidos directos ni recuentos validados pendientes de tramitar.',
+            },
+            { status: 404 }
+          );
+        }
         return NextResponse.json({
           recuento: {
             id: pedido.id,
@@ -141,8 +143,16 @@ export async function GET(req: NextRequest) {
           propuesta: null,
           lineas: [],
           borradores,
-          modo: 'pedido-almacen',
+          modo: 'almacen-mixto',
         });
+      }
+
+      const recuento = await getRecuentoCabeceraById(propuesta.importacionStockId);
+      if (!recuento || recuento.area !== session.area) {
+        return NextResponse.json(
+          { error: 'No se ha encontrado el origen de la propuesta seleccionada.' },
+          { status: 404 }
+        );
       }
 
       const lineasPropuesta = await getLineasPropuesta(propuesta.id);
@@ -155,40 +165,46 @@ export async function GET(req: NextRequest) {
       // El snapshot de tránsito se guarda al crear la propuesta y no se actualiza en cargas
       // posteriores, para que el borrador sea estable entre sesiones.
 
+      const esPedidoDirecto = recuento.origen === 'Pedido-Almacen';
+      const ubicacionFiltro = esPedidoDirecto
+        ? null
+        : ubicacionDesdeEtiquetaPropuesta(propuesta.observaciones);
+      const lineasConstruidas = await buildLineasPropuestaParaUi(
+        propuesta.id,
+        recuento.id,
+        session.area,
+        propuesta.estado,
+        stockTransitoByCn,
+        ubicacionFiltro
+      );
       const lineasParaUi = await attachAlertasLineas(
-        (
-          await buildLineasPropuestaParaUi(
-            propuesta.id,
-            pedido.id,
-            session.area,
-            propuesta.estado,
-            stockTransitoByCn
-          )
-        ).filter(
-          (linea) =>
-            linea.activo === false ||
-            (linea.cajasValidadas ?? linea.cajasPropuestas) > 0
-        )
+        esPedidoDirecto
+          ? lineasConstruidas.filter(
+              (linea) =>
+                linea.activo === false ||
+                (linea.cajasValidadas ?? linea.cajasPropuestas) > 0
+            )
+          : lineasConstruidas
       );
 
       return NextResponse.json({
         recuento: {
-          id: pedido.id,
-          fechaRecuento: pedido.fechaRecuento,
-          origen: pedido.origen,
-          estado: pedido.estado,
+          id: recuento.id,
+          fechaRecuento: recuento.fechaRecuento,
+          origen: recuento.origen,
+          estado: recuento.estado,
         },
         propuesta: {
           id: propuesta.id,
           estado: propuesta.estado,
           fechaGeneracion: propuesta.fechaGeneracion,
           tramitadaEn: 'tramitadaEn' in propuesta ? propuesta.tramitadaEn : null,
-          importacionStockId: pedido.id,
+          importacionStockId: recuento.id,
           observaciones: propuesta.observaciones ?? null,
         },
         borradores,
         lineas: lineasParaUi,
-        modo: 'pedido-almacen',
+        modo: esPedidoDirecto ? 'pedido-almacen' : 'por-ubicacion',
       });
     }
 

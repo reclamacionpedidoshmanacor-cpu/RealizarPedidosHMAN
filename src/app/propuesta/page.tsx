@@ -32,6 +32,7 @@ type BorradorResumen = {
   tramitadaEn: string | null;
   observaciones: string | null;
   totalLineas: number;
+  recuentoOrigen?: string;
 };
 
 type BloqueResumen = {
@@ -105,8 +106,11 @@ type PropuestaDetalle = {
 // ---------------------------------------------------------------------------
 const ORIGEN_LABEL: Record<string, string> = {
   manual: 'Manual',
+  Manual: 'Recuento manual',
+  SAP: 'Importación SAP',
   importacion: 'Importación',
   automatico: 'Automático',
+  'Pedido-Almacen': 'Pedido directo',
 };
 
 function fmt(date: string | null) {
@@ -663,6 +667,9 @@ export default function PropuestaPage() {
                     >
                       {etiquetaPropuesta(b.observaciones, b.id)}
                       <span className="ml-1.5 text-xs text-slate-400">({b.totalLineas})</span>
+                      <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                        {b.recuentoOrigen === 'Pedido-Almacen' ? 'Directo' : 'Recuento'}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -695,7 +702,11 @@ export default function PropuestaPage() {
             )}
             {/* KPIs */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
-              <Kpi label="Recuento" value={`#${data.recuento.id}`} sub={fmt(data.recuento.fechaRecuento)} />
+              {data.recuento.origen === 'Pedido-Almacen' ? (
+                <Kpi label="Flujo" value="Pedido directo" sub="Sin recuento de stock" />
+              ) : (
+                <Kpi label="Recuento" value={`#${data.recuento.id}`} sub={fmt(data.recuento.fechaRecuento)} />
+              )}
               <Kpi label="Origen" value={ORIGEN_LABEL[data.recuento.origen] ?? data.recuento.origen} />
               <Kpi
                 label="Estado propuesta"
@@ -1170,8 +1181,14 @@ export default function PropuestaPage() {
                         <p className="text-xs text-slate-400">{fmt(p.fechaGeneracion)}</p>
                       </td>
                       <td className="px-4 py-2.5 text-xs text-slate-600">
-                        {p.recuentoId ? `#${p.recuentoId}` : '—'}
-                        {p.recuentoFecha && <p className="text-slate-400">{fmt(p.recuentoFecha)}</p>}
+                        {p.recuentoOrigen === 'Pedido-Almacen'
+                          ? 'Sin recuento'
+                          : p.recuentoId
+                            ? `#${p.recuentoId}`
+                            : '—'}
+                        {p.recuentoFecha && p.recuentoOrigen !== 'Pedido-Almacen' && (
+                          <p className="text-slate-400">{fmt(p.recuentoFecha)}</p>
+                        )}
                       </td>
                       <td className="px-4 py-2.5 text-xs text-slate-600">
                         {p.recuentoOrigen ? (ORIGEN_LABEL[p.recuentoOrigen] ?? p.recuentoOrigen) : '—'}

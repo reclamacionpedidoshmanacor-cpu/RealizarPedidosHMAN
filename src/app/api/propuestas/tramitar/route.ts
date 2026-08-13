@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
-import { getRecuentoById, getPropuestaById, tramitarPropuesta } from '@/lib/stock-propuesta-neon';
+import {
+  ESTADO_PEDIDO_ALMACEN,
+  ORIGEN_PEDIDO_ALMACEN,
+  isAlmacenArea,
+} from '@/lib/almacen';
+import {
+  getPropuestaById,
+  getRecuentoCabeceraById,
+  tramitarPropuesta,
+} from '@/lib/stock-propuesta-neon';
 
 export const runtime = 'nodejs';
 
@@ -25,10 +34,25 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'La propuesta no tiene recuento asociado.' }, { status: 409 });
     }
 
-    const recuento = await getRecuentoById(propuesta.importacionStockId);
+    const recuento = await getRecuentoCabeceraById(propuesta.importacionStockId);
     if (!recuento) return NextResponse.json({ error: 'Recuento asociado no encontrado.' }, { status: 404 });
-    if (recuento.estado !== 'pendiente') {
-      return NextResponse.json({ error: 'El recuento asociado ya no esta pendiente.' }, { status: 409 });
+    const pedidoDirectoAlmacen =
+      isAlmacenArea(propuesta.area) &&
+      recuento.origen === ORIGEN_PEDIDO_ALMACEN &&
+      recuento.estado === ESTADO_PEDIDO_ALMACEN;
+    const recuentoValidadoAlmacen =
+      isAlmacenArea(propuesta.area) &&
+      recuento.origen !== ORIGEN_PEDIDO_ALMACEN &&
+      recuento.estado === 'validado';
+    if (
+      recuento.estado !== 'pendiente' &&
+      !pedidoDirectoAlmacen &&
+      !recuentoValidadoAlmacen
+    ) {
+      return NextResponse.json(
+        { error: 'El recuento asociado no está disponible para tramitar.' },
+        { status: 409 }
+      );
     }
 
     const result = await tramitarPropuesta(propuestaId, propuesta.importacionStockId, propuesta.area);

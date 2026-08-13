@@ -1,7 +1,7 @@
 import { neon } from '@neondatabase/serverless';
 import { calcularCajasPropuestas, buildStockTransitoCajasByCn } from '@/lib/propuesta';
 import { loadCantidadTransitoByCn } from '@/lib/pedidos-pendientes';
-import { ORIGEN_PEDIDO_ALMACEN, isAlmacenArea, nombrePropuestaAlmacen, nombrePropuestaUbicacion, grupoLetrasAlmacenFar, grupoLetrasAlmacenFarFromLetter, ubicacionAlmacenUsaLetras, type AlmacenFarGrupoLetras } from '@/lib/almacen';
+import { ALMACEN_AREA, ESTADO_PEDIDO_ALMACEN, ORIGEN_PEDIDO_ALMACEN, isAlmacenArea, nombrePropuestaAlmacen, nombrePropuestaUbicacion, grupoLetrasAlmacenFar, grupoLetrasAlmacenFarFromLetter, ubicacionAlmacenUsaLetras, ubicacionAlmacenUsaRecuentoStock, type AlmacenFarGrupoLetras } from '@/lib/almacen';
 import {
   normalizeNivelStock,
   normalizePedidoCajas,
@@ -120,10 +120,18 @@ export async function getRecuentosByArea(area: string): Promise<{
   historico: RecuentoCabecera[];
 }> {
   const sql = getDb();
+  await sql`
+    UPDATE importaciones_stock
+    SET estado = ${ESTADO_PEDIDO_ALMACEN}
+    WHERE area = ${area}
+      AND origen = ${ORIGEN_PEDIDO_ALMACEN}
+      AND estado = 'pendiente'
+  `;
   const rows = (await sql`
     SELECT id, area, estado, origen, fecha_recuento::text, importado_en::text, total_lineas, propuesta_id
     FROM importaciones_stock
     WHERE area = ${area}
+      AND origen <> ${ORIGEN_PEDIDO_ALMACEN}
     ORDER BY id DESC;
   `) as Array<{
     id: number; area: string; estado: string; origen: string;
@@ -136,9 +144,7 @@ export async function getRecuentosByArea(area: string): Promise<{
     totalLineas: num(r.total_lineas), propuestaId: r.propuesta_id ? num(r.propuesta_id) : null,
   }));
 
-  const pendiente = isAlmacenArea(area)
-    ? await getPedidoAlmacenPendiente(area)
-    : await getPendienteRecuento(area);
+  const pendiente = await getPendienteRecuento(area);
 
   return {
     pendiente,
@@ -256,12 +262,19 @@ export async function getPendienteRecuento(area: string): Promise<RecuentoCabece
 
 export async function crearRecuento(params: {
   area: string; origen: string; fechaRecuento: string;
-  ficheroNombre: string; totalLineas: number;
+  ficheroNombre: string; totalLineas: number; estado?: string;
 }): Promise<number> {
   const sql = getDb();
   const rows = (await sql`
     INSERT INTO importaciones_stock (area, origen, estado, fecha_recuento, fichero_nombre, total_lineas)
-    VALUES (${params.area}, ${params.origen}, 'pendiente', ${params.fechaRecuento}, ${params.ficheroNombre}, ${params.totalLineas})
+    VALUES (
+      ${params.area},
+      ${params.origen},
+      ${params.estado ?? 'pendiente'},
+      ${params.fechaRecuento},
+      ${params.ficheroNombre},
+      ${params.totalLineas}
+    )
     RETURNING id;
   `) as Array<{ id: number }>;
   return num(rows[0]?.id);
@@ -290,15 +303,30 @@ export async function insertarLineasRecuento(
 
 export async function getMedicamentosParaRecuento(
   area: string, cns: string[]
-): Promise<Array<{ cn: string; nombre: string; unidadesPorCaja: number }>> {
+): Promise<Array<{
+  cn: string;
+  nombre: string;
+  unidadesPorCaja: number;
+  ubicacion: string | null;
+}>> {
   if (cns.length === 0) return [];
   const sql = getDb();
   const rows = (await sql`
-    SELECT cn, nombre, unidades_por_caja
+    SELECT cn, nombre, unidades_por_caja, ubicacion
     FROM medicamentos
     WHERE area = ${area} AND cn = ANY(${cns});
-  `) as Array<{ cn: string; nombre: string; unidades_por_caja: number }>;
-  return rows.map((r) => ({ cn: r.cn, nombre: r.nombre, unidadesPorCaja: num(r.unidades_por_caja) }));
+  `) as Array<{
+    cn: string;
+    nombre: string;
+    unidades_por_caja: number;
+    ubicacion: string | null;
+  }>;
+  return rows.map((r) => ({
+    cn: r.cn,
+    nombre: r.nombre,
+    unidadesPorCaja: num(r.unidades_por_caja),
+    ubicacion: r.ubicacion,
+  }));
 }
 
 export async function getRecuentoById(id: number): Promise<{ id: number; area: string; estado: string } | null> {
@@ -713,12 +741,36 @@ async function marcarRecuentoComoGenerado(
   return rows.length > 0;
 }
 
+async function marcarRecuentoComoValidado(
+  importacionId: number,
+  area: string,
+  propuestaId: number | null
+): Promise<boolean> {
+  const sql = getDb();
+  const rows = (await sql`
+    UPDATE importaciones_stock
+    SET estado = 'validado', generado_en = now(), propuesta_id = ${propuestaId}
+    WHERE id = ${importacionId}
+      AND area = ${area}
+      AND estado = 'pendiente'
+      AND origen <> ${ORIGEN_PEDIDO_ALMACEN}
+    RETURNING id;
+  `) as Array<{ id: number }>;
+  return rows.length > 0;
+}
+
 export async function finalizarRecuentoDesdeStock(
   importacionId: number,
   area: string
 ): Promise<
   | { ok: true; propuestaId: number | null }
-  | { ok: false; reason: 'not_found_or_not_pending' | 'linked_draft_proposals' }
+  | {
+      ok: false;
+      reason:
+        | 'not_found_or_not_pending'
+        | 'linked_draft_proposals'
+        | 'no_proposals_generated';
+    }
 > {
   const sql = getDb();
   const recuentoRows = (await sql`
@@ -730,6 +782,21 @@ export async function finalizarRecuentoDesdeStock(
 
   if (recuentoRows.length === 0) {
     return { ok: false, reason: 'not_found_or_not_pending' };
+  }
+
+  if (isAlmacenArea(area)) {
+    await syncTodasPropuestasUbicacionDesdeRecuento(area, importacionId, {
+      createIfMissing: true,
+    });
+    const borradores = await listBorradoresPropuestaAlmacen(area, importacionId);
+    if (borradores.length === 0) {
+      return { ok: false, reason: 'no_proposals_generated' };
+    }
+    const propuestaId = borradores[0]?.id ?? null;
+    const validado = await marcarRecuentoComoValidado(importacionId, area, propuestaId);
+    return validado
+      ? { ok: true, propuestaId }
+      : { ok: false, reason: 'not_found_or_not_pending' };
   }
 
   const resumen = await getResumenPropuestasRecuento(area, importacionId);
@@ -869,11 +936,81 @@ export async function listBorradoresPropuestaAlmacen(
   }));
 }
 
+/**
+ * Borradores visibles en Propuestas de Almacén:
+ * - pedidos directos de la sesión técnica;
+ * - propuestas creadas después de validar un recuento real en Stock.
+ */
+export async function listBorradoresActivosAlmacen(
+  area: string
+): Promise<Array<PropuestaCabecera & {
+  totalLineas: number;
+  importacionStockId: number;
+  recuentoOrigen: string;
+}>> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT
+      p.id,
+      p.area,
+      p.estado,
+      p.fecha_generacion::text AS fecha_generacion,
+      p.tramitada_en::text AS tramitada_en,
+      p.observaciones,
+      p.importacion_stock_id,
+      i.origen AS recuento_origen,
+      COUNT(DISTINCT pl.cn)
+        FILTER (WHERE COALESCE(pl.cajas_validadas, pl.cajas_propuestas) > 0)::int
+        AS total_lineas
+    FROM propuestas p
+    INNER JOIN importaciones_stock i ON i.id = p.importacion_stock_id
+    LEFT JOIN propuestas_lineas pl ON pl.propuesta_id = p.id
+    WHERE p.area = ${area}
+      AND p.estado = 'borrador'
+      AND (
+        i.origen = ${ORIGEN_PEDIDO_ALMACEN}
+        OR (
+          i.origen <> ${ORIGEN_PEDIDO_ALMACEN}
+          AND i.estado = 'validado'
+        )
+      )
+    GROUP BY p.id, i.origen
+    ORDER BY p.fecha_generacion DESC, p.id DESC;
+  `) as Array<{
+    id: number;
+    area: string;
+    estado: string;
+    fecha_generacion: string;
+    tramitada_en: string | null;
+    observaciones: string | null;
+    importacion_stock_id: number;
+    recuento_origen: string;
+    total_lineas: number;
+  }>;
+
+  return rows.map((r) => ({
+    id: num(r.id),
+    area: r.area,
+    estado: r.estado,
+    fechaGeneracion: r.fecha_generacion,
+    tramitadaEn: r.tramitada_en,
+    observaciones: r.observaciones,
+    totalLineas: num(r.total_lineas),
+    importacionStockId: num(r.importacion_stock_id),
+    recuentoOrigen: r.recuento_origen,
+  }));
+}
+
 export async function listBloquesPropuestaRecuento(
   area: string,
   importacionStockId: number
 ): Promise<PropuestaBloqueResumen[]> {
-  const ubicaciones = await listUbicacionesConStockEnRecuento(importacionStockId, area);
+  const ubicacionesRecuento = await listUbicacionesConStockEnRecuento(importacionStockId, area);
+  const ubicaciones = isAlmacenArea(area)
+    ? ubicacionesRecuento.filter((ubicacion) =>
+        ubicacionAlmacenUsaRecuentoStock(ubicacion)
+      )
+    : ubicacionesRecuento;
   if (ubicaciones.length === 0) return [];
 
   const sql = getDb();
@@ -1147,7 +1284,9 @@ export async function syncPropuestaUbicacionDesdeRecuento(
   stockTransitoByCn?: Record<string, number>,
   options?: { createIfMissing?: boolean }
 ): Promise<number> {
-  if (isAlmacenArea(area)) return 0;
+  if (isAlmacenArea(area) && !ubicacionAlmacenUsaRecuentoStock(ubicacion)) {
+    return 0;
+  }
 
   const etiqueta = nombrePropuestaUbicacion(ubicacion);
   let propuesta = await getBorradorPropuestaAlmacenPorNombre(area, importacionId, etiqueta);
@@ -1184,10 +1323,13 @@ export async function syncTodasPropuestasUbicacionDesdeRecuento(
   importacionId: number,
   options?: { createIfMissing?: boolean }
 ): Promise<void> {
-  if (isAlmacenArea(area)) return;
-
   await eliminarBorradorPropuestaSinEtiqueta(area, importacionId);
-  const ubicaciones = await listUbicacionesConStockEnRecuento(importacionId, area);
+  const ubicacionesRecuento = await listUbicacionesConStockEnRecuento(importacionId, area);
+  const ubicaciones = isAlmacenArea(area)
+    ? ubicacionesRecuento.filter((ubicacion) =>
+        ubicacionAlmacenUsaRecuentoStock(ubicacion)
+      )
+    : ubicacionesRecuento;
   if (ubicaciones.length === 0) return;
 
   const todasFilas = await getRecuentoConStockParaPropuesta(importacionId, area);
@@ -1228,8 +1370,8 @@ export async function abrirPropuestaUbicacionDesdeRecuento(
   importacionId: number,
   ubicacion: string
 ): Promise<PropuestaCabecera> {
-  if (isAlmacenArea(area)) {
-    throw new Error('Solo disponible para recuentos por ubicación.');
+  if (isAlmacenArea(area) && !ubicacionAlmacenUsaRecuentoStock(ubicacion)) {
+    throw new Error('Esta ubicación de Almacén utiliza pedido directo.');
   }
 
   const etiqueta = nombrePropuestaUbicacion(ubicacion);
@@ -1706,7 +1848,17 @@ export async function deshacerPropuesta(
   `;
   await sql`
     UPDATE importaciones_stock
-    SET estado = 'pendiente', generado_en = null, propuesta_id = null
+    SET
+      estado = CASE
+        WHEN origen = ${ORIGEN_PEDIDO_ALMACEN} THEN ${ESTADO_PEDIDO_ALMACEN}
+        WHEN area = ${ALMACEN_AREA} THEN 'validado'
+        ELSE 'pendiente'
+      END,
+      generado_en = CASE
+        WHEN origen = ${ORIGEN_PEDIDO_ALMACEN} OR area <> ${ALMACEN_AREA} THEN null
+        ELSE generado_en
+      END,
+      propuesta_id = null
     WHERE id = ${importacionStockId};
   `;
 }
@@ -1907,7 +2059,8 @@ export async function getResumenOperativo(area: string): Promise<ResumenOperativ
       COUNT(*) FILTER (WHERE estado = 'pendiente')::int AS pendientes,
       MAX(fecha_recuento)::text AS ultimo_recuento
     FROM importaciones_stock
-    WHERE area = ${area};
+    WHERE area = ${area}
+      AND origen <> ${ORIGEN_PEDIDO_ALMACEN};
   `) as Array<{ pendientes: number; ultimo_recuento: string | null }>;
 
   // Propuestas en borrador y última propuesta tramitada
@@ -1924,6 +2077,7 @@ export async function getResumenOperativo(area: string): Promise<ResumenOperativ
     WITH ultimo AS (
       SELECT id FROM importaciones_stock
       WHERE area = ${area}
+        AND origen <> ${ORIGEN_PEDIDO_ALMACEN}
       ORDER BY id DESC LIMIT 1
     )
     SELECT
@@ -1950,10 +2104,21 @@ export async function getResumenOperativo(area: string): Promise<ResumenOperativ
 // ---------------------------------------------------------------------------
 export async function getPedidoAlmacenPendiente(area: string): Promise<RecuentoCabecera | null> {
   const sql = getDb();
+  // Las sesiones antiguas se creaban como recuentos pendientes. Se migran a
+  // un estado técnico propio para que nunca bloqueen ni aparezcan en Stock.
+  await sql`
+    UPDATE importaciones_stock
+    SET estado = ${ESTADO_PEDIDO_ALMACEN}
+    WHERE area = ${area}
+      AND origen = ${ORIGEN_PEDIDO_ALMACEN}
+      AND estado = 'pendiente'
+  `;
   const rows = (await sql`
     SELECT id, area, estado, origen, fecha_recuento::text, importado_en::text, total_lineas, propuesta_id
     FROM importaciones_stock
-    WHERE area = ${area} AND estado = 'pendiente' AND origen = ${ORIGEN_PEDIDO_ALMACEN}
+    WHERE area = ${area}
+      AND estado = ${ESTADO_PEDIDO_ALMACEN}
+      AND origen = ${ORIGEN_PEDIDO_ALMACEN}
     ORDER BY id DESC LIMIT 1;
   `) as Array<{
     id: number; area: string; estado: string; origen: string;
@@ -1984,6 +2149,7 @@ export async function ensureSesionPedidoAlmacen(area: string): Promise<{
     fechaRecuento,
     ficheroNombre: 'APP Pedido Almacén',
     totalLineas: 0,
+    estado: ESTADO_PEDIDO_ALMACEN,
   });
   return { importacionId };
 }

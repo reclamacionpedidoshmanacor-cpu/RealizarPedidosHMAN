@@ -15,6 +15,17 @@ export const ALMACEN_UBICACIONES = [
 export type AlmacenUbicacion = (typeof ALMACEN_UBICACIONES)[number];
 
 export const ORIGEN_PEDIDO_ALMACEN = 'Pedido-Almacen';
+export const ESTADO_PEDIDO_ALMACEN = 'pedido-almacen';
+
+/**
+ * Ubicaciones de Almacén que registran existencias reales.
+ * El resto mantiene el flujo de cantidades directas a pedir.
+ */
+export const ALMACEN_UBICACIONES_RECUENTO_STOCK = [
+  'CONTRASTES RX',
+  'SUEROS',
+  'ANTISÉPTICOS',
+] as const;
 
 /** Ubicación del almacén que se recorre por letras del abecedario. */
 export const ALMACEN_UBICACION_CON_LETRAS = 'ALMACEN FAR';
@@ -90,6 +101,15 @@ export function normalizeAlmacenText(value: string | null | undefined): string {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/\s+/g, ' ');
+}
+
+export function ubicacionAlmacenUsaRecuentoStock(
+  ubicacion: string | null | undefined
+): boolean {
+  const normalizada = normalizeAlmacenText(ubicacion);
+  return ALMACEN_UBICACIONES_RECUENTO_STOCK.some(
+    (item) => normalizeAlmacenText(item) === normalizada
+  );
 }
 
 /** Primera letra alfabética del criterio de orden (principio activo → nombre). */

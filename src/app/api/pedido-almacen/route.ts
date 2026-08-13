@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isValidArea, type AreaId } from '@/lib/areas';
-import { isAlmacenArea } from '@/lib/almacen';
+import { isAlmacenArea, ubicacionAlmacenUsaRecuentoStock } from '@/lib/almacen';
 import { listMedicamentosByArea } from '@/lib/catalogo-neon';
 import { requireApiSessionOrArea } from '@/lib/api-auth';
 import {
@@ -53,6 +53,15 @@ export async function POST(req: NextRequest) {
   const ubicacion = String(body.ubicacion ?? '').trim();
   if (!ubicacion) {
     return NextResponse.json({ error: 'Ubicación requerida.' }, { status: 400 });
+  }
+  if (ubicacionAlmacenUsaRecuentoStock(ubicacion)) {
+    return NextResponse.json(
+      {
+        error:
+          'Esta ubicación utiliza recuento de stock. Registra cajas y unidades sueltas en Recuento Manual.',
+      },
+      { status: 400 }
+    );
   }
 
   const inputLineas = Array.isArray(body.lineas)

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
+import { isAlmacenArea, ubicacionAlmacenUsaRecuentoStock } from '@/lib/almacen';
 import { parseSapExcel } from '@/lib/sap-parser';
 import { parseManualStockExcel } from '@/lib/manual-stock-parser';
 import {
@@ -80,6 +81,15 @@ export async function POST(req: NextRequest) {
             ? ` Material SAP: ${String((row as { material?: unknown }).material ?? '').trim()}.`
             : '';
         errores.push(`[CATALOGO] CN ${row.cn}: no existe en el catalogo del area activa.${materialInfo}`);
+        continue;
+      }
+      if (
+        isAlmacenArea(session.area) &&
+        !ubicacionAlmacenUsaRecuentoStock(med.ubicacion)
+      ) {
+        errores.push(
+          `[UBICACIÓN] CN ${row.cn}: ${med.ubicacion ?? 'sin ubicación'} usa pedido directo y no se incorpora al recuento de stock.`
+        );
         continue;
       }
 

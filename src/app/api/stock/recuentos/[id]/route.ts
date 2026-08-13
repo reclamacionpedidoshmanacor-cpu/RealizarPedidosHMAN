@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
+import { isAlmacenArea } from '@/lib/almacen';
 import {
   normalizeStockUnidades,
   stockCajasDesdeUnidades,
@@ -151,6 +152,15 @@ export async function PATCH(
               { status: 409 }
             );
           }
+          if (cierre.reason === 'no_proposals_generated') {
+            return NextResponse.json(
+              {
+                error:
+                  'No se ha podido generar ninguna propuesta desde el recuento. Comprueba las ubicaciones y el catálogo.',
+              },
+              { status: 409 }
+            );
+          }
           return NextResponse.json(
             { error: 'No se pudo marcar el recuento como generado.' },
             { status: 409 }
@@ -161,7 +171,7 @@ export async function PATCH(
           ok: true,
           updated: lineasValidas.length,
           omitidosCatalogo: noEncontrados,
-          recuentoEstado: 'generado',
+          recuentoEstado: isAlmacenArea(session.area) ? 'validado' : 'generado',
           propuestaId: cierre.propuestaId,
         });
       }

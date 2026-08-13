@@ -7,6 +7,7 @@ import { normalizeStockCajas } from '@/lib/cantidades';
 
 type RecuentoCabecera = {
   id: number;
+  area?: string;
   estado: string;
   origen: string;
   fechaRecuento: string;
@@ -216,9 +217,11 @@ export default function StockPage() {
           ? `${actualizadas} lineas actualizadas`
           : 'sin cambios en líneas';
       const msgCierre =
-        payload?.recuentoEstado === 'generado'
-          ? ' Recuento marcado como generado.'
-          : '';
+        payload?.recuentoEstado === 'validado'
+          ? ' Recuento validado; sus propuestas ya están disponibles en Propuestas.'
+          : payload?.recuentoEstado === 'generado'
+            ? ' Recuento marcado como generado.'
+            : '';
       toast.success(`Recuento guardado (${msgActualizacion}).${msgCierre}`);
       const omitidosCatalogo = Array.isArray(payload?.omitidosCatalogo)
         ? (payload.omitidosCatalogo as unknown[]).map((cn) => String(cn))
@@ -512,7 +515,11 @@ export default function StockPage() {
                       disabled={savingAll}
                       className="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
                     >
-                      {savingAll ? 'Guardando recuento...' : 'Guardar recuento completo'}
+                      {savingAll
+                        ? 'Guardando recuento...'
+                        : data.pendiente.area === 'almacen'
+                          ? 'Validar recuento y generar propuestas'
+                          : 'Guardar recuento completo'}
                     </button>
                   </div>
                 </div>

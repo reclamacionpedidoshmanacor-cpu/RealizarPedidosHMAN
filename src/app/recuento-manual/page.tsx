@@ -4,7 +4,11 @@ import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { AREA_IDS, type AreaId } from '@/lib/areas';
-import { normalizeAlmacenText, ubicacionAlmacenUsaLetras } from '@/lib/almacen';
+import {
+  normalizeAlmacenText,
+  ubicacionAlmacenUsaLetras,
+  ubicacionAlmacenUsaRecuentoStock,
+} from '@/lib/almacen';
 import { cn, normalizarCnParaCima } from '@/lib/utils';
 import type { AlertaSuministroCn } from '@/lib/pedidos-pendientes';
 import { BadgeSuministro } from '@/components/BadgeSuministro';
@@ -411,6 +415,12 @@ export default function RecuentoManualPage() {
     setEdicionCn(null);
     if (area === 'almacen') {
       setLetra(null);
+      if (ubicacionAlmacenUsaRecuentoStock(ub)) {
+        await cargarUbicacion(ub);
+        setStep('recuento');
+        setTimeout(() => tableRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+        return;
+      }
       if (ubicacionAlmacenUsaLetras(ub)) {
         const res = await fetch(`/api/recuento-manual?ubicacion=${encodeURIComponent(ub)}`, { cache: 'no-store' });
         const payload = (await res.json()) as ApiResponse;
@@ -1099,12 +1109,24 @@ export default function RecuentoManualPage() {
             </p>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {ubicaciones.map((ub) => (
-                <button key={ub} onClick={() => void seleccionarUbicacion(ub)}
-                  className="rounded-2xl border-2 border-slate-300 bg-white px-6 py-6 text-left text-2xl font-bold text-slate-700 shadow-sm hover:border-teal-400 hover:bg-teal-50 hover:text-teal-700 active:scale-95 transition-all">
-                  📍 {ub}
-                </button>
-              ))}
+              {ubicaciones.map((ub) => {
+                const usaRecuentoStock = area === 'almacen' && ubicacionAlmacenUsaRecuentoStock(ub);
+                return (
+                  <button key={ub} onClick={() => void seleccionarUbicacion(ub)}
+                    className="rounded-2xl border-2 border-slate-300 bg-white px-6 py-6 text-left text-2xl font-bold text-slate-700 shadow-sm hover:border-teal-400 hover:bg-teal-50 hover:text-teal-700 active:scale-95 transition-all">
+                    <span>📍 {ub}</span>
+                    {area === 'almacen' && (
+                      <span className={`mt-2 block text-sm font-semibold ${
+                        usaRecuentoStock ? 'text-teal-700' : 'text-amber-700'
+                      }`}>
+                        {usaRecuentoStock
+                          ? 'Recuento de stock · cajas y unidades'
+                          : 'Pedido directo · cantidad a pedir'}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>

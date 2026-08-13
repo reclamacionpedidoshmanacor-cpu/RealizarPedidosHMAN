@@ -6,6 +6,7 @@ import {
   letrasDisponibles,
   mergeUbicacionesAlmacen,
   normalizeAlmacenText,
+  ubicacionAlmacenUsaRecuentoStock,
   ubicacionAlmacenUsaLetras,
 } from '@/lib/almacen';
 import { listMedicamentosByArea, getMedicamentoByCn, updateMedicamento } from '@/lib/catalogo-neon';
@@ -115,7 +116,7 @@ export async function GET(req: NextRequest) {
 
     const letraParam = req.nextUrl.searchParams.get('letra');
 
-    if (isAlmacenArea(area)) {
+    if (isAlmacenArea(area) && !ubicacionAlmacenUsaRecuentoStock(ubicacionSeleccionada)) {
       const pedidoPendiente = await getPedidoAlmacenPendiente(area);
       let cantidadesPedido: Record<string, number> = {};
       if (pedidoPendiente && ubicacionSeleccionada) {
@@ -434,13 +435,6 @@ export async function POST(req: NextRequest) {
       return withAreaCookie(res, area);
     }
 
-    if (isAlmacenArea(area)) {
-      return NextResponse.json(
-        { error: 'En Almacén use el flujo de pedido (/api/pedido-almacen), no recuento de stock.' },
-        { status: 400 }
-      );
-    }
-
     if (action === 'incorporar-faltantes') {
       const catalogo = await listMedicamentosByArea(area);
       const pendiente = await getPendienteRecuento(area);
@@ -449,6 +443,18 @@ export async function POST(req: NextRequest) {
       }
 
       const ubicacionRaw = String(body.ubicacion ?? '').trim();
+      if (isAlmacenArea(area) && !ubicacionRaw) {
+        return NextResponse.json(
+          { error: 'En Almacén solo se pueden incorporar faltantes de la ubicación de recuento seleccionada.' },
+          { status: 400 }
+        );
+      }
+      if (isAlmacenArea(area) && !ubicacionAlmacenUsaRecuentoStock(ubicacionRaw)) {
+        return NextResponse.json(
+          { error: 'Esta ubicación de Almacén usa cantidades directas a pedir, no recuento de stock.' },
+          { status: 400 }
+        );
+      }
       const ubicacionesMap = buildUbicacionesMap(catalogo);
       let ubicacionKey: string | undefined;
       if (ubicacionRaw) {
@@ -478,6 +484,12 @@ export async function POST(req: NextRequest) {
     const ubicacionRaw = String(body.ubicacion ?? '').trim();
     if (!ubicacionRaw) {
       return NextResponse.json({ error: 'Ubicacion requerida.' }, { status: 400 });
+    }
+    if (isAlmacenArea(area) && !ubicacionAlmacenUsaRecuentoStock(ubicacionRaw)) {
+      return NextResponse.json(
+        { error: 'Esta ubicación de Almacén debe guardarse como cantidad directa a pedir.' },
+        { status: 400 }
+      );
     }
 
     const fechaRecuentoRaw = String(body.fechaRecuento ?? '').trim();
