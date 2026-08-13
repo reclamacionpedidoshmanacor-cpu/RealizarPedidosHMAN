@@ -316,86 +316,72 @@ export async function remapReposicionCatalogoCn(
   if (!medicamento) return 0;
   const nuevasUnidadesPorCaja = Math.max(1, medicamento.unidadesPorCaja || 1);
   const sql = getDb();
-  const activados = await sql`
-    UPDATE reposicion_catalogo vigente
-    SET activo = TRUE,
-        area_origen = ${medicamento.area},
-        ubicacion_origen = ${medicamento.ubicacion?.trim() || null},
-        principio_activo = ${medicamento.principioActivo},
-        nombre = ${medicamento.nombre},
-        unidades_por_caja = ${nuevasUnidadesPorCaja},
-        unidad_pedido = anterior.unidad_pedido,
-        stock_maximo = CASE
+  const rows = await sql`
+    INSERT INTO reposicion_catalogo (
+      area_destino, ubicacion_destino, codigo, cn, tipo, area_origen,
+      ubicacion_origen, principio_activo, nombre, unidades_por_caja,
+      unidad_pedido, stock_maximo, punto_pedido, notas, activo,
+      grupo_intercambio_id
+    )
+    SELECT
+      anterior.area_destino,
+      anterior.ubicacion_destino,
+      ${cnNuevo},
+      ${cnNuevo},
+      'medicamento',
+      ${medicamento.area},
+      ${medicamento.ubicacion?.trim() || null},
+      ${medicamento.principioActivo},
+      ${medicamento.nombre},
+      ${nuevasUnidadesPorCaja},
+      anterior.unidad_pedido,
+      CASE
           WHEN anterior.unidad_pedido = 'cajas' AND anterior.stock_maximo IS NOT NULL
           THEN CEIL(
             anterior.stock_maximo * GREATEST(anterior.unidades_por_caja, 1)::numeric
             / ${nuevasUnidadesPorCaja}
           )
           ELSE anterior.stock_maximo
-        END,
-        punto_pedido = CASE
+      END,
+      CASE
           WHEN anterior.unidad_pedido = 'cajas' AND anterior.punto_pedido IS NOT NULL
           THEN CEIL(
             anterior.punto_pedido * GREATEST(anterior.unidades_por_caja, 1)::numeric
             / ${nuevasUnidadesPorCaja}
           )
           ELSE anterior.punto_pedido
-        END,
-        notas = anterior.notas,
-        grupo_intercambio_id = ${grupoId},
-        actualizado_en = NOW()
+      END,
+      anterior.notas,
+      TRUE,
+      ${grupoId}
     FROM reposicion_catalogo anterior
     WHERE anterior.cn = ${cnAnterior}
       AND anterior.activo = TRUE
-      AND vigente.cn = ${cnNuevo}
-      AND vigente.area_destino = anterior.area_destino
-      AND vigente.ubicacion_destino = anterior.ubicacion_destino
-    RETURNING vigente.id
+    ON CONFLICT (area_destino, ubicacion_destino, codigo)
+    DO UPDATE SET
+      cn = EXCLUDED.cn,
+      tipo = EXCLUDED.tipo,
+      area_origen = EXCLUDED.area_origen,
+      ubicacion_origen = EXCLUDED.ubicacion_origen,
+      principio_activo = EXCLUDED.principio_activo,
+      nombre = EXCLUDED.nombre,
+      unidades_por_caja = EXCLUDED.unidades_por_caja,
+      unidad_pedido = EXCLUDED.unidad_pedido,
+      stock_maximo = EXCLUDED.stock_maximo,
+      punto_pedido = EXCLUDED.punto_pedido,
+      notas = EXCLUDED.notas,
+      activo = TRUE,
+      grupo_intercambio_id = EXCLUDED.grupo_intercambio_id,
+      actualizado_en = NOW()
+    RETURNING id
   `;
   await sql`
-    UPDATE reposicion_catalogo anterior
-    SET activo = FALSE,
-        grupo_intercambio_id = ${grupoId},
-        actualizado_en = NOW()
-    WHERE anterior.cn = ${cnAnterior}
-      AND EXISTS (
-        SELECT 1
-        FROM reposicion_catalogo vigente
-        WHERE vigente.area_destino = anterior.area_destino
-          AND vigente.ubicacion_destino = anterior.ubicacion_destino
-          AND vigente.codigo = ${cnNuevo}
-      )
-  `;
-  const rows = await sql`
     UPDATE reposicion_catalogo
-    SET cn = ${cnNuevo},
-        codigo = ${cnNuevo},
-        area_origen = ${medicamento.area},
-        ubicacion_origen = ${medicamento.ubicacion?.trim() || null},
-        principio_activo = ${medicamento.principioActivo},
-        nombre = ${medicamento.nombre},
-        stock_maximo = CASE
-          WHEN unidad_pedido = 'cajas' AND stock_maximo IS NOT NULL
-          THEN CEIL(
-            stock_maximo * GREATEST(unidades_por_caja, 1)::numeric
-            / ${nuevasUnidadesPorCaja}
-          )
-          ELSE stock_maximo
-        END,
-        punto_pedido = CASE
-          WHEN unidad_pedido = 'cajas' AND punto_pedido IS NOT NULL
-          THEN CEIL(
-            punto_pedido * GREATEST(unidades_por_caja, 1)::numeric
-            / ${nuevasUnidadesPorCaja}
-          )
-          ELSE punto_pedido
-        END,
-        unidades_por_caja = ${nuevasUnidadesPorCaja},
+    SET activo = FALSE,
         grupo_intercambio_id = ${grupoId},
         actualizado_en = NOW()
     WHERE cn = ${cnAnterior}
       AND activo = TRUE
-    RETURNING id
   `;
-  return activados.length + rows.length;
+  return rows.length;
 }
