@@ -77,6 +77,7 @@ export default function ReposicionPage() {
   const [cantidades, setCantidades] = useState<Record<number, number>>({});
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [formOpen, setFormOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -192,6 +193,28 @@ export default function ReposicionPage() {
       toast.error(error instanceof Error ? error.message : 'Error inesperado');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const eliminarPedido = async (pedido: Cabecera) => {
+    const descripcion = pedido.estado === 'finalizado'
+      ? 'Este pedido finalizado desaparecerá del historial.'
+      : 'Se eliminará el borrador y todas sus líneas.';
+    if (!confirm(`¿Eliminar el pedido de reposición #${pedido.id}? ${descripcion}`)) return;
+
+    setDeletingId(pedido.id);
+    try {
+      const res = await fetch(`/api/reposicion/${pedido.id}`, { method: 'DELETE' });
+      const raw = await res.text();
+      const payload = raw ? JSON.parse(raw) : {};
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo eliminar el pedido.');
+      if (detalle?.cabecera.id === pedido.id) setDetalle(null);
+      toast.success(`Pedido de reposición #${pedido.id} eliminado.`);
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Error inesperado');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -360,6 +383,13 @@ export default function ReposicionPage() {
                   <p className="text-sm text-slate-500">{borrador.totalLineas} líneas · {formatDate(borrador.fechaCreacion)}</p>
                 </div>
                 <div className="flex gap-2">
+                  <button
+                    disabled={deletingId === borrador.id}
+                    onClick={() => eliminarPedido(borrador)}
+                    className="rounded-lg border border-rose-300 bg-white px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                  >
+                    {deletingId === borrador.id ? 'Eliminando…' : 'Eliminar'}
+                  </button>
                   <button onClick={() => openPedido(borrador.id)} className="rounded-lg border border-teal-300 bg-white px-3 py-2 text-sm font-semibold text-teal-700">
                     Revisar
                   </button>
@@ -385,7 +415,7 @@ export default function ReposicionPage() {
                     <th className="px-3 py-2.5">Fecha</th>
                     <th className="w-[90px] px-3 py-2.5 text-center">Líneas</th>
                     <th className="w-[120px] px-3 py-2.5 text-center">Estado</th>
-                    <th className="w-[220px] px-4 py-2.5 text-right">Acciones</th>
+                    <th className="w-[290px] px-4 py-2.5 text-right">Acciones</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -411,6 +441,13 @@ export default function ReposicionPage() {
                           {pedido.estado === 'finalizado' && (
                             <button disabled={busy} onClick={() => enviar(pedido.id)} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">Enviar</button>
                           )}
+                          <button
+                            disabled={deletingId === pedido.id}
+                            onClick={() => eliminarPedido(pedido)}
+                            className="rounded-lg border border-rose-200 px-2.5 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                          >
+                            {deletingId === pedido.id ? 'Eliminando…' : 'Eliminar'}
+                          </button>
                         </div>
                       </td>
                     </tr>

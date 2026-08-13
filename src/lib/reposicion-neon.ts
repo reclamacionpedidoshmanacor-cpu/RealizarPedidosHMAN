@@ -134,7 +134,7 @@ export async function getHistorialReposicion(area: string): Promise<ReposicionCa
   const rows = await sql`
     SELECT id, area, estado, fecha_creacion, fecha_finalizado, total_lineas
     FROM pedidos_reposicion
-    WHERE area = ${area}
+    WHERE area = ${area} AND estado = 'finalizado'
     ORDER BY fecha_creacion DESC
     LIMIT 50
   `;
@@ -250,6 +250,24 @@ export async function finalizarPedido(id: number): Promise<ReposicionCabecera> {
   `;
   if (!rows[0]) throw new Error('Pedido no encontrado o ya finalizado.');
   return mapCabecera(rows[0]);
+}
+
+export async function eliminarPedidoReposicion(
+  id: number,
+  area: string,
+): Promise<{ id: number; estado: string; lineasEliminadas: number } | null> {
+  const sql = getDb();
+  const rows = await sql`
+    DELETE FROM pedidos_reposicion
+    WHERE id = ${id} AND area = ${area}
+    RETURNING id, estado, total_lineas
+  `;
+  if (!rows[0]) return null;
+  return {
+    id: Number(rows[0].id),
+    estado: String(rows[0].estado),
+    lineasEliminadas: Number(rows[0].total_lineas),
+  };
 }
 
 async function recalcularTotalLineas(pedidoId: number) {
