@@ -315,6 +315,28 @@ export async function remapReposicionCatalogoCn(
   const medicamento = await getMedicamentoByCn(cnNuevo);
   if (!medicamento) return 0;
   const sql = getDb();
+  const activados = await sql`
+    UPDATE reposicion_catalogo vigente
+    SET activo = TRUE,
+        area_origen = ${medicamento.area},
+        ubicacion_origen = ${medicamento.ubicacion?.trim() || null},
+        principio_activo = ${medicamento.principioActivo},
+        nombre = ${medicamento.nombre},
+        unidades_por_caja = ${Math.max(1, medicamento.unidadesPorCaja || 1)},
+        unidad_pedido = anterior.unidad_pedido,
+        stock_maximo = anterior.stock_maximo,
+        punto_pedido = anterior.punto_pedido,
+        notas = anterior.notas,
+        grupo_intercambio_id = ${grupoId},
+        actualizado_en = NOW()
+    FROM reposicion_catalogo anterior
+    WHERE anterior.cn = ${cnAnterior}
+      AND anterior.activo = TRUE
+      AND vigente.cn = ${cnNuevo}
+      AND vigente.area_destino = anterior.area_destino
+      AND vigente.ubicacion_destino = anterior.ubicacion_destino
+    RETURNING vigente.id
+  `;
   await sql`
     UPDATE reposicion_catalogo anterior
     SET activo = FALSE,
@@ -344,5 +366,5 @@ export async function remapReposicionCatalogoCn(
       AND activo = TRUE
     RETURNING id
   `;
-  return rows.length;
+  return activados.length + rows.length;
 }

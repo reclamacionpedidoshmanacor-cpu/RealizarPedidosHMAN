@@ -266,10 +266,24 @@ async function remapReposicionBorradores(cnAnterior: string, cnNuevo: string): P
   `;
   await sql`
     UPDATE pedidos_reposicion_lineas l
-    SET cn = ${cnNuevo}, codigo_item = ${cnNuevo}
-    FROM pedidos_reposicion p
+    SET cn = ${cnNuevo},
+        codigo_item = ${cnNuevo},
+        catalogo_id = rc.id,
+        principio_activo = rc.principio_activo,
+        nombre = rc.nombre,
+        area_origen = rc.area_origen,
+        ubicacion_origen = rc.ubicacion_origen,
+        unidad_pedido = rc.unidad_pedido,
+        stock_maximo = rc.stock_maximo,
+        punto_pedido = rc.punto_pedido,
+        notas = rc.notas
+    FROM pedidos_reposicion p, reposicion_catalogo rc
     WHERE p.id = l.pedido_id
       AND p.estado = 'borrador'
       AND l.cn = ${cnAnterior}
+      AND rc.area_destino = p.area
+      AND rc.ubicacion_destino = l.ubicacion
+      AND rc.cn = ${cnNuevo}
+      AND rc.activo = TRUE
   `;
 }

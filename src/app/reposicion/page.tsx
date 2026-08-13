@@ -83,7 +83,7 @@ export default function ReposicionPage() {
   const [resultados, setResultados] = useState<ResultadoMed[]>([]);
   const [filtroUbicacion, setFiltroUbicacion] = useState('');
   const [filtroTexto, setFiltroTexto] = useState('');
-  const [filtroActivo, setFiltroActivo] = useState<'' | 'si' | 'no'>('');
+  const [filtroActivo, setFiltroActivo] = useState<'' | 'si' | 'no'>('si');
 
   const enabled = area === 'upe' || area === 'oncologia';
 
