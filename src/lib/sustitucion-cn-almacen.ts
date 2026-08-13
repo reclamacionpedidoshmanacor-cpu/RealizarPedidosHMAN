@@ -65,6 +65,7 @@ export async function sustituirCnEnCatalogoAlmacen(params: {
   ubicacion: string;
   datosNuevo?: DatosNuevoSustitucion;
   origen?: 'catalogo' | 'pasillo';
+  omitirCima?: boolean;
 }): Promise<{ ok: true; result: SustitucionCnAlmacenResult } | { ok: false; err: SustitucionCnAlmacenError }> {
   const { area, cnViejo, cnNuevoRaw, ubicacion, datosNuevo } = params;
 
@@ -111,12 +112,29 @@ export async function sustituirCnEnCatalogoAlmacen(params: {
         presentacion: existenteNuevo.presentacion ?? '',
         unidadesPorCaja: existenteNuevo.unidadesPorCaja,
       }
-    : await buscarMedicamentoPorCN(cnNuevoRaw);
+    : (params.omitirCima ? null : await buscarMedicamentoPorCN(cnNuevoRaw)) ?? (
+        datosNuevo?.nombre?.trim()
+          ? {
+              nombre: datosNuevo.nombre.trim(),
+              principioActivo: datosNuevo.principioActivo?.trim() ?? '',
+              presentacion: datosNuevo.presentacion?.trim() ?? '',
+              unidadesPorCaja: datosNuevo.unidadesPorCaja ?? 1,
+            }
+          : null
+      );
   if (!datosBase) {
-    return { ok: false, err: { status: 404, error: `CN ${cnNuevo} no encontrado en CIMA (AEMPS).` } };
+    return {
+      ok: false,
+      err: {
+        status: 400,
+        error: `CN ${cnNuevo} no encontrado en CIMA. Indica manualmente al menos el nombre o marca.`,
+      },
+    };
   }
 
-  const datosResueltos = resolverDatosNuevo(datosBase, datosNuevo);
+  // Un CN ya catalogado conserva sus datos maestros. CIMA y los valores de la
+  // previsualización solo sirven para dar de alta códigos realmente nuevos.
+  const datosResueltos = resolverDatosNuevo(datosBase, existenteNuevo ? undefined : datosNuevo);
   if (!datosResueltos.ok) return datosResueltos;
   const { nombre, principioActivo, presentacion, unidadesPorCaja } = datosResueltos.datos;
 

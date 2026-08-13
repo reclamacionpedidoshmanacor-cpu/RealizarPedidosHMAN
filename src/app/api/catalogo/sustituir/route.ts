@@ -17,6 +17,7 @@ export async function POST(req: NextRequest) {
       principioActivo?: unknown;
       presentacion?: unknown;
       unidadesPorCaja?: unknown;
+      manual?: unknown;
     };
 
     const cnViejo = String(body.cnViejo ?? '').trim();
@@ -47,6 +48,7 @@ export async function POST(req: NextRequest) {
           }
         : undefined,
       origen: 'catalogo',
+      omitirCima: body.manual === true,
     });
 
     if (!outcome.ok) {

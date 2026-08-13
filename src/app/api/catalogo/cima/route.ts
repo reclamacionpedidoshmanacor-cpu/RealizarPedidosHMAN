@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSessionOrArea } from '@/lib/api-auth';
 import { buscarMedicamentoPorCN } from '@/lib/cima';
 import { inferirUnidadesPorCaja } from '@/lib/cima-presentacion';
+import { getMedicamentoByCn } from '@/lib/catalogo-neon';
 import { normalizarCnParaCima } from '@/lib/utils';
 
 export const runtime = 'nodejs';
@@ -20,11 +21,26 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'CN no válido.' }, { status: 400 });
   }
 
+  const existente = await getMedicamentoByCn(cnNormalizado);
+  if (existente) {
+    return NextResponse.json({
+      cn: existente.cn,
+      cnConsultado: cnNormalizado,
+      nombre: existente.nombre,
+      principioActivo: existente.principioActivo ?? '',
+      presentacion: existente.presentacion ?? '',
+      unidadesPorCajaInferidas: existente.unidadesPorCaja,
+      origen: 'catalogo',
+    });
+  }
+
   const datos = await buscarMedicamentoPorCN(rawCn);
   if (!datos) {
     return NextResponse.json(
       {
         error: `No encontrado en CIMA. Se consultó como CN ${cnNormalizado}${rawCn !== cnNormalizado ? ` (entrada: ${rawCn})` : ''}.`,
+        cn: cnNormalizado,
+        entradaManualPermitida: true,
       },
       { status: 404 }
     );
@@ -42,5 +58,6 @@ export async function GET(req: NextRequest) {
     labTitular: datos.labTitular,
     autorizado: datos.autorizado,
     unidadesPorCajaInferidas: unidadesInferidas,
+    origen: 'cima',
   });
 }

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
-import { cn, formatEuro, formatMseLabel, isMSE } from '@/lib/utils';
+import { cn, formatEuro, formatMseLabel, isMSE, normalizarCnParaCima } from '@/lib/utils';
 import { normalizeNivelStock } from '@/lib/cantidades';
 import { toSapCode } from '@/lib/propuesta';
 import { mergeUbicacionesAlmacen } from '@/lib/almacen';
@@ -932,6 +932,7 @@ export default function CatalogoPage() {
     principioActivo: string;
     presentacion: string;
     unidadesPorCaja: number;
+    manual: boolean;
   }) => {
     if (!sustitucionMed?.ubicacion) return;
     setSustituyendo(true);
@@ -948,6 +949,7 @@ export default function CatalogoPage() {
           principioActivo: confirmacion.principioActivo,
           presentacion: confirmacion.presentacion,
           unidadesPorCaja: confirmacion.unidadesPorCaja,
+          manual: confirmacion.manual,
         }),
       });
       const raw = await res.text();
@@ -1912,6 +1914,7 @@ type CimaPreviewCatalogo = {
   principioActivo: string;
   presentacion: string;
   unidadesPorCajaInferidas: number | null;
+  origen?: 'catalogo' | 'cima';
 };
 
 type SustitucionCatalogoConfirm = {
@@ -1920,6 +1923,7 @@ type SustitucionCatalogoConfirm = {
   principioActivo: string;
   presentacion: string;
   unidadesPorCaja: number;
+  manual: boolean;
 };
 
 function SustituirCatalogoModal({
@@ -1935,6 +1939,7 @@ function SustituirCatalogoModal({
 }) {
   const [cnNuevo, setCnNuevo] = useState('');
   const [cima, setCima] = useState<CimaPreviewCatalogo | null>(null);
+  const [entradaManual, setEntradaManual] = useState(false);
   const [buscandoCima, setBuscandoCima] = useState(false);
   const [nombre, setNombre] = useState('');
   const [principioActivo, setPrincipioActivo] = useState('');
@@ -1963,6 +1968,7 @@ function SustituirCatalogoModal({
     }
     setBuscandoCima(true);
     setCima(null);
+    setEntradaManual(false);
     resetDatosEditables();
     try {
       const res = await fetch(`/api/catalogo/cima?cn=${encodeURIComponent(trimmed)}`, {
@@ -1970,6 +1976,12 @@ function SustituirCatalogoModal({
       });
       const data = await res.json();
       if (!res.ok) {
+        if (res.status === 404 && data.entradaManualPermitida) {
+          setCnNuevo(String(data.cn || normalizarCnParaCima(trimmed) || trimmed));
+          setEntradaManual(true);
+          toast.info('No encontrado en CIMA. Completa manualmente los datos del medicamento.');
+          return;
+        }
         toast.error(data.error ?? 'CN no encontrado en CIMA');
         return;
       }
@@ -1979,6 +1991,7 @@ function SustituirCatalogoModal({
         principioActivo: data.principioActivo,
         presentacion: data.presentacion,
         unidadesPorCajaInferidas: data.unidadesPorCajaInferidas,
+        origen: data.origen,
       };
       setCnNuevo(data.cn ?? trimmed);
       setCima(preview);
@@ -2015,7 +2028,12 @@ function SustituirCatalogoModal({
               inputMode="numeric"
               placeholder="CN nuevo o código SAP"
               value={cnNuevo}
-              onChange={(e) => { setCnNuevo(e.target.value.trim()); setCima(null); resetDatosEditables(); }}
+              onChange={(e) => {
+                setCnNuevo(e.target.value.trim());
+                setCima(null);
+                setEntradaManual(false);
+                resetDatosEditables();
+              }}
               onBlur={() => { if (cnNuevo.trim()) void consultarCima(cnNuevo); }}
               className="field-input flex-1 font-mono"
               disabled={busy}
@@ -2029,18 +2047,22 @@ function SustituirCatalogoModal({
               {buscandoCima ? '…' : 'CIMA'}
             </button>
           </div>
-          {cima && (
+          {(cima || entradaManual) && (
             <div className="rounded-xl bg-violet-50 border border-violet-200 px-4 py-4 space-y-3">
               <p className="text-xs font-semibold text-violet-800 uppercase tracking-wide">
-                Datos del nuevo CN — revisa y corrige antes de confirmar
+                {cima?.origen === 'catalogo'
+                  ? 'CN existente — se conservarán los datos guardados en el catálogo'
+                  : cima
+                    ? 'Datos del nuevo CN — revisa y corrige antes de confirmar'
+                  : 'Medicamento no encontrado en CIMA — completa los datos manualmente'}
               </p>
-              <p className="text-xs text-violet-700 font-mono">CN {cima.cn}</p>
+              <p className="text-xs text-violet-700 font-mono">Código {cima?.cn ?? cnNuevo}</p>
               <Field label="Principio activo">
                 <input
                   className="field-input"
                   value={principioActivo}
                   onChange={(e) => setPrincipioActivo(e.target.value)}
-                  disabled={busy}
+                  disabled={busy || cima?.origen === 'catalogo'}
                 />
               </Field>
               <Field label="Nombre / Marca *">
@@ -2048,7 +2070,7 @@ function SustituirCatalogoModal({
                   className="field-input"
                   value={nombre}
                   onChange={(e) => setNombre(e.target.value)}
-                  disabled={busy}
+                  disabled={busy || cima?.origen === 'catalogo'}
                 />
               </Field>
               <Field label="Presentación">
@@ -2056,7 +2078,7 @@ function SustituirCatalogoModal({
                   className="field-input"
                   value={presentacion}
                   onChange={(e) => setPresentacion(e.target.value)}
-                  disabled={busy}
+                  disabled={busy || cima?.origen === 'catalogo'}
                 />
               </Field>
               <Field label="Uds/caja">
@@ -2066,7 +2088,7 @@ function SustituirCatalogoModal({
                   className="field-input text-center w-24"
                   value={udsCaja}
                   onChange={(e) => setUdsCaja(e.target.value)}
-                  disabled={busy}
+                  disabled={busy || cima?.origen === 'catalogo'}
                 />
               </Field>
             </div>
@@ -2082,20 +2104,21 @@ function SustituirCatalogoModal({
           </button>
           <button
             onClick={() => {
-              if (!cima || !nombre.trim()) {
+              if (!(cima || entradaManual) || !nombre.trim()) {
                 toast.error('El nombre del medicamento es obligatorio.');
                 return;
               }
               const uds = Number(udsCaja);
               onConfirmar({
-                cnNuevo: cima.cn,
+                cnNuevo: cima?.cn ?? cnNuevo.trim(),
                 nombre: nombre.trim(),
                 principioActivo: principioActivo.trim(),
                 presentacion: presentacion.trim(),
                 unidadesPorCaja: Number.isFinite(uds) && uds > 0 ? Math.round(uds) : 1,
+                manual: entradaManual,
               });
             }}
-            disabled={busy || !cima || !cnNuevo.trim() || !nombre.trim()}
+            disabled={busy || !(cima || entradaManual) || !cnNuevo.trim() || !nombre.trim()}
             className="rounded-lg bg-violet-700 px-4 py-2 text-sm font-medium text-white hover:bg-violet-800 disabled:opacity-50"
           >
             {busy ? 'Sustituyendo…' : 'Confirmar sustitución'}
