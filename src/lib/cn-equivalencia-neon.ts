@@ -185,7 +185,7 @@ async function remapPropuestasBorrador(
         observaciones = CONCAT_WS(
           E'\n',
           NULLIF(l.observaciones, ''),
-          ${`CN sustituido ${cnAnterior} → ${cnNuevo}. Revisar cantidad y niveles antes de tramitar.`}
+          ${`CN sustituido ${cnAnterior} → ${cnNuevo}. Revisar cantidad y niveles antes de tramitar.`}::text
         )
     FROM propuestas p
     WHERE p.id = l.propuesta_id
