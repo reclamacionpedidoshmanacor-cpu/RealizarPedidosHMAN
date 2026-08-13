@@ -83,15 +83,15 @@ export async function sustituirCnEnCatalogoAlmacen(params: {
   if ((viejo.ubicacion ?? '').trim() !== ubicacion) {
     return { ok: false, err: { status: 400, error: 'El medicamento anterior no pertenece a esta ubicación.' } };
   }
-
-  const cima = await buscarMedicamentoPorCN(cnNuevoRaw);
-  if (!cima) {
-    return { ok: false, err: { status: 404, error: `CN ${cnNuevo} no encontrado en CIMA (AEMPS).` } };
+  if (!viejo.activo) {
+    return {
+      ok: false,
+      err: {
+        status: 409,
+        error: `El CN ${cnViejo} ya no está activo. Actualiza el catálogo: el intercambio puede haberse completado.`,
+      },
+    };
   }
-
-  const datosResueltos = resolverDatosNuevo(cima, datosNuevo);
-  if (!datosResueltos.ok) return datosResueltos;
-  const { nombre, principioActivo, presentacion, unidadesPorCaja } = datosResueltos.datos;
 
   const existenteNuevo = await getMedicamentoByCn(cnNuevo);
   if (existenteNuevo && existenteNuevo.area !== area) {
@@ -100,6 +100,25 @@ export async function sustituirCnEnCatalogoAlmacen(params: {
       err: { status: 409, error: `El CN ${cnNuevo} ya existe en el área ${existenteNuevo.area}.` },
     };
   }
+
+  // Si el CN ya está en el catálogo no es necesario volver a consultar CIMA.
+  // Además de evitar una dependencia externa redundante, esto acorta
+  // considerablemente el intercambio entre un CN activo y otro inactivo.
+  const datosBase = existenteNuevo
+    ? {
+        nombre: existenteNuevo.nombre,
+        principioActivo: existenteNuevo.principioActivo ?? '',
+        presentacion: existenteNuevo.presentacion ?? '',
+        unidadesPorCaja: existenteNuevo.unidadesPorCaja,
+      }
+    : await buscarMedicamentoPorCN(cnNuevoRaw);
+  if (!datosBase) {
+    return { ok: false, err: { status: 404, error: `CN ${cnNuevo} no encontrado en CIMA (AEMPS).` } };
+  }
+
+  const datosResueltos = resolverDatosNuevo(datosBase, datosNuevo);
+  if (!datosResueltos.ok) return datosResueltos;
+  const { nombre, principioActivo, presentacion, unidadesPorCaja } = datosResueltos.datos;
 
   if (!existenteNuevo) {
     await insertMedicamento({

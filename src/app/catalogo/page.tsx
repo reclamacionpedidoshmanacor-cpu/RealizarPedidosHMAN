@@ -306,7 +306,10 @@ export default function CatalogoPage() {
         toast.error('No hay un área activa. Vuelve a entrar en la app.');
         return;
       }
-      const res = await fetch(`/api/medicamentos?area=${area}`, { credentials: 'include' });
+      const res = await fetch(`/api/medicamentos?area=${area}`, {
+        credentials: 'include',
+        cache: 'no-store',
+      });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo cargar el catálogo.');
       setMeds(Array.isArray(payload) ? payload : []);
@@ -947,7 +950,20 @@ export default function CatalogoPage() {
           unidadesPorCaja: confirmacion.unidadesPorCaja,
         }),
       });
-      const data = await res.json();
+      const raw = await res.text();
+      let data: { error?: string; cnNuevo?: string } = {};
+      if (raw) {
+        try {
+          data = JSON.parse(raw) as { error?: string; cnNuevo?: string };
+        } catch {
+          throw new Error(`El servidor devolvió una respuesta no válida (${res.status}).`);
+        }
+      }
+      if (!raw) {
+        throw new Error(
+          'El servidor no devolvió respuesta. Actualiza el catálogo antes de reintentar: el intercambio podría haberse completado.',
+        );
+      }
       if (!res.ok) throw new Error(data?.error ?? 'No se pudo sustituir.');
 
       toast.success(`Sustituido CN ${sustitucionMed.cn} → ${data.cnNuevo}`);
@@ -958,6 +974,9 @@ export default function CatalogoPage() {
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
+      // La sustitución puede haberse guardado antes de que falle o expire la
+      // respuesta. Reconciliamos siempre la pantalla con el estado de Neon.
+      await fetchMeds({ silent: true });
     } finally {
       setSustituyendo(false);
     }
