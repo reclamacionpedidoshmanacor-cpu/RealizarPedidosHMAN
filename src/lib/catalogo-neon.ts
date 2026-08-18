@@ -1,5 +1,9 @@
 import { neon } from '@neondatabase/serverless';
 import { isMSE } from './utils';
+import {
+  ensureUnidosisSchema,
+  getDatosUnidosisByCn,
+} from './unidosis-neon';
 
 export type CatalogoMedicamento = {
   cn: string;
@@ -22,6 +26,8 @@ export type CatalogoMedicamento = {
   consumoMedio: number | null;
   ppioActivoCima: boolean;
   cimaConsultado: boolean;
+  formatoUnidosis: boolean | null;
+  unidadesEnvaseReferencia: number | null;
 };
 
 export type MedicamentoBase = {
@@ -114,7 +120,7 @@ export async function ensureMedicamentosSchema(): Promise<void> {
 }
 
 export async function listMedicamentosByArea(area: string): Promise<CatalogoMedicamento[]> {
-  await ensureMedicamentosSchema();
+  await Promise.all([ensureMedicamentosSchema(), ensureUnidosisSchema()]);
   const sql = getCatalogoClient();
   const rows = (await sql`
     SELECT
@@ -137,9 +143,12 @@ export async function listMedicamentosByArea(area: string): Promise<CatalogoMedi
       so.stock_maximo,
       m.consumo_medio,
       COALESCE(m.ppio_activo_cima, FALSE) AS ppio_activo_cima,
-      COALESCE(m.cima_consultado, FALSE)  AS cima_consultado
+      COALESCE(m.cima_consultado, FALSE) AS cima_consultado,
+      u.unidosis AS formato_unidosis,
+      u.unidades_envase AS unidades_envase_referencia
     FROM public.medicamentos m
     LEFT JOIN public.stock_objetivo so ON so.cn = m.cn
+    LEFT JOIN public.cn_unidosis u ON u.cn = m.cn
     WHERE m.area = ${area}
     ORDER BY m.principio_activo ASC NULLS LAST, m.nombre ASC;
   `) as Array<{
@@ -163,6 +172,8 @@ export async function listMedicamentosByArea(area: string): Promise<CatalogoMedi
     consumo_medio: number | string | null;
     ppio_activo_cima: boolean;
     cima_consultado: boolean;
+    formato_unidosis: boolean | null;
+    unidades_envase_referencia: number | null;
   }>;
 
   return rows.map((row) => ({
@@ -186,6 +197,11 @@ export async function listMedicamentosByArea(area: string): Promise<CatalogoMedi
     consumoMedio: numOrNull(row.consumo_medio),
     ppioActivoCima: row.ppio_activo_cima ?? false,
     cimaConsultado: row.cima_consultado ?? false,
+    formatoUnidosis: row.formato_unidosis,
+    unidadesEnvaseReferencia:
+      row.unidades_envase_referencia == null
+        ? null
+        : Number(row.unidades_envase_referencia),
   }));
 }
 
@@ -325,6 +341,11 @@ export async function getStockObjetivoByCn(cn: string): Promise<StockObjetivo | 
 export async function insertMedicamento(row: MedicamentoBase) {
   await ensureMedicamentosSchema();
   const sql = getCatalogoClient();
+  const datosUnidosis = await getDatosUnidosisByCn(row.cn);
+  const unidadesPorCaja =
+    datosUnidosis?.unidadesEnvase != null
+      ? datosUnidosis.unidadesEnvase
+      : row.unidadesPorCaja;
   const mse = isMSE(row.cn);
   const ppioActivoCima = row.ppioActivoCima ?? false;
   const cimaConsultado = row.cimaConsultado ?? false;
@@ -336,7 +357,7 @@ export async function insertMedicamento(row: MedicamentoBase) {
       ppio_activo_cima, cima_consultado, consumo_medio, actualizado_en
     ) VALUES (
       ${row.cn}, ${row.nombre}, ${row.principioActivo}, ${row.presentacion ?? null}, ${row.via}, ${row.area}, ${row.ubicacion},
-      ${row.unidadesPorCaja}, ${row.activo}, ${row.comprable}, ${mse}, ${row.tipoMse}, ${row.precioUnidad}, ${row.precioCaja},
+      ${unidadesPorCaja}, ${row.activo}, ${row.comprable}, ${mse}, ${row.tipoMse}, ${row.precioUnidad}, ${row.precioCaja},
       ${ppioActivoCima}, ${cimaConsultado}, ${consumoMedio}, now()
     );
   `;

@@ -8,6 +8,7 @@ import { toSapCode } from '@/lib/propuesta';
 import { mergeUbicacionesAlmacen } from '@/lib/almacen';
 import type { AlertaSuministroCn } from '@/lib/pedidos-pendientes';
 import { BadgeSuministro } from '@/components/BadgeSuministro';
+import { IndicadorUnidosis } from '@/components/IndicadorUnidosis';
 
 interface Medicamento {
   cn: string; nombre: string; principioActivo: string | null;
@@ -19,6 +20,8 @@ interface Medicamento {
   stockMinimo: number | null; puntoPedido: number | null; stockMaximo: number | null;
   consumoMedio?: number | null;
   ppioActivoCima: boolean; cimaConsultado: boolean;
+  formatoUnidosis: boolean | null;
+  unidadesEnvaseReferencia: number | null;
   alertaSuministro?: AlertaSuministroCn | null;
 }
 
@@ -47,7 +50,7 @@ const CATALOGO_COLUMN_WIDTHS: Record<CatalogColumnKey, number> = {
   via: 90,
   ubicacion: 160,
   unidadesPorCaja: 100,
-  presentacion: 220,
+  presentacion: 150,
   consumoMedio: 120,
   stockMinimo: 90,
   puntoPedido: 110,
@@ -770,6 +773,7 @@ export default function CatalogoPage() {
       puntoPedido: med.puntoPedido ?? (esAlmacen ? '' : 0),
       stockMaximo: med.stockMaximo != null ? med.stockMaximo : (esAlmacen ? '' : undefined),
       consumoMedio: med.consumoMedio != null ? med.consumoMedio : (esAlmacen ? '' : undefined),
+      formatoUnidosis: med.formatoUnidosis,
       clearStockObjetivo: false,
     });
   };
@@ -802,6 +806,9 @@ export default function CatalogoPage() {
         if (data.tipoMse !== undefined) updated.tipoMse = data.tipoMse ? String(data.tipoMse) : null;
         if (data.consumoMedio !== undefined) {
           updated.consumoMedio = data.consumoMedio === '' ? null : Number(data.consumoMedio);
+        }
+        if (data.formatoUnidosis !== undefined) {
+          updated.formatoUnidosis = data.formatoUnidosis;
         }
 
         if (esAlmacen) {
@@ -1505,7 +1512,35 @@ export default function CatalogoPage() {
               {paginated.map(med => (
                 editingCn === med.cn ? (
                   <tr key={med.cn} id={`catalogo-row-${med.cn}`} className="bg-teal-50">
-                    <td className="px-4 py-2 font-mono text-xs text-slate-500">{med.cn}</td>
+                    <td className="px-3 py-2 text-xs text-slate-500">
+                      <div className="mb-1 flex items-center gap-1.5 font-mono">
+                        {med.cn}
+                        <IndicadorUnidosis estado={editData.formatoUnidosis} className="h-4 w-4" />
+                      </div>
+                      <select
+                        className="w-full rounded border border-slate-300 bg-white px-1.5 py-1 font-sans text-[10px]"
+                        value={
+                          editData.formatoUnidosis == null
+                            ? 'desconocido'
+                            : editData.formatoUnidosis
+                              ? 'si'
+                              : 'no'
+                        }
+                        onChange={(event) => {
+                          const value = event.target.value;
+                          setEditData((prev) => ({
+                            ...prev,
+                            formatoUnidosis:
+                              value === 'desconocido' ? null : value === 'si',
+                          }));
+                        }}
+                        aria-label={`Formato unidosis de ${med.cn}`}
+                      >
+                        <option value="desconocido">Sin información</option>
+                        <option value="si">Unidosis</option>
+                        <option value="no">Requiere reenvasado</option>
+                      </select>
+                    </td>
                     <td className="px-4 py-2">
                       <input className="w-full rounded border border-slate-300 px-2 py-1 text-xs" value={editData.principioActivo ?? ''} onChange={e => setEditData(p => ({ ...p, principioActivo: e.target.value }))} />
                     </td>
@@ -1571,6 +1606,7 @@ export default function CatalogoPage() {
                             ? <span title={`CIMA: ${med.principioActivo ?? '—'}`} className="inline-block w-2 h-2 rounded-full bg-green-500 shrink-0" />
                             : <span title="CIMA consultado: principio activo no encontrado" className="inline-block w-2 h-2 rounded-full bg-red-400 shrink-0" />
                         )}
+                        <IndicadorUnidosis estado={med.formatoUnidosis} />
                         {isMSE(med.cn) && (
                           <span className="shrink-0 whitespace-nowrap rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-semibold text-orange-700">
                             {formatMseLabel(med.tipoMse)}

@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test:cantidades": "node --experimental-strip-types --test scripts/cantidades.test.mjs",
+    "import:unidosis": "node scripts/importar-unidosis.mjs",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "manual:pdf": "node scripts/generar-manual-usuario-pdf.mjs"

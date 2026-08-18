@@ -13,6 +13,7 @@ import {
   upsertStockObjetivo,
 } from '@/lib/catalogo-neon';
 import { isAlmacenArea } from '@/lib/almacen';
+import { setFormatoUnidosis } from '@/lib/unidosis-neon';
 
 export const runtime = 'nodejs';
 
@@ -53,6 +54,18 @@ export async function PATCH(
   const objFields = ['stockMinimo','puntoPedido','stockMaximo'];
   const clearStockObjetivo = body.clearStockObjetivo === true;
   const consumoMedioProvided = 'consumoMedio' in body;
+  const formatoUnidosisProvided = 'formatoUnidosis' in body;
+
+  if (
+    formatoUnidosisProvided &&
+    body.formatoUnidosis !== null &&
+    typeof body.formatoUnidosis !== 'boolean'
+  ) {
+    return NextResponse.json(
+      { error: 'El formato unidosis debe ser sí, no o sin información.' },
+      { status: 400 },
+    );
+  }
 
   for (const f of medFields) if (f in body) medUpdate[f] = body[f];
   for (const f of objFields) if (f in body) objUpdate[f] = body[f];
@@ -108,6 +121,10 @@ export async function PATCH(
           ? Number(raw)
           : null;
     await updateMedicamentoConsumoMedio(cn, consumoMedio);
+  }
+
+  if (formatoUnidosisProvided) {
+    await setFormatoUnidosis(cn, body.formatoUnidosis);
   }
 
   return NextResponse.json({ ok: true });
