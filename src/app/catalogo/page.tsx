@@ -1515,7 +1515,7 @@ export default function CatalogoPage() {
                     <td className="px-3 py-2 text-xs text-slate-500">
                       <div className="mb-1 flex items-center gap-1.5 font-mono">
                         {med.cn}
-                        <IndicadorUnidosis estado={editData.formatoUnidosis} className="h-4 w-4" />
+                        <IndicadorUnidosis estado={editData.formatoUnidosis} className="h-3.5 w-3.5" />
                       </div>
                       <select
                         className="w-full rounded border border-slate-300 bg-white px-1.5 py-1 font-sans text-[10px]"

@@ -5,7 +5,7 @@ type IndicadorUnidosisProps = {
 
 export function IndicadorUnidosis({
   estado,
-  className = 'h-5 w-5',
+  className = 'h-4 w-4',
 }: IndicadorUnidosisProps) {
   if (estado == null) return null;
 
