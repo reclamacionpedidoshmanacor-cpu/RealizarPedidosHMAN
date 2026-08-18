@@ -1459,10 +1459,38 @@ export default function CatalogoPage() {
         </select>
       </div>
 
-      {/* Tabla */}
-      <p className="mb-1.5 text-right text-[11px] text-slate-400">
-        Arrastra el borde de una cabecera para ajustar su ancho · doble clic para restablecerlo.
-      </p>
+      <div className="mb-3 flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-[11px] text-slate-500">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+            Leyenda
+          </span>
+          <span className="hidden h-3 w-px bg-slate-200 sm:inline-block" aria-hidden />
+          <span className="inline-flex items-center gap-3">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="inline-block h-2 w-2 rounded-full bg-green-500" aria-hidden />
+              Principio activo en CIMA
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="inline-block h-2 w-2 rounded-full bg-red-400" aria-hidden />
+              No encontrado en CIMA
+            </span>
+          </span>
+          <span className="hidden h-3 w-px bg-slate-200 sm:inline-block" aria-hidden />
+          <span className="inline-flex items-center gap-3">
+            <span className="inline-flex items-center gap-1.5">
+              <IndicadorUnidosis estado className="h-3.5 w-3.5" />
+              Formato unidosis
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <IndicadorUnidosis estado={false} className="h-3.5 w-3.5" />
+              Requiere reenvasado
+            </span>
+          </span>
+        </div>
+        <p className="text-[11px] text-slate-400">
+          Arrastra el borde de una cabecera para ajustar su ancho · doble clic para restablecerlo.
+        </p>
+      </div>
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-x-auto">
         {loading ? (
           <div className="flex items-center justify-center py-20 text-slate-400 text-sm">Cargando catálogo…</div>
