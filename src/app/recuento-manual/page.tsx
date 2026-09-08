@@ -47,7 +47,10 @@ type ApiResponse = {
   area: AreaId;
   modo?: 'recuento' | 'pedido-almacen';
   pendiente?: RecuentoPendiente;
-  pedidoPendiente?: RecuentoPendiente;
+  pedidoDirectoEnCurso?: {
+    totalPropuestas: number;
+    totalLineas: number;
+  } | null;
   ubicaciones: string[];
   ubicacionSeleccionada: string | null;
   letraSeleccionada?: string | null;
@@ -1078,11 +1081,12 @@ export default function RecuentoManualPage() {
         </div>
 
         {area === 'almacen' ? (
-          data?.pedidoPendiente ? (
+          data?.pedidoDirectoEnCurso ? (
             <div className="rounded-2xl border-2 border-amber-200 bg-amber-50 px-6 py-4">
-              <p className="text-lg font-semibold text-amber-800">📦 Pedido en curso #{data.pedidoPendiente.id}</p>
+              <p className="text-lg font-semibold text-amber-800">📦 Pedido directo en curso</p>
               <p className="text-base text-amber-700">
-                {data.pedidoPendiente.totalLineas} línea(s) · {formatDate(data.pedidoPendiente.fechaRecuento)}
+                {data.pedidoDirectoEnCurso.totalLineas} línea(s) en{' '}
+                {data.pedidoDirectoEnCurso.totalPropuestas} propuesta(s)
               </p>
               <p className="text-sm text-amber-600 mt-1">Revisa en Propuesta para descargar el Excel cuando termines.</p>
             </div>
@@ -1231,9 +1235,9 @@ export default function RecuentoManualPage() {
               {almacenConLetras && letra ? ` · Letra ${letra}` : ''}
             </p>
           </div>
-          {data?.pedidoPendiente && (
+          {data?.pedidoDirectoEnCurso && (
             <span className="rounded-full bg-amber-100 px-3 py-1 text-sm font-semibold text-amber-800">
-              Pedido #{data.pedidoPendiente.id}
+              Pedido directo en curso
             </span>
           )}
         </div>

@@ -25,6 +25,7 @@ import {
   getPedidoAlmacenPendiente,
   getPendienteRecuento,
   incorporarFaltantesRecuento,
+  listBorradoresPropuestaAlmacen,
   recalcularTotalLineasPedidoAlmacen,
   recalcularTotalLineasRecuento,
   upsertLineaRecuento,
@@ -118,6 +119,20 @@ export async function GET(req: NextRequest) {
 
     if (isAlmacenArea(area) && !ubicacionAlmacenUsaRecuentoStock(ubicacionSeleccionada)) {
       const pedidoPendiente = await getPedidoAlmacenPendiente(area);
+      const borradoresPedido = pedidoPendiente
+        ? await listBorradoresPropuestaAlmacen(area, pedidoPendiente.id)
+        : [];
+      const borradoresConLineas = borradoresPedido.filter((borrador) => borrador.totalLineas > 0);
+      const pedidoDirectoEnCurso =
+        borradoresConLineas.length > 0
+          ? {
+              totalPropuestas: borradoresConLineas.length,
+              totalLineas: borradoresConLineas.reduce(
+                (total, borrador) => total + borrador.totalLineas,
+                0
+              ),
+            }
+          : null;
       let cantidadesPedido: Record<string, number> = {};
       if (pedidoPendiente && ubicacionSeleccionada) {
         cantidadesPedido = await getCantidadesPedidoAlmacenParaVista(
@@ -199,7 +214,7 @@ export async function GET(req: NextRequest) {
       const res = NextResponse.json({
         area,
         modo: 'pedido-almacen',
-        pedidoPendiente,
+        pedidoDirectoEnCurso,
         ubicaciones,
         ubicacionSeleccionada,
         letraSeleccionada: usaLetras ? letraParam?.trim().toLocaleUpperCase('es') || null : null,
