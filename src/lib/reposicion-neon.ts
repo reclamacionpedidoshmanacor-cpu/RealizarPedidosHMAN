@@ -259,6 +259,57 @@ export async function finalizarPedido(
   return mapCabecera(rows[0]);
 }
 
+export async function actualizarPedidoFinalizado(
+  id: number,
+  area: string,
+  consultaDestino: string,
+  lineas: Array<{ id: number; cantidadCajas: number }>,
+): Promise<ReposicionCabecera> {
+  const sql = getDb();
+  const ids = [...new Set(lineas.map((linea) => linea.id))];
+  const existentes = await sql`
+    SELECT id
+    FROM pedidos_reposicion_lineas
+    WHERE pedido_id = ${id}
+      AND id IN (
+        SELECT value::int
+        FROM jsonb_array_elements_text(${JSON.stringify(ids)}::jsonb)
+      )
+  `;
+  if (existentes.length !== ids.length) {
+    throw new Error('Una o más líneas no pertenecen al pedido.');
+  }
+
+  for (const linea of lineas) {
+    if (linea.cantidadCajas === 0) {
+      await sql`
+        DELETE FROM pedidos_reposicion_lineas
+        WHERE id = ${linea.id} AND pedido_id = ${id}
+      `;
+    } else {
+      await sql`
+        UPDATE pedidos_reposicion_lineas
+        SET cantidad_cajas = ${linea.cantidadCajas}
+        WHERE id = ${linea.id} AND pedido_id = ${id}
+      `;
+    }
+  }
+
+  const rows = await sql`
+    UPDATE pedidos_reposicion
+    SET consulta_destino = ${consultaDestino},
+        total_lineas = (
+          SELECT COUNT(*) FROM pedidos_reposicion_lineas WHERE pedido_id = ${id}
+        )
+    WHERE id = ${id}
+      AND area = ${area}
+      AND estado = 'finalizado'
+    RETURNING id, area, estado, fecha_creacion, fecha_finalizado, total_lineas, consulta_destino
+  `;
+  if (!rows[0]) throw new Error('Pedido finalizado no encontrado.');
+  return mapCabecera(rows[0]);
+}
+
 export async function eliminarPedidoReposicion(
   id: number,
   area: string,

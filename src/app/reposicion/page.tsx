@@ -71,11 +71,12 @@ const EMPTY_FORM = {
 export default function ReposicionPage() {
   const [area, setArea] = useState('');
   const [tab, setTab] = useState<'pedidos' | 'catalogo'>('pedidos');
-  const [borrador, setBorrador] = useState<Cabecera | null>(null);
   const [historial, setHistorial] = useState<Cabecera[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [detalle, setDetalle] = useState<{ cabecera: Cabecera; lineas: Linea[] } | null>(null);
   const [cantidades, setCantidades] = useState<Record<number, number>>({});
+  const [editandoPedido, setEditandoPedido] = useState(false);
+  const [consultaEdicion, setConsultaEdicion] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
@@ -87,8 +88,6 @@ export default function ReposicionPage() {
   const [filtroTexto, setFiltroTexto] = useState('');
   const [filtroActivo, setFiltroActivo] = useState<'' | 'si' | 'no'>('si');
   const [consultas, setConsultas] = useState<string[]>([]);
-  const [finalizarId, setFinalizarId] = useState<number | null>(null);
-  const [consultaElegida, setConsultaElegida] = useState('');
   const [seleccionEnvio, setSeleccionEnvio] = useState<number[]>([]);
 
   const enabled = area === 'upe' || area === 'oncologia';
@@ -104,7 +103,6 @@ export default function ReposicionPage() {
       const [ped, cat] = await Promise.all([pedRes.json(), catRes.json()]);
       if (!pedRes.ok) throw new Error(ped?.error ?? 'No se pudieron cargar los pedidos.');
       if (!catRes.ok) throw new Error(cat?.error ?? 'No se pudo cargar el catálogo.');
-      setBorrador(ped.borrador ?? null);
       setHistorial(ped.historial ?? []);
       setConsultas(ped.consultas ?? []);
       setItems(cat.items ?? []);
@@ -130,70 +128,45 @@ export default function ReposicionPage() {
     void load();
   }, [load]);
 
-  const openPedido = async (id: number) => {
+  const openPedido = async (id: number, editar = false) => {
     try {
       const res = await fetch(`/api/reposicion/${id}`, { cache: 'no-store' });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo cargar el pedido.');
       setDetalle(payload);
       setCantidades(Object.fromEntries(payload.lineas.map((linea: Linea) => [linea.id, linea.cantidadCajas])));
+      setConsultaEdicion(
+        payload.cabecera.consultaDestino ??
+        (consultas.length === 1 ? consultas[0] : ''),
+      );
+      setEditandoPedido(editar);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Error inesperado');
     }
   };
 
-  const saveDraft = async () => {
-    if (!detalle || detalle.cabecera.estado !== 'borrador') return;
-    const grupos = new Map<string, Array<{ catalogoId: number; cantidadCajas: number }>>();
-    for (const linea of detalle.lineas) {
-      if (!linea.catalogoId) continue;
-      if (!grupos.has(linea.ubicacion)) grupos.set(linea.ubicacion, []);
-      grupos.get(linea.ubicacion)!.push({
-        catalogoId: linea.catalogoId,
-        cantidadCajas: cantidades[linea.id] ?? 0,
-      });
-    }
+  const guardarCorreccion = async () => {
+    if (!detalle || detalle.cabecera.estado !== 'finalizado' || !consultaEdicion) return;
+    if (!confirm('¿Guardar las correcciones? El PDF se regenerará con los nuevos datos.')) return;
     setBusy(true);
     try {
-      for (const [ubicacion, lineas] of grupos) {
-        const res = await fetch('/api/reposicion', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ubicacion, lineas }),
-        });
-        const payload = await res.json();
-        if (!res.ok) throw new Error(payload?.error ?? 'No se pudo guardar el borrador.');
-      }
-      toast.success('Borrador actualizado.');
-      await load();
-      await openPedido(detalle.cabecera.id);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Error inesperado');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const abrirFinalizar = (id: number) => {
-    setFinalizarId(id);
-    setConsultaElegida(consultas.length === 1 ? consultas[0] : '');
-  };
-
-  const finalizar = async () => {
-    if (finalizarId == null || !consultaElegida) return;
-    setBusy(true);
-    try {
-      const res = await fetch(`/api/reposicion/${finalizarId}/finalizar`, {
-        method: 'POST',
+      const res = await fetch(`/api/reposicion/${detalle.cabecera.id}`, {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ consultaDestino: consultaElegida }),
+        body: JSON.stringify({
+          consultaDestino: consultaEdicion,
+          lineas: detalle.lineas.map((linea) => ({
+            id: linea.id,
+            cantidadCajas: cantidades[linea.id] ?? linea.cantidadCajas,
+          })),
+        }),
       });
       const payload = await res.json();
-      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo finalizar.');
-      toast.success(`Pedido validado para la consulta ${consultaElegida}.`);
-      setFinalizarId(null);
-      setDetalle(null);
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo corregir el pedido.');
+      toast.success('Pedido corregido. Si ya se había enviado, vuelve a enviarlo por email.');
+      setEditandoPedido(false);
       await load();
+      await openPedido(detalle.cabecera.id);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Error inesperado');
     } finally {
@@ -426,36 +399,6 @@ export default function ReposicionPage() {
         <p className="text-sm text-slate-500">Cargando…</p>
       ) : tab === 'pedidos' ? (
         <div className="space-y-4">
-          {borrador ? (
-            <section className="rounded-xl border border-teal-200 bg-teal-50/40 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h2 className="font-semibold text-slate-800">Borrador #{borrador.id}</h2>
-                  <p className="text-sm text-slate-500">{borrador.totalLineas} líneas · {formatDate(borrador.fechaCreacion)}</p>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    disabled={deletingId === borrador.id}
-                    onClick={() => eliminarPedido(borrador)}
-                    className="rounded-lg border border-rose-300 bg-white px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50"
-                  >
-                    {deletingId === borrador.id ? 'Eliminando…' : 'Eliminar'}
-                  </button>
-                  <button onClick={() => openPedido(borrador.id)} className="rounded-lg border border-teal-300 bg-white px-3 py-2 text-sm font-semibold text-teal-700">
-                    Revisar
-                  </button>
-                  <button disabled={busy} onClick={() => abrirFinalizar(borrador.id)} className="rounded-lg bg-teal-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">
-                    Validar
-                  </button>
-                </div>
-              </div>
-            </section>
-          ) : (
-            <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
-              No hay borrador. Créalo desde la APP de pedido.
-            </div>
-          )}
-
           <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
               <h2 className="font-semibold text-slate-800">Historial de pedidos</h2>
@@ -523,7 +466,8 @@ export default function ReposicionPage() {
                       </td>
                       <td className="px-4 py-2.5 text-right">
                         <div className="inline-flex items-center gap-2">
-                          <button onClick={() => openPedido(pedido.id)} className="rounded-lg border border-teal-300 px-2.5 py-1 text-xs font-semibold text-teal-700 hover:bg-teal-50">Ver</button>
+                          <button onClick={() => openPedido(pedido.id)} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50">Ver</button>
+                          <button onClick={() => openPedido(pedido.id, true)} className="rounded-lg border border-teal-300 px-2.5 py-1 text-xs font-semibold text-teal-700 hover:bg-teal-50">Editar</button>
                           <a href={`/api/reposicion/${pedido.id}/pdf`} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50">PDF</a>
                           {pedido.estado === 'finalizado' && (
                             <button disabled={busy} onClick={() => enviar(pedido.id)} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">Enviar</button>
@@ -665,49 +609,6 @@ export default function ReposicionPage() {
               </div>
             </section>
           ))}
-        </div>
-      )}
-
-      {finalizarId != null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-          <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-5 shadow-xl">
-            <div>
-              <h2 className="text-lg font-bold text-slate-800">Validar pedido #{finalizarId}</h2>
-              <p className="text-sm text-slate-500">
-                Indica la consulta destino. Aparecerá en el albarán y en el nombre del PDF.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {consultas.map((consulta) => (
-                <button
-                  key={consulta}
-                  onClick={() => setConsultaElegida(consulta)}
-                  className={`rounded-xl border-2 px-5 py-3 text-base font-bold transition-colors ${
-                    consultaElegida === consulta
-                      ? 'border-teal-600 bg-teal-50 text-teal-800'
-                      : 'border-slate-200 bg-white text-slate-600 hover:border-teal-300'
-                  }`}
-                >
-                  {consulta}
-                </button>
-              ))}
-            </div>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setFinalizarId(null)}
-                className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
-              >
-                Cancelar
-              </button>
-              <button
-                disabled={busy || !consultaElegida}
-                onClick={finalizar}
-                className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-40"
-              >
-                {busy ? 'Validando…' : 'Validar y finalizar'}
-              </button>
-            </div>
-          </div>
         </div>
       )}
 
@@ -881,10 +782,44 @@ export default function ReposicionPage() {
                   {formatDate(detalle.cabecera.fechaCreacion)} · {detalle.lineas.length} líneas · {totalDetalle} en total entre cajas y unidades
                 </p>
               </div>
-              <button onClick={() => setDetalle(null)} className="text-sm text-slate-500 hover:text-slate-700">Cerrar</button>
+              <div className="flex items-center gap-2">
+                {!editandoPedido && (
+                  <button
+                    onClick={() => setEditandoPedido(true)}
+                    className="rounded-lg border border-teal-300 px-3 py-1.5 text-sm font-semibold text-teal-700 hover:bg-teal-50"
+                  >
+                    Editar pedido
+                  </button>
+                )}
+                <button onClick={() => setDetalle(null)} className="text-sm text-slate-500 hover:text-slate-700">Cerrar</button>
+              </div>
             </div>
 
             <div className="flex-1 space-y-4 overflow-auto px-5 py-4">
+              {editandoPedido && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+                  <div className="flex flex-wrap items-end gap-4">
+                    <label className="space-y-1">
+                      <span className="block text-xs font-semibold uppercase tracking-wide text-amber-800">
+                        Consulta destino
+                      </span>
+                      <select
+                        value={consultaEdicion}
+                        onChange={(e) => setConsultaEdicion(e.target.value)}
+                        className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                      >
+                        <option value="">Selecciona una consulta</option>
+                        {consultas.map((consulta) => (
+                          <option key={consulta} value={consulta}>{consulta}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <p className="text-xs text-amber-800">
+                      Corrige las cantidades necesarias. Una cantidad 0 eliminará esa línea del pedido.
+                    </p>
+                  </div>
+                </div>
+              )}
               {detalleAgrupado.map(([ubicacionDestino, grupos]) => (
                 <section key={ubicacionDestino} className="overflow-hidden rounded-xl border border-slate-200">
                   <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50 px-4 py-2.5">
@@ -918,7 +853,7 @@ export default function ReposicionPage() {
                                     type="number"
                                     min="0"
                                     step="1"
-                                    disabled={detalle.cabecera.estado !== 'borrador'}
+                                    disabled={!editandoPedido}
                                     value={cantidades[linea.id] ?? linea.cantidadCajas}
                                     onChange={(e) => setCantidades({ ...cantidades, [linea.id]: Math.max(0, Math.trunc(Number(e.target.value) || 0)) })}
                                     className="w-20 rounded-lg border border-slate-200 px-2 py-1.5 text-right text-sm disabled:bg-slate-50 disabled:text-slate-500"
@@ -939,8 +874,30 @@ export default function ReposicionPage() {
 
             <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-4">
               <a href={`/api/reposicion/${detalle.cabecera.id}/pdf`} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">Descargar albarán</a>
-              {detalle.cabecera.estado === 'borrador' && <button disabled={busy} onClick={saveDraft} className="rounded-lg bg-teal-700 px-3 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-50">Guardar cambios</button>}
-              {detalle.cabecera.estado === 'finalizado' && <button disabled={busy} onClick={() => enviar(detalle.cabecera.id)} className="rounded-lg bg-teal-700 px-3 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-50">Enviar email</button>}
+              {editandoPedido ? (
+                <>
+                  <button
+                    disabled={busy}
+                    onClick={() => {
+                      setCantidades(Object.fromEntries(detalle.lineas.map((linea) => [linea.id, linea.cantidadCajas])));
+                      setConsultaEdicion(detalle.cabecera.consultaDestino ?? '');
+                      setEditandoPedido(false);
+                    }}
+                    className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Cancelar edición
+                  </button>
+                  <button
+                    disabled={busy || !consultaEdicion}
+                    onClick={guardarCorreccion}
+                    className="rounded-lg bg-teal-700 px-3 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-50"
+                  >
+                    {busy ? 'Guardando…' : 'Guardar correcciones'}
+                  </button>
+                </>
+              ) : (
+                <button disabled={busy} onClick={() => enviar(detalle.cabecera.id)} className="rounded-lg bg-teal-700 px-3 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-50">Enviar email</button>
+              )}
             </div>
           </div>
         </div>
