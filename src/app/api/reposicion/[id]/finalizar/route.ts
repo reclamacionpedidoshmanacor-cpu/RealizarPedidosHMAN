@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireApiSession } from '@/lib/api-auth';
+import { requireApiSessionOrArea } from '@/lib/api-auth';
 import { finalizarPedido, getPedidoConLineas, ensureTablesReposicion } from '@/lib/reposicion-neon';
 import {
   consultaUnicaDeArea,
@@ -13,7 +13,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = requireApiSession(req);
+    const session = requireApiSessionOrArea(req);
     if (!session.ok) return session.response;
     await ensureTablesReposicion();
 
