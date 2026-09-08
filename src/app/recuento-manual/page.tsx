@@ -949,7 +949,14 @@ export default function RecuentoManualPage() {
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo guardar.');
       await cargarEstadoReposicion();
-      toast.success(`✅ Ubicación "${ubicacion}" añadida al pedido`);
+      const avisos = Array.isArray(payload?.errores) ? (payload.errores as string[]) : [];
+      if (Number(payload?.upserted ?? 0) === 0) {
+        toast.error(avisos[0] ?? `No se añadió ninguna línea de "${ubicacion}".`);
+      } else if (avisos.length > 0) {
+        toast.error(`Ubicación "${ubicacion}" guardada con avisos: ${avisos[0]}`);
+      } else {
+        toast.success(`✅ Ubicación "${ubicacion}" añadida al pedido`);
+      }
       setStep('reposicion-ubicacion');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
@@ -960,6 +967,14 @@ export default function RecuentoManualPage() {
 
   const irAConsultaDestino = () => {
     if (!repoBorrador) return;
+    if (repoBorrador.totalLineas <= 0) {
+      toast.error('El pedido no tiene líneas. Añade cantidades en alguna ubicación antes de finalizarlo.');
+      return;
+    }
+    if (repoConsultas.length === 0) {
+      toast.error('No hay consultas destino configuradas para esta área.');
+      return;
+    }
     setRepoConsultaElegida((prev) =>
       prev || (repoConsultas.length === 1 ? repoConsultas[0] : ''),
     );
@@ -1467,10 +1482,15 @@ export default function RecuentoManualPage() {
                 ))}
               </div>
             )}
-            <button onClick={irAConsultaDestino} disabled={finalizando}
+            <button onClick={irAConsultaDestino} disabled={finalizando || repoBorrador.totalLineas <= 0}
               className="mt-2 w-full rounded-2xl bg-orange-600 px-6 py-4 text-xl font-extrabold text-white hover:bg-orange-700 active:scale-95 disabled:opacity-50">
               ✅ Finalizar pedido de reposición
             </button>
+            {repoBorrador.totalLineas <= 0 && (
+              <p className="text-base font-semibold text-orange-700">
+                Añade cantidades en alguna ubicación para poder finalizarlo.
+              </p>
+            )}
           </div>
         ) : (
           <div className="rounded-2xl border-2 border-amber-200 bg-amber-50 px-6 py-4">

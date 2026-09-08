@@ -87,12 +87,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Falta ubicacion o lineas.' }, { status: 400 });
     }
 
-    // Obtener borrador activo o crear uno nuevo
-    let borrador = await getPedidoBorrador(area);
-    if (!borrador) {
-      borrador = await crearPedidoBorrador(area);
-    }
-
     const catalogo = await listReposicionCatalogo(area);
     const catMap = new Map(catalogo.map((item) => [item.id, item]));
 
@@ -126,6 +120,22 @@ export async function POST(req: NextRequest) {
         unidadPedido: item.unidadPedido,
         catalogoId: item.id,
       });
+    }
+
+    // Solo se abre un pedido nuevo si hay algo que añadir: evita borradores vacíos
+    // que después bloquean la finalización.
+    let borrador = await getPedidoBorrador(area);
+    if (!borrador) {
+      if (lineasInput.length === 0) {
+        return NextResponse.json(
+          {
+            error: errores[0] ?? 'No hay cantidades válidas que añadir al pedido.',
+            errores,
+          },
+          { status: 400 },
+        );
+      }
+      borrador = await crearPedidoBorrador(area);
     }
 
     const { upserted } = await reemplazarLineasReposicionUbicacion(

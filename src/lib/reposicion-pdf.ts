@@ -70,6 +70,25 @@ function wrapText(
   return lines.length > 0 ? lines : [''];
 }
 
+/** Clave de comparación laxa: ignora mayúsculas y espacios sobrantes. */
+function claveTexto(text: string | null | undefined): string {
+  return (text ?? '').trim().replace(/\s+/g, ' ').toLocaleUpperCase('es');
+}
+
+/**
+ * Algunos registros del catálogo guardan el nombre escrito dos veces seguidas
+ * («DEXAMETASONA 20 MG CAPS DEXAMETASONA 20 MG CAPS»). En el albarán se muestra
+ * una sola vez.
+ */
+function sinRepeticion(text: string): string {
+  const palabras = text.trim().replace(/\s+/g, ' ').split(' ');
+  if (palabras.length < 2 || palabras.length % 2 !== 0) return text.trim();
+  const mitad = palabras.length / 2;
+  const primera = palabras.slice(0, mitad).join(' ');
+  const segunda = palabras.slice(mitad).join(' ');
+  return claveTexto(primera) === claveTexto(segunda) ? primera : text.trim();
+}
+
 function safe(text: string): string {
   return text.replace(/[^\x00-\xFF]/g, '');
 }
@@ -325,11 +344,15 @@ export async function buildReposicionPdf(
       );
 
       for (const l of ordenadas) {
+        const ppio = sinRepeticion(l.principioActivo ?? '');
+        const marcaLimpia = sinRepeticion(l.nombre ?? '');
+        // Si la marca no aporta nada frente al principio activo, no se repite.
+        const marca = claveTexto(marcaLimpia) === claveTexto(ppio) ? '' : marcaLimpia;
         w.textRow(
           [
             { text: safe(l.tipo === 'formula' ? l.codigo : l.cn), x: COL.cn, maxWidth: COL_W.cn, size: ROW_SIZE },
-            { text: safe(l.principioActivo ?? '-'), x: COL.ppio, maxWidth: COL_W.ppio, size: ROW_SIZE, maxLines: 2 },
-            { text: safe(l.nombre), x: COL.med, maxWidth: COL_W.med, size: ROW_SIZE, color: rgb(0.3, 0.3, 0.3), maxLines: 2 },
+            { text: safe(ppio || l.nombre || '-'), x: COL.ppio, maxWidth: COL_W.ppio, size: ROW_SIZE, maxLines: 2 },
+            { text: safe(marca), x: COL.med, maxWidth: COL_W.med, size: ROW_SIZE, color: rgb(0.3, 0.3, 0.3), maxLines: 2 },
             { text: `${l.cantidadCajas} ${l.unidadPedido === 'unidades' ? 'ud.' : 'caj.'}`, x: COL.qty, maxWidth: COL_W.qty, size: ROW_SIZE, font: bold, align: 'right' },
           ],
           17
