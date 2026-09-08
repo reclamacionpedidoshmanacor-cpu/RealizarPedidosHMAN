@@ -388,9 +388,21 @@ export default function RecuentoManualPage() {
       });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo cambiar el área.');
-      const res2 = await fetch('/api/recuento-manual', { cache: 'no-store' });
+      // Se envía el área explícitamente: al entrar mediante el enlace directo,
+      // una petición inmediata puede conservar todavía la cookie del área anterior.
+      const res2 = await fetch(`/api/recuento-manual?area=${encodeURIComponent(id)}`, {
+        cache: 'no-store',
+      });
       const data2 = (await res2.json()) as ApiResponse;
-      setArea(id);
+      if (!res2.ok) {
+        throw new Error(
+          (data2 as ApiResponse & { error?: string }).error ?? 'No se pudo cargar el área.',
+        );
+      }
+      if (data2.area !== id) {
+        throw new Error('El área cargada no coincide con el área seleccionada.');
+      }
+      setArea(data2.area);
       setData(data2);
       setUbicacion(null);
       setLetra(null);
