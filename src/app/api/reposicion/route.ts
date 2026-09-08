@@ -5,6 +5,8 @@ import {
   ensureTablesReposicion,
   getHistorialReposicion,
   getPedidoBorrador,
+  getPedidosBorrador,
+  getPedidoConLineas,
   crearPedidoBorrador,
   reemplazarLineasReposicionUbicacion,
   type LineaInput,
@@ -14,7 +16,11 @@ import {
   listReposicionCatalogo,
   type ReposicionArea,
 } from '@/lib/reposicion-catalogo-neon';
-import { consultasDeArea } from '@/lib/reposicion-consultas';
+import {
+  consultasDeArea,
+  esConsultaValida,
+  normalizarConsulta,
+} from '@/lib/reposicion-consultas';
 
 async function getAreaFromCookie(): Promise<AreaId | null> {
   const jar = await cookies();
@@ -53,13 +59,15 @@ export async function GET() {
     if (!access.ok) return access.response;
 
     const area = access.area;
-    const [historial, borrador] = await Promise.all([
+    const [historial, borradores] = await Promise.all([
       getHistorialReposicion(area),
-      getPedidoBorrador(area),
+      getPedidosBorrador(area),
     ]);
     return NextResponse.json({
       area,
-      borrador,
+      // Se conserva por compatibilidad con las pantallas que aún resumen uno solo.
+      borrador: borradores[0] ?? null,
+      borradores,
       historial,
       consultas: consultasDeArea(area),
     });
@@ -81,10 +89,20 @@ export async function POST(req: NextRequest) {
     const body = await req.json() as {
       ubicacion: string;
       lineas: { catalogoId: number; cantidadCajas: number }[];
+      consultaDestino?: unknown;
+      pedidoId?: unknown;
+      crearNuevo?: boolean;
     };
 
     if (!body.ubicacion || !Array.isArray(body.lineas)) {
       return NextResponse.json({ error: 'Falta ubicacion o lineas.' }, { status: 400 });
+    }
+    const consultaDestino = normalizarConsulta(body.consultaDestino);
+    if (!esConsultaValida(area, consultaDestino)) {
+      return NextResponse.json(
+        { error: `Selecciona una consulta válida (${consultasDeArea(area).join(', ')}).` },
+        { status: 400 },
+      );
     }
 
     const catalogo = await listReposicionCatalogo(area);
@@ -124,7 +142,34 @@ export async function POST(req: NextRequest) {
 
     // Solo se abre un pedido nuevo si hay algo que añadir: evita borradores vacíos
     // que después bloquean la finalización.
-    let borrador = await getPedidoBorrador(area);
+    const pedidoIdSolicitado =
+      body.pedidoId == null ? null : Number(body.pedidoId);
+    if (
+      pedidoIdSolicitado != null &&
+      (!Number.isInteger(pedidoIdSolicitado) || pedidoIdSolicitado <= 0)
+    ) {
+      return NextResponse.json({ error: 'Pedido no válido.' }, { status: 400 });
+    }
+
+    let borrador = null;
+    if (pedidoIdSolicitado != null) {
+      const pedido = await getPedidoConLineas(pedidoIdSolicitado);
+      if (
+        !pedido ||
+        pedido.cabecera.area !== area ||
+        pedido.cabecera.estado !== 'borrador' ||
+        pedido.cabecera.consultaDestino !== consultaDestino
+      ) {
+        return NextResponse.json(
+          { error: 'El pedido ya no está disponible para esta consulta.' },
+          { status: 409 },
+        );
+      }
+      borrador = pedido.cabecera;
+    } else if (!body.crearNuevo) {
+      borrador = await getPedidoBorrador(area, consultaDestino);
+    }
+
     if (!borrador) {
       if (lineasInput.length === 0) {
         return NextResponse.json(
@@ -135,7 +180,7 @@ export async function POST(req: NextRequest) {
           { status: 400 },
         );
       }
-      borrador = await crearPedidoBorrador(area);
+      borrador = await crearPedidoBorrador(area, consultaDestino);
     }
 
     const { upserted } = await reemplazarLineasReposicionUbicacion(
@@ -144,7 +189,12 @@ export async function POST(req: NextRequest) {
       lineasInput,
     );
 
-    return NextResponse.json({ pedidoId: borrador.id, upserted, errores });
+    return NextResponse.json({
+      pedidoId: borrador.id,
+      consultaDestino,
+      upserted,
+      errores,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Error inesperado';
     return NextResponse.json({ error: message }, { status: 500 });

@@ -38,8 +38,12 @@ export async function POST(
     }
 
     const body = await req.json().catch(() => ({}));
+    const consultaSolicitada = normalizarConsulta(
+      (body as { consultaDestino?: unknown }).consultaDestino,
+    );
     const consultaDestino =
-      normalizarConsulta((body as { consultaDestino?: unknown }).consultaDestino) ||
+      result.cabecera.consultaDestino ||
+      consultaSolicitada ||
       consultaUnicaDeArea(result.cabecera.area) ||
       '';
 
@@ -50,6 +54,12 @@ export async function POST(
           consultasDisponibles: consultasDeArea(result.cabecera.area),
         },
         { status: 400 },
+      );
+    }
+    if (consultaSolicitada && consultaSolicitada !== consultaDestino) {
+      return NextResponse.json(
+        { error: `Este pedido pertenece a la consulta ${consultaDestino}.` },
+        { status: 409 },
       );
     }
 

@@ -118,15 +118,39 @@ export type ReposicionLinea = {
 
 /* ─── CONSULTAS ─── */
 
-export async function getPedidoBorrador(area: string): Promise<ReposicionCabecera | null> {
+export async function getPedidosBorrador(area: string): Promise<ReposicionCabecera[]> {
   const sql = getDb();
   const rows = await sql`
     SELECT id, area, estado, fecha_creacion, fecha_finalizado, total_lineas, consulta_destino
     FROM pedidos_reposicion
     WHERE area = ${area} AND estado = 'borrador'
     ORDER BY fecha_creacion DESC
-    LIMIT 1
   `;
+  return rows.map(mapCabecera);
+}
+
+export async function getPedidoBorrador(
+  area: string,
+  consultaDestino?: string,
+): Promise<ReposicionCabecera | null> {
+  const sql = getDb();
+  const rows = consultaDestino
+    ? await sql`
+        SELECT id, area, estado, fecha_creacion, fecha_finalizado, total_lineas, consulta_destino
+        FROM pedidos_reposicion
+        WHERE area = ${area}
+          AND estado = 'borrador'
+          AND consulta_destino = ${consultaDestino}
+        ORDER BY fecha_creacion DESC
+        LIMIT 1
+      `
+    : await sql`
+        SELECT id, area, estado, fecha_creacion, fecha_finalizado, total_lineas, consulta_destino
+        FROM pedidos_reposicion
+        WHERE area = ${area} AND estado = 'borrador'
+        ORDER BY fecha_creacion DESC
+        LIMIT 1
+      `;
   if (!rows[0]) return null;
   return mapCabecera(rows[0]);
 }
@@ -163,11 +187,14 @@ export async function getPedidoConLineas(
   return { cabecera: mapCabecera(cab[0]), lineas: lin.map(mapLinea) };
 }
 
-export async function crearPedidoBorrador(area: string): Promise<ReposicionCabecera> {
+export async function crearPedidoBorrador(
+  area: string,
+  consultaDestino: string,
+): Promise<ReposicionCabecera> {
   const sql = getDb();
   const rows = await sql`
-    INSERT INTO pedidos_reposicion (area, estado, total_lineas)
-    VALUES (${area}, 'borrador', 0)
+    INSERT INTO pedidos_reposicion (area, estado, total_lineas, consulta_destino)
+    VALUES (${area}, 'borrador', 0, ${consultaDestino})
     RETURNING id, area, estado, fecha_creacion, fecha_finalizado, total_lineas, consulta_destino
   `;
   return mapCabecera(rows[0]);

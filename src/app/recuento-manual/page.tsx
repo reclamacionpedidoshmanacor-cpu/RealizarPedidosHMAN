@@ -64,7 +64,13 @@ type ApiResponse = {
 };
 
 /* ─── tipos reposición (UPE y Oncología) ─── */
-type ReposicionBorrador = { id: number; totalLineas: number; fechaCreacion: string } | null;
+type ReposicionBorradorInfo = {
+  id: number;
+  totalLineas: number;
+  fechaCreacion: string;
+  consultaDestino: string | null;
+};
+type ReposicionBorrador = ReposicionBorradorInfo | null;
 type ReposicionDraftLinea = { cantidadCajas: number };
 type ReposicionCatalogoItem = {
   id: number;
@@ -285,7 +291,9 @@ export default function RecuentoManualPage() {
   const [repoBaselineDraft, setRepoBaselineDraft] = useState<Record<string, ReposicionDraftLinea>>({});
   const [repoLineasByUbicacion, setRepoLineasByUbicacion] = useState<Record<string, Record<string, number>>>({});
   const [repoConsultas, setRepoConsultas] = useState<string[]>([]);
+  const [repoBorradores, setRepoBorradores] = useState<ReposicionBorradorInfo[]>([]);
   const [repoConsultaElegida, setRepoConsultaElegida] = useState('');
+  const [repoCrearNuevo, setRepoCrearNuevo] = useState(false);
   const [repoBusqueda, setRepoBusqueda] = useState('');
   const [finalizando, setFinalizando] = useState(false);
   const deepLinkHandledRef = useRef(false);
@@ -414,10 +422,13 @@ export default function RecuentoManualPage() {
       setExtrasAlmacen([]);
       setSustitucionCnViejo(null);
       setRepoBorrador(null);
+      setRepoBorradores([]);
       setRepoUbicacionesUsadas([]);
       setRepoDraft({});
       setRepoBaselineDraft({});
       setRepoLineasByUbicacion({});
+      setRepoConsultaElegida('');
+      setRepoCrearNuevo(false);
       setStep('ubicacion');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
@@ -833,30 +844,46 @@ export default function RecuentoManualPage() {
 
   /* ════════ REPOSICIÓN (UPE y Oncología) ════════ */
 
-  const cargarEstadoReposicion = async () => {
+  const cargarEstadoReposicion = async (
+    consultaDestino?: string,
+    pedidoId?: number,
+  ) => {
     const resRepo = await fetch('/api/reposicion', { cache: 'no-store' });
     const payloadRepo = await resRepo.json();
     if (!resRepo.ok) throw new Error(payloadRepo?.error ?? 'No se pudo cargar reposición.');
 
     const consultas = (payloadRepo.consultas ?? []) as string[];
+    const borradores = ((payloadRepo.borradores ?? []) as ReposicionBorradorInfo[])
+      .map((borrador) => ({
+        id: Number(borrador.id),
+        totalLineas: Number(borrador.totalLineas ?? 0),
+        fechaCreacion: String(borrador.fechaCreacion ?? new Date().toISOString()),
+        consultaDestino: borrador.consultaDestino ? String(borrador.consultaDestino) : null,
+      }));
     setRepoConsultas(consultas);
-    setRepoConsultaElegida((prev) => (prev && consultas.includes(prev) ? prev : consultas.length === 1 ? consultas[0] : ''));
+    setRepoBorradores(borradores);
 
-    if (!payloadRepo.borrador) {
+    if (!consultaDestino) {
       setRepoBorrador(null);
       setRepoUbicacionesUsadas([]);
       setRepoLineasByUbicacion({});
       return;
     }
 
-    const borradorId = Number(payloadRepo.borrador.id);
-    setRepoBorrador({
-      id: borradorId,
-      totalLineas: Number(payloadRepo.borrador.totalLineas ?? 0),
-      fechaCreacion: String(payloadRepo.borrador.fechaCreacion ?? new Date().toISOString()),
-    });
+    const borrador =
+      (pedidoId ? borradores.find((item) => item.id === pedidoId) : null) ??
+      borradores.find((item) => item.consultaDestino === consultaDestino) ??
+      null;
+    if (!borrador) {
+      setRepoBorrador(null);
+      setRepoUbicacionesUsadas([]);
+      setRepoLineasByUbicacion({});
+      return;
+    }
 
-    const resDetalle = await fetch(`/api/reposicion/${borradorId}`, { cache: 'no-store' });
+    setRepoBorrador(borrador);
+
+    const resDetalle = await fetch(`/api/reposicion/${borrador.id}`, { cache: 'no-store' });
     const detalle = (await resDetalle.json()) as ReposicionDetalleResponse & { error?: string };
     if (!resDetalle.ok) throw new Error(detalle?.error ?? 'No se pudo cargar detalle del borrador.');
 
@@ -882,8 +909,34 @@ export default function RecuentoManualPage() {
       const catalogo = (payload.items ?? []) as ReposicionCatalogoItem[];
       setRepoCatalogo(catalogo.filter((item) => item.activo));
 
-      /* Comprobamos si hay borrador activo y cargamos sus líneas */
+      /* Primero se elige la consulta; cada una tendrá sus propios borradores. */
       await cargarEstadoReposicion();
+      setRepoConsultaElegida('');
+      setRepoCrearNuevo(false);
+      setStep('reposicion-consulta');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const seleccionarConsultaReposicion = async (
+    consulta: string,
+    pedidoId?: number,
+    crearNuevo = false,
+  ) => {
+    setLoading(true);
+    try {
+      setRepoConsultaElegida(consulta);
+      setRepoCrearNuevo(crearNuevo);
+      if (crearNuevo) {
+        setRepoBorrador(null);
+        setRepoUbicacionesUsadas([]);
+        setRepoLineasByUbicacion({});
+      } else {
+        await cargarEstadoReposicion(consulta, pedidoId);
+      }
       setStep('reposicion-ubicacion');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
@@ -956,11 +1009,18 @@ export default function RecuentoManualPage() {
       const res = await fetch('/api/reposicion', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ubicacion, lineas }),
+        body: JSON.stringify({
+          ubicacion,
+          lineas,
+          consultaDestino: repoConsultaElegida,
+          pedidoId: repoBorrador?.id,
+          crearNuevo: repoCrearNuevo,
+        }),
       });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo guardar.');
-      await cargarEstadoReposicion();
+      await cargarEstadoReposicion(repoConsultaElegida, Number(payload.pedidoId));
+      setRepoCrearNuevo(false);
       const avisos = Array.isArray(payload?.errores) ? (payload.errores as string[]) : [];
       if (Number(payload?.upserted ?? 0) === 0) {
         toast.error(avisos[0] ?? `No se añadió ninguna línea de "${ubicacion}".`);
@@ -975,22 +1035,6 @@ export default function RecuentoManualPage() {
     } finally {
       setSaving(false);
     }
-  };
-
-  const irAConsultaDestino = () => {
-    if (!repoBorrador) return;
-    if (repoBorrador.totalLineas <= 0) {
-      toast.error('El pedido no tiene líneas. Añade cantidades en alguna ubicación antes de finalizarlo.');
-      return;
-    }
-    if (repoConsultas.length === 0) {
-      toast.error('No hay consultas destino configuradas para esta área.');
-      return;
-    }
-    setRepoConsultaElegida((prev) =>
-      prev || (repoConsultas.length === 1 ? repoConsultas[0] : ''),
-    );
-    setStep('reposicion-consulta');
   };
 
   const handleFinalizarPedido = async () => {
@@ -1008,8 +1052,10 @@ export default function RecuentoManualPage() {
       setRepoBorrador(null);
       setRepoUbicacionesUsadas([]);
       setRepoLineasByUbicacion({});
-      setRepoConsultaElegida(repoConsultas.length === 1 ? repoConsultas[0] : '');
-      setStep('ubicacion');
+      setRepoCrearNuevo(false);
+      await cargarEstadoReposicion();
+      setRepoConsultaElegida('');
+      setStep('reposicion-consulta');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
@@ -1473,13 +1519,20 @@ export default function RecuentoManualPage() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 flex flex-col p-6 gap-6">
         <div className="flex items-center gap-4">
-          <button onClick={() => setStep('ubicacion')}
+          <button onClick={() => {
+            setRepoBorrador(null);
+            setRepoConsultaElegida('');
+            setRepoCrearNuevo(false);
+            setStep('reposicion-consulta');
+          }}
             className="rounded-xl border-2 border-slate-300 bg-white px-5 py-3 text-xl font-bold text-slate-600 shadow-sm hover:bg-slate-50 active:scale-95">
             ← Volver
           </button>
           <div>
             <p className="text-base text-orange-500 font-semibold">Pedido a Farmacia — {areaConfig.label}</p>
-            <h2 className="text-3xl font-extrabold text-orange-700">🛒 Solicitar Reposición</h2>
+            <h2 className="text-3xl font-extrabold text-orange-700">
+              🛒 Reposición · {repoConsultaElegida}
+            </h2>
           </div>
         </div>
 
@@ -1494,9 +1547,11 @@ export default function RecuentoManualPage() {
                 ))}
               </div>
             )}
-            <button onClick={irAConsultaDestino} disabled={finalizando || repoBorrador.totalLineas <= 0}
+            <button onClick={() => void handleFinalizarPedido()} disabled={finalizando || repoBorrador.totalLineas <= 0}
               className="mt-2 w-full rounded-2xl bg-orange-600 px-6 py-4 text-xl font-extrabold text-white hover:bg-orange-700 active:scale-95 disabled:opacity-50">
-              ✅ Finalizar pedido de reposición
+              {finalizando
+                ? 'Finalizando…'
+                : `✅ Finalizar pedido para ${repoConsultaElegida}`}
             </button>
             {repoBorrador.totalLineas <= 0 && (
               <p className="text-base font-semibold text-orange-700">
@@ -1506,7 +1561,9 @@ export default function RecuentoManualPage() {
           </div>
         ) : (
           <div className="rounded-2xl border-2 border-amber-200 bg-amber-50 px-6 py-4">
-            <p className="text-lg font-semibold text-amber-700">ℹ️ Nuevo pedido — selecciona la primera ubicación</p>
+            <p className="text-lg font-semibold text-amber-700">
+              ℹ️ Nuevo pedido para {repoConsultaElegida} — selecciona la primera ubicación
+            </p>
           </div>
         )}
 
@@ -1536,55 +1593,72 @@ export default function RecuentoManualPage() {
     );
   }
 
-  /* ── REPOSICIÓN: Consulta destino antes de finalizar ── */
+  /* ── REPOSICIÓN: La consulta se elige antes de crear o continuar un pedido ── */
   if (step === 'reposicion-consulta') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 flex flex-col p-6 gap-6">
         <div className="flex items-center gap-4">
-          <button onClick={() => setStep('reposicion-ubicacion')}
+          <button onClick={() => setStep('ubicacion')}
             className="rounded-xl border-2 border-slate-300 bg-white px-5 py-3 text-xl font-bold text-slate-600 shadow-sm hover:bg-slate-50 active:scale-95">
             ← Volver
           </button>
           <div>
-            <p className="text-base text-orange-500 font-semibold">Último paso — {areaConfig.label}</p>
+            <p className="text-base text-orange-500 font-semibold">Primer paso — {areaConfig.label}</p>
             <h2 className="text-3xl font-extrabold text-orange-700">🏥 Consulta destino</h2>
           </div>
         </div>
 
-        {repoBorrador && (
-          <div className="rounded-2xl border-2 border-orange-200 bg-white px-6 py-4">
-            <p className="text-lg font-bold text-slate-700">Pedido #{repoBorrador.id}</p>
-            <p className="text-base text-slate-500">
-              {repoBorrador.totalLineas} líneas · {repoUbicacionesUsadas.length} ubicación
-              {repoUbicacionesUsadas.length === 1 ? '' : 'es'}
-            </p>
-          </div>
-        )}
-
         <div className="space-y-3">
-          <h3 className="text-2xl font-bold text-slate-700">¿A qué consulta se entrega?</h3>
-          <p className="text-base text-slate-500">Aparecerá en el albarán y en el nombre del PDF.</p>
+          <h3 className="text-2xl font-bold text-slate-700">¿Para qué consulta vas a preparar el pedido?</h3>
+          <p className="text-base text-slate-500">
+            Cada consulta mantiene un pedido independiente. Puedes continuar uno existente o iniciar otro.
+          </p>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            {repoConsultas.map((consulta) => (
-              <button key={consulta} onClick={() => setRepoConsultaElegida(consulta)}
-                className={`rounded-2xl border-2 px-6 py-8 text-center text-3xl font-extrabold shadow-sm active:scale-95 transition-all
-                  ${repoConsultaElegida === consulta
-                    ? 'border-orange-500 bg-orange-100 text-orange-800'
-                    : 'border-slate-300 bg-white text-slate-700 hover:border-orange-400 hover:bg-orange-50'}`}>
-                {consulta}
-              </button>
-            ))}
+            {repoConsultas.map((consulta) => {
+              const pedidosConsulta = repoBorradores.filter(
+                (borrador) => borrador.consultaDestino === consulta,
+              );
+              return (
+                <div key={consulta}
+                  className="rounded-2xl border-2 border-orange-200 bg-white p-5 shadow-sm space-y-4">
+                  <p className="text-center text-3xl font-extrabold text-orange-800">{consulta}</p>
+
+                  {pedidosConsulta.map((borrador) => (
+                    <button
+                      key={borrador.id}
+                      onClick={() => void seleccionarConsultaReposicion(consulta, borrador.id)}
+                      disabled={loading}
+                      className="w-full rounded-xl border-2 border-orange-300 bg-orange-50 px-4 py-3 text-left text-orange-800 hover:bg-orange-100 active:scale-95 disabled:opacity-50"
+                    >
+                      <span className="block text-lg font-extrabold">
+                        Continuar pedido #{borrador.id}
+                      </span>
+                      <span className="block text-sm font-semibold">
+                        {borrador.totalLineas} línea{borrador.totalLineas === 1 ? '' : 's'}
+                      </span>
+                    </button>
+                  ))}
+
+                  <button
+                    onClick={() => void seleccionarConsultaReposicion(
+                      consulta,
+                      undefined,
+                      pedidosConsulta.length > 0,
+                    )}
+                    disabled={loading}
+                    className={`w-full rounded-xl px-4 py-3 text-lg font-extrabold active:scale-95 disabled:opacity-50 ${
+                      pedidosConsulta.length > 0
+                        ? 'border-2 border-slate-300 bg-white text-slate-700 hover:border-orange-400 hover:bg-orange-50'
+                        : 'bg-orange-600 text-white hover:bg-orange-700'
+                    }`}
+                  >
+                    {pedidosConsulta.length > 0 ? '＋ Crear otro pedido' : '＋ Iniciar pedido'}
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
-
-        <button onClick={() => void handleFinalizarPedido()} disabled={finalizando || !repoConsultaElegida}
-          className="w-full rounded-2xl bg-orange-600 px-6 py-5 text-xl font-extrabold text-white hover:bg-orange-700 active:scale-95 disabled:opacity-40">
-          {finalizando
-            ? 'Finalizando…'
-            : repoConsultaElegida
-              ? `✅ Finalizar pedido para ${repoConsultaElegida}`
-              : 'Selecciona una consulta para continuar'}
-        </button>
       </div>
     );
   }
