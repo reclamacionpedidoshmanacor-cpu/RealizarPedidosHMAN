@@ -14,6 +14,7 @@ import {
   listReposicionCatalogo,
   type ReposicionArea,
 } from '@/lib/reposicion-catalogo-neon';
+import { consultasDeArea } from '@/lib/reposicion-consultas';
 
 async function getAreaFromCookie(): Promise<AreaId | null> {
   const jar = await cookies();
@@ -56,7 +57,12 @@ export async function GET() {
       getHistorialReposicion(area),
       getPedidoBorrador(area),
     ]);
-    return NextResponse.json({ area, borrador, historial });
+    return NextResponse.json({
+      area,
+      borrador,
+      historial,
+      consultas: consultasDeArea(area),
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Error inesperado';
     return NextResponse.json({ error: message }, { status: 500 });

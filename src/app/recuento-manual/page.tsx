@@ -87,7 +87,7 @@ type ReposicionDetalleResponse = {
   lineas: ReposicionDetalleLinea[];
 };
 
-type Step = 'area' | 'ubicacion' | 'letra-almacen' | 'recuento' | 'pedido-almacen' | 'reposicion-ubicacion' | 'reposicion-recuento';
+type Step = 'area' | 'ubicacion' | 'letra-almacen' | 'recuento' | 'pedido-almacen' | 'reposicion-ubicacion' | 'reposicion-recuento' | 'reposicion-consulta';
 
 type DraftLinea = { cajas: number; unidadesSueltas: number };
 type AlmacenDraftLinea = { cajasPedidas: number };
@@ -281,6 +281,9 @@ export default function RecuentoManualPage() {
   const [repoDraft, setRepoDraft] = useState<Record<string, ReposicionDraftLinea>>({});
   const [repoBaselineDraft, setRepoBaselineDraft] = useState<Record<string, ReposicionDraftLinea>>({});
   const [repoLineasByUbicacion, setRepoLineasByUbicacion] = useState<Record<string, Record<string, number>>>({});
+  const [repoConsultas, setRepoConsultas] = useState<string[]>([]);
+  const [repoConsultaElegida, setRepoConsultaElegida] = useState('');
+  const [repoBusqueda, setRepoBusqueda] = useState('');
   const [finalizando, setFinalizando] = useState(false);
   const deepLinkHandledRef = useRef(false);
 
@@ -820,6 +823,10 @@ export default function RecuentoManualPage() {
     const payloadRepo = await resRepo.json();
     if (!resRepo.ok) throw new Error(payloadRepo?.error ?? 'No se pudo cargar reposición.');
 
+    const consultas = (payloadRepo.consultas ?? []) as string[];
+    setRepoConsultas(consultas);
+    setRepoConsultaElegida((prev) => (prev && consultas.includes(prev) ? prev : consultas.length === 1 ? consultas[0] : ''));
+
     if (!payloadRepo.borrador) {
       setRepoBorrador(null);
       setRepoUbicacionesUsadas([]);
@@ -883,6 +890,7 @@ export default function RecuentoManualPage() {
       }
       setRepoDraft(nextDraft);
       setRepoBaselineDraft({ ...nextDraft });
+      setRepoBusqueda('');
       setStep('reposicion-recuento');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
@@ -947,19 +955,30 @@ export default function RecuentoManualPage() {
     }
   };
 
-  const handleFinalizarPedido = async () => {
+  const irAConsultaDestino = () => {
     if (!repoBorrador) return;
-    const ok = confirm('¿Finalizar el pedido de reposición? Ya no se podrán añadir más líneas.');
-    if (!ok) return;
+    setRepoConsultaElegida((prev) =>
+      prev || (repoConsultas.length === 1 ? repoConsultas[0] : ''),
+    );
+    setStep('reposicion-consulta');
+  };
+
+  const handleFinalizarPedido = async () => {
+    if (!repoBorrador || !repoConsultaElegida) return;
     setFinalizando(true);
     try {
-      const res = await fetch(`/api/reposicion/${repoBorrador.id}/finalizar`, { method: 'POST' });
+      const res = await fetch(`/api/reposicion/${repoBorrador.id}/finalizar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ consultaDestino: repoConsultaElegida }),
+      });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo finalizar el pedido.');
-      toast.success('✅ Pedido de reposición finalizado. Puedes gestionarlo en la pestaña Reposición.');
+      toast.success(`✅ Pedido finalizado para la consulta ${repoConsultaElegida}.`);
       setRepoBorrador(null);
       setRepoUbicacionesUsadas([]);
       setRepoLineasByUbicacion({});
+      setRepoConsultaElegida(repoConsultas.length === 1 ? repoConsultas[0] : '');
       setStep('ubicacion');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
@@ -1444,9 +1463,9 @@ export default function RecuentoManualPage() {
                 ))}
               </div>
             )}
-            <button onClick={() => void handleFinalizarPedido()} disabled={finalizando}
+            <button onClick={irAConsultaDestino} disabled={finalizando}
               className="mt-2 w-full rounded-2xl bg-orange-600 px-6 py-4 text-xl font-extrabold text-white hover:bg-orange-700 active:scale-95 disabled:opacity-50">
-              {finalizando ? 'Finalizando…' : '✅ Finalizar pedido de reposición'}
+              ✅ Finalizar pedido de reposición
             </button>
           </div>
         ) : (
@@ -1481,15 +1500,75 @@ export default function RecuentoManualPage() {
     );
   }
 
+  /* ── REPOSICIÓN: Consulta destino antes de finalizar ── */
+  if (step === 'reposicion-consulta') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 flex flex-col p-6 gap-6">
+        <div className="flex items-center gap-4">
+          <button onClick={() => setStep('reposicion-ubicacion')}
+            className="rounded-xl border-2 border-slate-300 bg-white px-5 py-3 text-xl font-bold text-slate-600 shadow-sm hover:bg-slate-50 active:scale-95">
+            ← Volver
+          </button>
+          <div>
+            <p className="text-base text-orange-500 font-semibold">Último paso — {areaConfig.label}</p>
+            <h2 className="text-3xl font-extrabold text-orange-700">🏥 Consulta destino</h2>
+          </div>
+        </div>
+
+        {repoBorrador && (
+          <div className="rounded-2xl border-2 border-orange-200 bg-white px-6 py-4">
+            <p className="text-lg font-bold text-slate-700">Pedido #{repoBorrador.id}</p>
+            <p className="text-base text-slate-500">
+              {repoBorrador.totalLineas} líneas · {repoUbicacionesUsadas.length} ubicación
+              {repoUbicacionesUsadas.length === 1 ? '' : 'es'}
+            </p>
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <h3 className="text-2xl font-bold text-slate-700">¿A qué consulta se entrega?</h3>
+          <p className="text-base text-slate-500">Aparecerá en el albarán y en el nombre del PDF.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {repoConsultas.map((consulta) => (
+              <button key={consulta} onClick={() => setRepoConsultaElegida(consulta)}
+                className={`rounded-2xl border-2 px-6 py-8 text-center text-3xl font-extrabold shadow-sm active:scale-95 transition-all
+                  ${repoConsultaElegida === consulta
+                    ? 'border-orange-500 bg-orange-100 text-orange-800'
+                    : 'border-slate-300 bg-white text-slate-700 hover:border-orange-400 hover:bg-orange-50'}`}>
+                {consulta}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <button onClick={() => void handleFinalizarPedido()} disabled={finalizando || !repoConsultaElegida}
+          className="w-full rounded-2xl bg-orange-600 px-6 py-5 text-xl font-extrabold text-white hover:bg-orange-700 active:scale-95 disabled:opacity-40">
+          {finalizando
+            ? 'Finalizando…'
+            : repoConsultaElegida
+              ? `✅ Finalizar pedido para ${repoConsultaElegida}`
+              : 'Selecciona una consulta para continuar'}
+        </button>
+      </div>
+    );
+  }
+
   /* ── REPOSICIÓN: Introducir cantidades ── */
   if (step === 'reposicion-recuento') {
-    const medicamentos = repoCatalogo.filter(
+    const medicamentosUbicacion = repoCatalogo.filter(
       (item) => item.activo && item.ubicacionDestino === ubicacion,
     );
-    const repoHasAnyQty = medicamentos.some(
+    const busqueda = repoBusqueda.trim().toLowerCase();
+    const medicamentos = busqueda
+      ? medicamentosUbicacion.filter((item) =>
+          [item.cn, item.codigo, item.nombre, item.principioActivo]
+            .some((campo) => campo?.toLowerCase().includes(busqueda)),
+        )
+      : medicamentosUbicacion;
+    const repoHasAnyQty = medicamentosUbicacion.some(
       (item) => (repoDraft[String(item.id)]?.cantidadCajas ?? 0) > 0,
     );
-    const repoOverMaxCount = medicamentos.filter((item) => {
+    const repoOverMaxCount = medicamentosUbicacion.filter((item) => {
       const qty = repoDraft[String(item.id)]?.cantidadCajas ?? 0;
       return item.stockMaximo != null && qty > item.stockMaximo;
     }).length;
@@ -1505,16 +1584,36 @@ export default function RecuentoManualPage() {
             <p className="text-lg font-extrabold text-orange-700 truncate">🛒 Pedido a Farmacia</p>
             <p className="text-base text-slate-500 truncate">📍 {ubicacion}</p>
           </div>
+          <input
+            type="search"
+            value={repoBusqueda}
+            onChange={(e) => setRepoBusqueda(e.target.value)}
+            placeholder="Buscar por principio activo, marca o CN…"
+            className="w-full sm:w-72 rounded-xl border-2 border-slate-300 px-4 py-2.5 text-lg focus:border-orange-400 focus:outline-none"
+          />
         </div>
 
         <div className="flex-1 px-4 pt-4 space-y-3">
-          <p className="text-base text-slate-500 font-semibold">
-            {medicamentos.length} artículo{medicamentos.length !== 1 ? 's' : ''} — indica la cantidad que necesitas
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-base text-slate-500 font-semibold">
+              {medicamentos.length} artículo{medicamentos.length !== 1 ? 's' : ''}
+              {busqueda ? ` de ${medicamentosUbicacion.length}` : ''} — indica la cantidad que necesitas
+            </p>
+            {busqueda && (
+              <button onClick={() => setRepoBusqueda('')}
+                className="rounded-xl border-2 border-slate-300 bg-white px-4 py-1.5 text-base font-bold text-slate-600 hover:bg-slate-50 active:scale-95">
+                Limpiar búsqueda
+              </button>
+            )}
+          </div>
           {loading ? (
             <p className="text-2xl text-slate-500 animate-pulse text-center py-20">Cargando…</p>
           ) : medicamentos.length === 0 ? (
-            <p className="text-2xl font-bold text-amber-700 text-center py-10">No hay medicamentos en esta ubicación.</p>
+            <p className="text-2xl font-bold text-amber-700 text-center py-10">
+              {busqueda
+                ? 'Ningún artículo coincide con la búsqueda.'
+                : 'No hay medicamentos en esta ubicación.'}
+            </p>
           ) : (
             medicamentos.map((med, idx) => {
               const key = String(med.id);

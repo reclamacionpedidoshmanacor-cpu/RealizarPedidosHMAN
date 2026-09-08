@@ -69,6 +69,30 @@ class PageWriter {
     this.page.drawText(disp, { x, y: this.y, size, font, color });
   }
 
+  textRight(
+    content: string,
+    opts: { size?: number; font?: PDFFont; color?: ReturnType<typeof rgb> } = {}
+  ) {
+    const font = opts.font ?? this.regular;
+    const size = opts.size ?? 10;
+    const width = font.widthOfTextAtSize(content, size);
+    this.page.drawText(content, {
+      x: PAGE_W - MARGIN - width,
+      y: this.y,
+      size,
+      font,
+      color: opts.color ?? rgb(0, 0, 0),
+    });
+  }
+
+  get cursorY(): number {
+    return this.y;
+  }
+
+  set cursorY(value: number) {
+    this.y = value;
+  }
+
   textRow(
     cols: {
       text: string;
@@ -101,9 +125,15 @@ export function formatPdfDate(iso: string): string {
   return new Date(iso).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
-export function buildReposicionPdfFilename(pedidoId: number, fechaCreacion: string): string {
+export function buildReposicionPdfFilename(
+  pedidoId: number,
+  fechaCreacion: string,
+  consultaDestino?: string | null,
+): string {
   const fecha = formatPdfDate(fechaCreacion).replace(/\//g, '-');
-  return `albaran-reposicion-${pedidoId}-${fecha}.pdf`;
+  const consulta = consultaDestino?.trim();
+  const sufijo = consulta ? `-${consulta}` : '';
+  return `albaran-reposicion-${pedidoId}-${fecha}${sufijo}.pdf`;
 }
 
 async function loadLogo(doc: PDFDocument): Promise<PDFImage | null> {
@@ -120,6 +150,7 @@ export async function buildReposicionPdf(
   fechaFinalizado: string | null,
   lineas: ReposicionLinea[],
   area = 'upe',
+  consultaDestino: string | null = null,
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   const regular = await doc.embedFont(StandardFonts.Helvetica);
@@ -128,9 +159,22 @@ export async function buildReposicionPdf(
   const w = new PageWriter(doc, regular, bold);
   const logo = await loadLogo(doc);
 
+  const consulta = safe(consultaDestino?.trim() ?? '');
+
   if (logo) {
     const logoW = (logo.width * LOGO_H) / logo.height;
     w.image(logo, MARGIN, logoW, LOGO_H);
+  }
+
+  if (consulta) {
+    const inicioCabecera = w.cursorY;
+    w.textRight('CONSULTA DESTINO', { size: 8, font: bold, color: rgb(0.4, 0.4, 0.4) });
+    w.moveDown(24);
+    w.textRight(consulta, { size: 24, font: bold, color: rgb(0.05, 0.2, 0.45) });
+    w.cursorY = inicioCabecera;
+  }
+
+  if (logo || consulta) {
     w.moveDown(LOGO_H + 20);
   }
 
@@ -153,8 +197,14 @@ export async function buildReposicionPdf(
   w.text(meta, MARGIN, { size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
   w.moveDown(18);
 
-  const COL = { cn: MARGIN, med: MARGIN + 75, qty: MARGIN + USABLE_W - 55 };
-  const COL_W = { cn: 70, med: USABLE_W - 75 - 60, qty: 55 };
+  const COL = {
+    cn: MARGIN,
+    ppio: MARGIN + 68,
+    med: MARGIN + 249,
+    qty: MARGIN + USABLE_W - 52,
+  };
+  const COL_W = { cn: 62, ppio: 175, med: 190, qty: 52 };
+  const ROW_SIZE = 8.5;
 
   const porUbicacion = new Map<string, ReposicionLinea[]>();
   for (const l of lineas) {
@@ -182,6 +232,7 @@ export async function buildReposicionPdf(
       w.textRow(
         [
           { text: 'CN', x: COL.cn, maxWidth: COL_W.cn, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
+          { text: 'Principio activo', x: COL.ppio, maxWidth: COL_W.ppio, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
           { text: 'Marca', x: COL.med, maxWidth: COL_W.med, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4) },
           { text: 'Cantidad', x: COL.qty, maxWidth: COL_W.qty, font: bold, size: 8, color: rgb(0.4, 0.4, 0.4), align: 'right' },
         ],
@@ -191,12 +242,19 @@ export async function buildReposicionPdf(
       w.line();
       w.moveDown(10);
 
-      for (const l of filas) {
+      const ordenadas = [...filas].sort((a, b) =>
+        (a.principioActivo ?? a.nombre).localeCompare(b.principioActivo ?? b.nombre, 'es', {
+          sensitivity: 'base',
+        })
+      );
+
+      for (const l of ordenadas) {
         w.textRow(
           [
-            { text: safe(l.tipo === 'formula' ? l.codigo : l.cn), x: COL.cn, maxWidth: COL_W.cn, size: 9 },
-            { text: safe(l.nombre), x: COL.med, maxWidth: COL_W.med, size: 9 },
-            { text: `${l.cantidadCajas} ${l.unidadPedido === 'unidades' ? 'ud.' : 'caj.'}`, x: COL.qty, maxWidth: COL_W.qty, size: 9, font: bold, align: 'right' },
+            { text: safe(l.tipo === 'formula' ? l.codigo : l.cn), x: COL.cn, maxWidth: COL_W.cn, size: ROW_SIZE },
+            { text: safe(l.principioActivo ?? '-'), x: COL.ppio, maxWidth: COL_W.ppio, size: ROW_SIZE },
+            { text: safe(l.nombre), x: COL.med, maxWidth: COL_W.med, size: ROW_SIZE, color: rgb(0.3, 0.3, 0.3) },
+            { text: `${l.cantidadCajas} ${l.unidadPedido === 'unidades' ? 'ud.' : 'caj.'}`, x: COL.qty, maxWidth: COL_W.qty, size: ROW_SIZE, font: bold, align: 'right' },
           ],
           17
         );
@@ -204,8 +262,8 @@ export async function buildReposicionPdf(
           w.textRow(
             [{
               text: `Nota: ${safe(l.notas)}`,
-              x: COL.med,
-              maxWidth: COL_W.med,
+              x: COL.ppio,
+              maxWidth: COL_W.ppio + COL_W.med,
               size: 8,
               font: oblique,
               color: rgb(0.45, 0.25, 0.05),

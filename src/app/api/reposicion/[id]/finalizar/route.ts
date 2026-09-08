@@ -1,17 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { isValidArea } from '@/lib/areas';
+import { requireApiSession } from '@/lib/api-auth';
 import { finalizarPedido, getPedidoConLineas, ensureTablesReposicion } from '@/lib/reposicion-neon';
+import {
+  consultaUnicaDeArea,
+  consultasDeArea,
+  esConsultaValida,
+  normalizarConsulta,
+} from '@/lib/reposicion-consultas';
 
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const session = requireApiSession(req);
+    if (!session.ok) return session.response;
     await ensureTablesReposicion();
-    const area = req.cookies.get('area_session')?.value;
-    if (!isValidArea(area)) {
-      return NextResponse.json({ error: 'Area no seleccionada o no valida.' }, { status: 400 });
-    }
+
     const { id } = await params;
     const pedidoId = Number(id);
     if (!Number.isFinite(pedidoId)) {
@@ -22,7 +27,7 @@ export async function POST(
     if (!result) {
       return NextResponse.json({ error: 'Pedido no encontrado.' }, { status: 404 });
     }
-    if (result.cabecera.area !== area) {
+    if (result.cabecera.area !== session.area) {
       return NextResponse.json({ error: 'No autorizado para este pedido.' }, { status: 403 });
     }
     if (result.cabecera.estado !== 'borrador') {
@@ -32,7 +37,23 @@ export async function POST(
       return NextResponse.json({ error: 'No se puede finalizar un pedido sin líneas.' }, { status: 400 });
     }
 
-    const cabecera = await finalizarPedido(pedidoId);
+    const body = await req.json().catch(() => ({}));
+    const consultaDestino =
+      normalizarConsulta((body as { consultaDestino?: unknown }).consultaDestino) ||
+      consultaUnicaDeArea(result.cabecera.area) ||
+      '';
+
+    if (!esConsultaValida(result.cabecera.area, consultaDestino)) {
+      return NextResponse.json(
+        {
+          error: `Indica la consulta destino del pedido (${consultasDeArea(result.cabecera.area).join(', ')}).`,
+          consultasDisponibles: consultasDeArea(result.cabecera.area),
+        },
+        { status: 400 },
+      );
+    }
+
+    const cabecera = await finalizarPedido(pedidoId, consultaDestino);
     return NextResponse.json({ cabecera });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Error inesperado';

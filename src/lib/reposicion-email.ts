@@ -51,12 +51,33 @@ async function getTransporter(settings: SettingsMap) {
   } as nodemailer.TransportOptions);
 }
 
-export async function sendReposicionEmail(pedidoId: number): Promise<{ success: true } | { success: false; error: string }> {
+export async function sendReposicionEmail(
+  pedidoIdOrIds: number | number[],
+): Promise<{ success: true } | { success: false; error: string }> {
   try {
     await ensureTablesReposicion();
-    const pedido = await getPedidoConLineas(pedidoId);
-    if (!pedido) return { success: false, error: 'Pedido no encontrado.' };
-    if (pedido.lineas.length === 0) return { success: false, error: 'El pedido no tiene líneas.' };
+
+    const pedidoIds = [...new Set(Array.isArray(pedidoIdOrIds) ? pedidoIdOrIds : [pedidoIdOrIds])];
+    if (pedidoIds.length === 0) {
+      return { success: false, error: 'Selecciona al menos un pedido para enviar.' };
+    }
+
+    const pedidos = [];
+    for (const id of pedidoIds) {
+      const pedido = await getPedidoConLineas(id);
+      if (!pedido) return { success: false, error: `Pedido #${id} no encontrado.` };
+      if (pedido.lineas.length === 0) {
+        return { success: false, error: `El pedido #${id} no tiene líneas.` };
+      }
+      pedidos.push(pedido);
+    }
+
+    pedidos.sort((a, b) => a.cabecera.id - b.cabecera.id);
+    const pedido = pedidos[0];
+
+    if (pedidos.some((p) => p.cabecera.area !== pedido.cabecera.area)) {
+      return { success: false, error: 'Todos los pedidos deben pertenecer a la misma área.' };
+    }
 
     const settings = await getSettings();
     const area = pedido.cabecera.area === 'oncologia' ? 'oncologia' : 'upe';
@@ -80,37 +101,62 @@ export async function sendReposicionEmail(pedidoId: number): Promise<{ success: 
     const subjectTemplate =
       settings[`repo_email_subject_${area}`] ||
       (area === 'upe' ? settings.repo_email_subject : '') ||
-      `Pedido de reposicion ${areaLabel} #{pedido_id} - {fecha}`;
+      `Pedido de reposicion ${areaLabel} #{pedido_id} - {consulta} - {fecha}`;
     const bodyTemplate =
       settings[`repo_email_body_${area}`] ||
       (area === 'upe' ? settings.repo_email_body : '') ||
-      'Adjuntamos albaran de reposicion para preparacion en Farmacia.\n\nPedido: #{pedido_id}\nFecha: {fecha}\nLineas: {lineas}\n\nGracias.';
+      'Adjuntamos albaran de reposicion para preparacion en Farmacia.\n\nPedido: #{pedido_id}\nConsulta destino: {consulta}\nFecha: {fecha}\nLineas: {lineas}\n\nGracias.';
 
     const fecha = new Date(pedido.cabecera.fechaCreacion).toLocaleDateString('es-ES');
+    const consultas = pedidos
+      .map((p) => p.cabecera.consultaDestino?.trim())
+      .filter((c): c is string => Boolean(c));
     const replacements: Record<string, string> = {
-      '{pedido_id}': String(pedido.cabecera.id),
+      '{pedido_id}': pedidos.map((p) => p.cabecera.id).join(', '),
       '{fecha}': fecha,
-      '{lineas}': String(pedido.cabecera.totalLineas),
+      '{lineas}': String(pedidos.reduce((total, p) => total + p.cabecera.totalLineas, 0)),
+      '{consulta}': consultas.length > 0 ? [...new Set(consultas)].join(', ') : 'sin consulta',
     };
 
     const replaceVars = (input: string) =>
       Object.entries(replacements).reduce((acc, [k, v]) => acc.replaceAll(k, v), input);
 
+    const detalleConsultas = pedidos
+      .map(
+        (p) =>
+          `- Pedido #${p.cabecera.id} · ${p.cabecera.consultaDestino ?? 'sin consulta'} · ${p.cabecera.totalLineas} lineas`,
+      )
+      .join('\n');
+
     const subject = replaceVars(subjectTemplate);
-    const textBody = replaceVars(bodyTemplate);
+    const cuerpoBase = replaceVars(bodyTemplate);
+    const textBody =
+      pedidos.length > 1 ? `${cuerpoBase}\n\nAlbaranes adjuntos:\n${detalleConsultas}` : cuerpoBase;
     const htmlBody = textBody
       .split('\n')
       .map((line) => (line.trim() ? `<p style="margin:0 0 8px;color:#334155;font-size:14px;">${line}</p>` : '<br/>'))
       .join('');
 
-    const pdfBytes = await buildReposicionPdf(
-      pedido.cabecera.id,
-      pedido.cabecera.fechaCreacion,
-      pedido.cabecera.fechaFinalizado,
-      pedido.lineas,
-      pedido.cabecera.area,
-    );
-    const filename = buildReposicionPdfFilename(pedido.cabecera.id, pedido.cabecera.fechaCreacion);
+    const attachments = [];
+    for (const p of pedidos) {
+      const pdfBytes = await buildReposicionPdf(
+        p.cabecera.id,
+        p.cabecera.fechaCreacion,
+        p.cabecera.fechaFinalizado,
+        p.lineas,
+        p.cabecera.area,
+        p.cabecera.consultaDestino,
+      );
+      attachments.push({
+        filename: buildReposicionPdfFilename(
+          p.cabecera.id,
+          p.cabecera.fechaCreacion,
+          p.cabecera.consultaDestino,
+        ),
+        content: Buffer.from(pdfBytes),
+        contentType: 'application/pdf',
+      });
+    }
     const domain = from.split('@')[1] || 'hospital.local';
 
     await transporter.sendMail({
@@ -122,13 +168,7 @@ export async function sendReposicionEmail(pedidoId: number): Promise<{ success: 
       text: textBody,
       html: htmlBody,
       messageId: `<${randomUUID()}@${domain}>`,
-      attachments: [
-        {
-          filename,
-          content: Buffer.from(pdfBytes),
-          contentType: 'application/pdf',
-        },
-      ],
+      attachments,
     });
 
     return { success: true };

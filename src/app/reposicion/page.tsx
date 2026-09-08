@@ -9,6 +9,7 @@ type Cabecera = {
   fechaCreacion: string;
   fechaFinalizado: string | null;
   totalLineas: number;
+  consultaDestino: string | null;
 };
 
 type Linea = {
@@ -85,6 +86,10 @@ export default function ReposicionPage() {
   const [filtroUbicacion, setFiltroUbicacion] = useState('');
   const [filtroTexto, setFiltroTexto] = useState('');
   const [filtroActivo, setFiltroActivo] = useState<'' | 'si' | 'no'>('si');
+  const [consultas, setConsultas] = useState<string[]>([]);
+  const [finalizarId, setFinalizarId] = useState<number | null>(null);
+  const [consultaElegida, setConsultaElegida] = useState('');
+  const [seleccionEnvio, setSeleccionEnvio] = useState<number[]>([]);
 
   const enabled = area === 'upe' || area === 'oncologia';
 
@@ -101,7 +106,11 @@ export default function ReposicionPage() {
       if (!catRes.ok) throw new Error(cat?.error ?? 'No se pudo cargar el catálogo.');
       setBorrador(ped.borrador ?? null);
       setHistorial(ped.historial ?? []);
+      setConsultas(ped.consultas ?? []);
       setItems(cat.items ?? []);
+      setSeleccionEnvio((prev) =>
+        prev.filter((id) => (ped.historial ?? []).some((p: Cabecera) => p.id === id)),
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Error inesperado');
     } finally {
@@ -165,14 +174,24 @@ export default function ReposicionPage() {
     }
   };
 
-  const finalizar = async (id: number) => {
-    if (!confirm('¿Validar y finalizar este pedido? Después no se podrán cambiar las cantidades.')) return;
+  const abrirFinalizar = (id: number) => {
+    setFinalizarId(id);
+    setConsultaElegida(consultas.length === 1 ? consultas[0] : '');
+  };
+
+  const finalizar = async () => {
+    if (finalizarId == null || !consultaElegida) return;
     setBusy(true);
     try {
-      const res = await fetch(`/api/reposicion/${id}/finalizar`, { method: 'POST' });
+      const res = await fetch(`/api/reposicion/${finalizarId}/finalizar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ consultaDestino: consultaElegida }),
+      });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo finalizar.');
-      toast.success('Pedido validado y finalizado.');
+      toast.success(`Pedido validado para la consulta ${consultaElegida}.`);
+      setFinalizarId(null);
       setDetalle(null);
       await load();
     } catch (error) {
@@ -194,6 +213,38 @@ export default function ReposicionPage() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const enviarSeleccionados = async () => {
+    if (seleccionEnvio.length === 0) return;
+    const resumen = historial
+      .filter((pedido) => seleccionEnvio.includes(pedido.id))
+      .map((pedido) => `#${pedido.id} (${pedido.consultaDestino ?? 'sin consulta'})`)
+      .join(', ');
+    if (!confirm(`¿Enviar en un solo email los albaranes ${resumen}?`)) return;
+
+    setBusy(true);
+    try {
+      const res = await fetch('/api/reposicion/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: seleccionEnvio }),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo enviar.');
+      toast.success(`${seleccionEnvio.length} albaranes enviados en un solo email.`);
+      setSeleccionEnvio([]);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Error inesperado');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const alternarSeleccion = (id: number) => {
+    setSeleccionEnvio((prev) =>
+      prev.includes(id) ? prev.filter((actual) => actual !== id) : [...prev, id],
+    );
   };
 
   const eliminarPedido = async (pedido: Cabecera) => {
@@ -393,7 +444,7 @@ export default function ReposicionPage() {
                   <button onClick={() => openPedido(borrador.id)} className="rounded-lg border border-teal-300 bg-white px-3 py-2 text-sm font-semibold text-teal-700">
                     Revisar
                   </button>
-                  <button disabled={busy} onClick={() => finalizar(borrador.id)} className="rounded-lg bg-teal-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                  <button disabled={busy} onClick={() => abrirFinalizar(borrador.id)} className="rounded-lg bg-teal-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">
                     Validar
                   </button>
                 </div>
@@ -406,13 +457,31 @@ export default function ReposicionPage() {
           )}
 
           <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-            <h2 className="border-b border-slate-100 px-4 py-3 font-semibold text-slate-800">Historial de pedidos</h2>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+              <h2 className="font-semibold text-slate-800">Historial de pedidos</h2>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-slate-500">
+                  {seleccionEnvio.length > 0
+                    ? `${seleccionEnvio.length} pedido${seleccionEnvio.length === 1 ? '' : 's'} seleccionado${seleccionEnvio.length === 1 ? '' : 's'}`
+                    : 'Marca varios pedidos para enviarlos juntos'}
+                </span>
+                <button
+                  disabled={busy || seleccionEnvio.length === 0}
+                  onClick={enviarSeleccionados}
+                  className="rounded-lg bg-teal-700 px-3 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-40"
+                >
+                  Enviar seleccionados
+                </button>
+              </div>
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-100 bg-slate-50 text-left text-[11px] uppercase tracking-wide text-slate-500">
-                    <th className="w-[90px] px-4 py-2.5">Pedido</th>
+                    <th className="w-[46px] px-4 py-2.5"><span className="sr-only">Seleccionar</span></th>
+                    <th className="w-[90px] px-3 py-2.5">Pedido</th>
                     <th className="px-3 py-2.5">Fecha</th>
+                    <th className="w-[110px] px-3 py-2.5 text-center">Consulta</th>
                     <th className="w-[90px] px-3 py-2.5 text-center">Líneas</th>
                     <th className="w-[120px] px-3 py-2.5 text-center">Estado</th>
                     <th className="w-[290px] px-4 py-2.5 text-right">Acciones</th>
@@ -420,12 +489,30 @@ export default function ReposicionPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {historial.length === 0 && (
-                    <tr><td colSpan={5} className="px-4 py-10 text-center text-slate-400">Todavía no hay pedidos.</td></tr>
+                    <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-400">Todavía no hay pedidos.</td></tr>
                   )}
                   {historial.map((pedido) => (
                     <tr key={pedido.id} className="hover:bg-slate-50/70">
-                      <td className="px-4 py-2.5 font-semibold text-slate-800">#{pedido.id}</td>
+                      <td className="px-4 py-2.5">
+                        <input
+                          type="checkbox"
+                          checked={seleccionEnvio.includes(pedido.id)}
+                          onChange={() => alternarSeleccion(pedido.id)}
+                          className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-500"
+                          aria-label={`Seleccionar pedido ${pedido.id} para enviar`}
+                        />
+                      </td>
+                      <td className="px-3 py-2.5 font-semibold text-slate-800">#{pedido.id}</td>
                       <td className="px-3 py-2.5 text-slate-600">{formatDate(pedido.fechaCreacion)}</td>
+                      <td className="px-3 py-2.5 text-center">
+                        {pedido.consultaDestino ? (
+                          <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-700">
+                            {pedido.consultaDestino}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-slate-400">—</span>
+                        )}
+                      </td>
                       <td className="px-3 py-2.5 text-center">{pedido.totalLineas}</td>
                       <td className="px-3 py-2.5 text-center">
                         <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
@@ -578,6 +665,49 @@ export default function ReposicionPage() {
               </div>
             </section>
           ))}
+        </div>
+      )}
+
+      {finalizarId != null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-5 shadow-xl">
+            <div>
+              <h2 className="text-lg font-bold text-slate-800">Validar pedido #{finalizarId}</h2>
+              <p className="text-sm text-slate-500">
+                Indica la consulta destino. Aparecerá en el albarán y en el nombre del PDF.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {consultas.map((consulta) => (
+                <button
+                  key={consulta}
+                  onClick={() => setConsultaElegida(consulta)}
+                  className={`rounded-xl border-2 px-5 py-3 text-base font-bold transition-colors ${
+                    consultaElegida === consulta
+                      ? 'border-teal-600 bg-teal-50 text-teal-800'
+                      : 'border-slate-200 bg-white text-slate-600 hover:border-teal-300'
+                  }`}
+                >
+                  {consulta}
+                </button>
+              ))}
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setFinalizarId(null)}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                disabled={busy || !consultaElegida}
+                onClick={finalizar}
+                className="rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-40"
+              >
+                {busy ? 'Validando…' : 'Validar y finalizar'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -741,6 +871,11 @@ export default function ReposicionPage() {
                   }`}>
                     {detalle.cabecera.estado === 'finalizado' ? 'Finalizado' : 'Borrador'}
                   </span>
+                  {detalle.cabecera.consultaDestino && (
+                    <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-700">
+                      {detalle.cabecera.consultaDestino}
+                    </span>
+                  )}
                 </div>
                 <p className="text-sm text-slate-500">
                   {formatDate(detalle.cabecera.fechaCreacion)} · {detalle.lineas.length} líneas · {totalDetalle} en total entre cajas y unidades
