@@ -6,12 +6,13 @@ import {
   stockCajasDesdeUnidades,
 } from '@/lib/cantidades';
 import {
-  actualizarLineaRecuento,
   eliminarRecuentoPendiente,
   finalizarRecuentoDesdeStock,
+  guardarLineasRecuentoManual,
   getLineasRecuento,
   getMedicamentoByCnArea,
   getMedicamentosParaRecuento,
+  getPendienteRecuento,
   getRecuentoById,
 } from '@/lib/stock-propuesta-neon';
 
@@ -95,8 +96,6 @@ export async function PATCH(
 
       let noEncontrados: string[] = [];
       let lineasValidas = bulkLineas;
-      const erroresActualizacion: string[] = [];
-
       if (bulkLineas.length > 0) {
         const meds = await getMedicamentosParaRecuento(
           session.area,
@@ -117,33 +116,74 @@ export async function PATCH(
             { status: 404 }
           );
         }
-
-        for (const linea of lineasValidas) {
-          const med = medsMap.get(linea.cn);
-          if (!med) continue;
-          const actualizado = await actualizarLineaRecuento(
-            recuentoId,
-            linea.cn,
-            stockCajasDesdeUnidades(linea.stockUnidades, med.unidadesPorCaja),
-            linea.stockUnidades
+        const [lineasActuales, pendiente] = await Promise.all([
+          getLineasRecuento(recuentoId),
+          getPendienteRecuento(session.area),
+        ]);
+        if (!pendiente || pendiente.id !== recuentoId) {
+          return NextResponse.json(
+            { error: 'El recuento ya no está disponible para editar.' },
+            { status: 409 },
           );
-          if (!actualizado) erroresActualizacion.push(linea.cn);
         }
-      }
-
-      if (erroresActualizacion.length > 0) {
-        return NextResponse.json(
-          {
-            error: 'No se pudieron actualizar algunas lineas del recuento.',
-            cns: erroresActualizacion,
-          },
-          { status: 404 }
+        const actualesByCn = new Map(
+          lineasActuales.map((linea) => [linea.cn, linea.stockUnidades]),
         );
+        const noPresentes = lineasValidas
+          .map((linea) => linea.cn)
+          .filter((cn) => !actualesByCn.has(cn));
+        if (noPresentes.length > 0) {
+          return NextResponse.json(
+            { error: 'Hay líneas que ya no existen en el recuento.', cns: noPresentes },
+            { status: 409 },
+          );
+        }
+        try {
+          await guardarLineasRecuentoManual({
+            importacionId: recuentoId,
+            area: session.area,
+            ubicacion: '',
+            sessionId: 'administracion-stock',
+            revisionEsperada: pendiente.revision ?? 0,
+            origen: 'administracion',
+            lineas: lineasValidas.map((linea) => {
+              const med = medsMap.get(linea.cn)!;
+              return {
+                cn: linea.cn,
+                stockUnidades: linea.stockUnidades,
+                stockCajas: stockCajasDesdeUnidades(
+                  linea.stockUnidades,
+                  med.unidadesPorCaja,
+                ),
+                stockAnteriorEsperado: actualesByCn.get(linea.cn) ?? null,
+              };
+            }),
+          });
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            error.message.startsWith('CONFLICTO_')
+          ) {
+            return NextResponse.json(
+              { error: 'El recuento cambió durante la edición. Recarga los datos.' },
+              { status: 409 },
+            );
+          }
+          throw error;
+        }
       }
 
       if (finalizar) {
         const cierre = await finalizarRecuentoDesdeStock(recuentoId, session.area);
         if (!cierre.ok) {
+          if (cierre.reason === 'manual_not_completed') {
+            return NextResponse.json(
+              {
+                error: 'El recuento todavía no se ha completado desde la app manual.',
+              },
+              { status: 409 },
+            );
+          }
           if (cierre.reason === 'linked_draft_proposals') {
             return NextResponse.json(
               {
@@ -198,15 +238,40 @@ export async function PATCH(
       return NextResponse.json({ error: 'Medicamento no encontrado en area activa.' }, { status: 404 });
     }
 
-    const actualizado = await actualizarLineaRecuento(
-      recuentoId,
-      cn,
-      stockCajasDesdeUnidades(stockUnidades, med.unidadesPorCaja),
-      stockUnidades
-    );
-
-    if (!actualizado) {
+    const [lineasActuales, pendiente] = await Promise.all([
+      getLineasRecuento(recuentoId),
+      getPendienteRecuento(session.area),
+    ]);
+    const actual = lineasActuales.find((linea) => linea.cn === cn);
+    if (!actual) {
       return NextResponse.json({ error: 'Linea de recuento no encontrada.' }, { status: 404 });
+    }
+    if (!pendiente || pendiente.id !== recuentoId) {
+      return NextResponse.json({ error: 'El recuento ya no está disponible.' }, { status: 409 });
+    }
+    try {
+      await guardarLineasRecuentoManual({
+        importacionId: recuentoId,
+        area: session.area,
+        ubicacion: '',
+        sessionId: 'administracion-stock',
+        revisionEsperada: pendiente.revision ?? 0,
+        origen: 'administracion',
+        lineas: [{
+          cn,
+          stockUnidades,
+          stockCajas: stockCajasDesdeUnidades(stockUnidades, med.unidadesPorCaja),
+          stockAnteriorEsperado: actual.stockUnidades,
+        }],
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('CONFLICTO_')) {
+        return NextResponse.json(
+          { error: 'El recuento cambió durante la edición. Recarga los datos.' },
+          { status: 409 },
+        );
+      }
+      throw error;
     }
 
     return NextResponse.json({

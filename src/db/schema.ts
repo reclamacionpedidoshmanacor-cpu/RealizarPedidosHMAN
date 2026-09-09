@@ -64,6 +64,9 @@ export const importacionesStock = sqliteTable('importaciones_stock', {
   ficheroNombre:  text('fichero_nombre'),
   totalLineas:    integer('total_lineas').notNull().default(0),
   observaciones:  text('observaciones'),
+  revisionManual: integer('revision_manual').notNull().default(0),
+  manualCompletadoEn: text('manual_completado_en'),
+  manualCompletadoSession: text('manual_completado_session'),
 });
 
 // ---------------------------------------------------------------------------
@@ -79,6 +82,22 @@ export const stockRegistros = sqliteTable('stock_registros', {
 }, (t) => [
   index('idx_stock_importacion').on(t.importacionId),
   index('idx_stock_cn').on(t.cn),
+  unique('uq_stock_registros_importacion_cn').on(t.importacionId, t.cn),
+]);
+
+export const recuentoCambios = sqliteTable('recuento_cambios', {
+  id:            integer('id').primaryKey({ autoIncrement: true }),
+  importacionId: integer('importacion_id').notNull().references(() => importacionesStock.id),
+  area:          text('area').notNull(),
+  ubicacion:     text('ubicacion'),
+  cn:            text('cn'),
+  stockAnterior: integer('stock_anterior'),
+  stockNuevo:    integer('stock_nuevo'),
+  origen:        text('origen').notNull(),
+  sessionId:     text('session_id').notNull(),
+  creadoEn:      text('creado_en').notNull().default(sql`(datetime('now'))`),
+}, (t) => [
+  index('idx_recuento_cambios_importacion').on(t.importacionId, t.creadoEn),
 ]);
 
 // ---------------------------------------------------------------------------

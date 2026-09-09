@@ -1,7 +1,7 @@
 import { neon } from '@neondatabase/serverless';
 import { calcularCajasPropuestas, buildStockTransitoCajasByCn } from '@/lib/propuesta';
 import { loadCantidadTransitoByCn } from '@/lib/pedidos-pendientes';
-import { ALMACEN_AREA, ESTADO_PEDIDO_ALMACEN, ORIGEN_PEDIDO_ALMACEN, isAlmacenArea, nombrePropuestaAlmacen, nombrePropuestaUbicacion, grupoLetrasAlmacenFar, grupoLetrasAlmacenFarFromLetter, ubicacionAlmacenUsaLetras, ubicacionAlmacenUsaRecuentoStock, type AlmacenFarGrupoLetras } from '@/lib/almacen';
+import { ALMACEN_AREA, ALMACEN_UBICACIONES_RECUENTO_STOCK, ESTADO_PEDIDO_ALMACEN, ORIGEN_PEDIDO_ALMACEN, isAlmacenArea, nombrePropuestaAlmacen, nombrePropuestaUbicacion, grupoLetrasAlmacenFar, grupoLetrasAlmacenFarFromLetter, ubicacionAlmacenUsaLetras, ubicacionAlmacenUsaRecuentoStock, type AlmacenFarGrupoLetras } from '@/lib/almacen';
 import {
   normalizeNivelStock,
   normalizePedidoCajas,
@@ -35,6 +35,8 @@ export type RecuentoCabecera = {
   importadoEn: string;
   totalLineas: number;
   propuestaId: number | null;
+  revision?: number;
+  manualCompletadoEn?: string | null;
 };
 
 export type RecuentoManualResumen = {
@@ -115,6 +117,403 @@ function sortByPrincipioNombre<T extends {
 // ---------------------------------------------------------------------------
 // RECUENTOS
 // ---------------------------------------------------------------------------
+let recuentoManualSeguroSchemaPromise: Promise<void> | null = null;
+
+export async function ensureRecuentoManualSeguroSchema(): Promise<void> {
+  if (!recuentoManualSeguroSchemaPromise) {
+    recuentoManualSeguroSchemaPromise = (async () => {
+      const sql = getDb();
+      await sql`
+    ALTER TABLE importaciones_stock
+    ADD COLUMN IF NOT EXISTS revision_manual INTEGER NOT NULL DEFAULT 0
+  `;
+      await sql`
+    ALTER TABLE importaciones_stock
+    ADD COLUMN IF NOT EXISTS manual_completado_en TIMESTAMPTZ
+  `;
+      await sql`
+    ALTER TABLE importaciones_stock
+    ADD COLUMN IF NOT EXISTS manual_completado_session TEXT
+  `;
+      await sql`
+    CREATE TABLE IF NOT EXISTS recuento_cambios (
+      id BIGSERIAL PRIMARY KEY,
+      importacion_id BIGINT NOT NULL REFERENCES importaciones_stock(id) ON DELETE CASCADE,
+      area TEXT NOT NULL,
+      ubicacion TEXT,
+      cn TEXT,
+      stock_anterior INTEGER,
+      stock_nuevo INTEGER,
+      origen TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+      await sql`
+    CREATE INDEX IF NOT EXISTS idx_recuento_cambios_importacion
+    ON recuento_cambios (importacion_id, creado_en DESC)
+  `;
+      await sql`
+    DELETE FROM stock_registros anterior
+    USING stock_registros posterior
+    WHERE anterior.importacion_id = posterior.importacion_id
+      AND anterior.cn = posterior.cn
+      AND anterior.id < posterior.id
+  `;
+      await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_registros_importacion_cn
+    ON stock_registros (importacion_id, cn)
+  `;
+      await sql`
+    WITH duplicadas AS (
+      SELECT
+        id,
+        ROW_NUMBER() OVER (PARTITION BY area ORDER BY id DESC) AS posicion
+      FROM importaciones_stock
+      WHERE estado = 'pendiente'
+        AND origen <> 'Pedido-Almacen'
+    )
+    UPDATE importaciones_stock i
+    SET estado = 'reemplazado'
+    FROM duplicadas d
+    WHERE i.id = d.id
+      AND d.posicion > 1
+  `;
+      await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_importaciones_stock_area_pendiente
+    ON importaciones_stock (area)
+    WHERE estado = 'pendiente'
+      AND origen <> 'Pedido-Almacen'
+  `;
+      await sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_importaciones_stock_area_abierto
+    ON importaciones_stock (area)
+    WHERE estado IN ('pendiente', 'procesando-stock')
+      AND origen <> 'Pedido-Almacen'
+  `;
+    })();
+  }
+  try {
+    await recuentoManualSeguroSchemaPromise;
+  } catch (error) {
+    recuentoManualSeguroSchemaPromise = null;
+    throw error;
+  }
+}
+
+export type RecuentoFaltante = {
+  cn: string;
+  principioActivo: string | null;
+  nombre: string;
+  ubicacion: string;
+};
+
+export async function getFaltantesRecuentoManual(
+  importacionId: number,
+  area: string,
+  ubicacion?: string,
+): Promise<RecuentoFaltante[]> {
+  const sql = getDb();
+  const ubicacionesStockAlmacen = JSON.stringify(
+    [...ALMACEN_UBICACIONES_RECUENTO_STOCK].map(normalizeUbicacionKey),
+  );
+  const rows = await sql`
+    SELECT m.cn, m.principio_activo, m.nombre, COALESCE(m.ubicacion, '') AS ubicacion
+    FROM medicamentos m
+    WHERE m.area = ${area}
+      AND m.activo = TRUE
+      AND (
+        ${area !== ALMACEN_AREA}
+        OR TRANSLATE(
+          LOWER(REGEXP_REPLACE(TRIM(m.ubicacion), '[[:space:]]+', ' ', 'g')),
+          'áéíóúüñ',
+          'aeiouun'
+        ) IN (
+          SELECT jsonb_array_elements_text(${ubicacionesStockAlmacen}::jsonb)
+        )
+      )
+      AND (${ubicacion ?? null}::text IS NULL OR m.ubicacion = ${ubicacion ?? null})
+      AND NOT EXISTS (
+        SELECT 1
+        FROM stock_registros sr
+        WHERE sr.importacion_id = ${importacionId}
+          AND sr.cn = m.cn
+      )
+    ORDER BY m.ubicacion, m.principio_activo NULLS LAST, m.nombre, m.cn
+  `;
+  return rows.map((row) => ({
+    cn: String(row.cn),
+    principioActivo: row.principio_activo ? String(row.principio_activo) : null,
+    nombre: String(row.nombre),
+    ubicacion: String(row.ubicacion),
+  }));
+}
+
+export async function guardarLineasRecuentoManual(params: {
+  importacionId: number;
+  area: string;
+  ubicacion: string;
+  sessionId: string;
+  revisionEsperada: number;
+  origen?: 'teclado' | 'administracion';
+  lineas: Array<{
+    cn: string;
+    stockUnidades: number;
+    stockCajas: number;
+    stockAnteriorEsperado: number | null;
+  }>;
+}): Promise<{ insertadas: number; actualizadas: number; sinCambios: number; revision: number }> {
+  await ensureRecuentoManualSeguroSchema();
+  const sql = getDb();
+  const payload = JSON.stringify(params.lineas.map((linea) => ({
+    cn: linea.cn,
+    stock_unidades: linea.stockUnidades,
+    stock_cajas: linea.stockCajas,
+    stock_anterior_esperado: linea.stockAnteriorEsperado,
+  })));
+  const rows = await sql`
+    WITH entrada AS (
+      SELECT cn, stock_unidades, stock_cajas, stock_anterior_esperado
+      FROM jsonb_to_recordset(${payload}::jsonb)
+        AS x(
+          cn text,
+          stock_unidades integer,
+          stock_cajas numeric,
+          stock_anterior_esperado integer
+        )
+    ),
+    cabecera AS MATERIALIZED (
+      SELECT id
+      FROM importaciones_stock
+      WHERE id = ${params.importacionId}
+        AND area = ${params.area}
+        AND estado = 'pendiente'
+        AND (
+          ${params.origen === 'administracion'}
+          OR manual_completado_en IS NULL
+        )
+        AND revision_manual = ${params.revisionEsperada}
+      FOR UPDATE
+    ),
+    anteriores AS (
+      SELECT sr.cn, sr.stock_unidades
+      FROM stock_registros sr
+      INNER JOIN entrada e ON e.cn = sr.cn
+      INNER JOIN cabecera c ON c.id = sr.importacion_id
+    ),
+    validacion AS (
+      SELECT COUNT(*)::int AS conflictos
+      FROM entrada e
+      LEFT JOIN anteriores a ON a.cn = e.cn
+      WHERE a.stock_unidades IS DISTINCT FROM e.stock_anterior_esperado
+    ),
+    cambios AS (
+      SELECT
+        e.cn,
+        e.stock_unidades,
+        e.stock_cajas,
+        e.stock_anterior_esperado AS stock_anterior
+      FROM entrada e
+      LEFT JOIN anteriores a ON a.cn = e.cn
+      WHERE a.stock_unidades IS NOT DISTINCT FROM e.stock_anterior_esperado
+        AND a.stock_unidades IS DISTINCT FROM e.stock_unidades
+    ),
+    actualizadas AS (
+      UPDATE stock_registros sr
+      SET stock_unidades = c.stock_unidades,
+          stock_cajas = c.stock_cajas,
+          valor_total = NULL
+      FROM cambios c, cabecera cab
+      WHERE sr.importacion_id = cab.id
+        AND sr.cn = c.cn
+        AND c.stock_anterior IS NOT NULL
+        AND sr.stock_unidades IS NOT DISTINCT FROM c.stock_anterior
+        AND (SELECT conflictos FROM validacion) = 0
+      RETURNING sr.cn
+    ),
+    insertadas AS (
+      INSERT INTO stock_registros (importacion_id, cn, stock_unidades, stock_cajas, valor_total)
+      SELECT cab.id, c.cn, c.stock_unidades, c.stock_cajas, NULL
+      FROM cambios c, cabecera cab
+      WHERE c.stock_anterior IS NULL
+        AND (SELECT conflictos FROM validacion) = 0
+      ON CONFLICT (importacion_id, cn) DO NOTHING
+      RETURNING cn
+    ),
+    aplicadas AS (
+      SELECT c.cn, c.stock_anterior, c.stock_unidades
+      FROM cambios c
+      WHERE c.cn IN (SELECT cn FROM actualizadas)
+         OR c.cn IN (SELECT cn FROM insertadas)
+    ),
+    auditoria AS (
+      INSERT INTO recuento_cambios (
+        importacion_id, area, ubicacion, cn, stock_anterior, stock_nuevo, origen, session_id
+      )
+      SELECT
+        cab.id, ${params.area}, ${params.ubicacion}, a.cn,
+        a.stock_anterior, a.stock_unidades, ${params.origen ?? 'teclado'}, ${params.sessionId}
+      FROM aplicadas a, cabecera cab
+      RETURNING id
+    ),
+    revision AS (
+      UPDATE importaciones_stock i
+      SET revision_manual = revision_manual + 1,
+          total_lineas = (
+            SELECT COUNT(DISTINCT sr.cn)::int
+            FROM stock_registros sr
+            WHERE sr.importacion_id = i.id
+          ) + (SELECT COUNT(*)::int FROM insertadas)
+      WHERE i.id IN (SELECT id FROM cabecera)
+        AND EXISTS (SELECT 1 FROM auditoria)
+      RETURNING revision_manual
+    )
+    SELECT
+      (SELECT COUNT(DISTINCT cn)::int FROM insertadas) AS insertadas,
+      (SELECT COUNT(DISTINCT cn)::int FROM actualizadas) AS actualizadas,
+      (
+        (SELECT COUNT(*)::int FROM entrada) -
+        (SELECT COUNT(*)::int FROM cambios) -
+        (SELECT conflictos FROM validacion)
+      ) AS sin_cambios,
+      (SELECT conflictos FROM validacion) AS conflictos,
+      COALESCE(
+        (SELECT revision_manual FROM revision),
+        (SELECT revision_manual FROM importaciones_stock WHERE id = ${params.importacionId})
+      ) AS revision,
+      (SELECT COUNT(*)::int FROM cabecera) AS disponible,
+      (SELECT COUNT(*)::int FROM auditoria) AS auditadas
+  `;
+  if (!rows[0]) throw new Error('No se pudo guardar el recuento.');
+  if (num(rows[0].disponible) === 0) {
+    throw new Error('CONFLICTO_REVISION_RECUENTO');
+  }
+  if (num(rows[0].conflictos) > 0) {
+    throw new Error('CONFLICTO_LINEAS_RECUENTO');
+  }
+  return {
+    insertadas: num(rows[0].insertadas),
+    actualizadas: num(rows[0].actualizadas),
+    sinCambios: num(rows[0].sin_cambios),
+    revision: num(rows[0].revision),
+  };
+}
+
+export async function completarRecuentoManual(params: {
+  importacionId: number;
+  area: string;
+  revisionEsperada: number;
+  sessionId: string;
+}): Promise<{ completadoEn: string; faltantesAnadidos: number; revision: number } | null> {
+  await ensureRecuentoManualSeguroSchema();
+  const sql = getDb();
+  const ubicacionesStockAlmacen = JSON.stringify(
+    [...ALMACEN_UBICACIONES_RECUENTO_STOCK].map(normalizeUbicacionKey),
+  );
+  const rows = await sql`
+    WITH completado AS (
+      UPDATE importaciones_stock
+      SET manual_completado_en = NOW(),
+          manual_completado_session = ${params.sessionId},
+          revision_manual = revision_manual + 1
+      WHERE id = ${params.importacionId}
+        AND area = ${params.area}
+        AND estado = 'pendiente'
+        AND manual_completado_en IS NULL
+        AND revision_manual = ${params.revisionEsperada}
+      RETURNING id, manual_completado_en, revision_manual
+    ),
+    faltantes AS (
+      SELECT m.cn, COALESCE(m.ubicacion, '') AS ubicacion
+      FROM medicamentos m, completado c
+      WHERE m.area = ${params.area}
+        AND m.activo = TRUE
+        AND (
+          ${params.area !== ALMACEN_AREA}
+          OR TRANSLATE(
+            LOWER(REGEXP_REPLACE(TRIM(m.ubicacion), '[[:space:]]+', ' ', 'g')),
+            'áéíóúüñ',
+            'aeiouun'
+          ) IN (
+            SELECT jsonb_array_elements_text(${ubicacionesStockAlmacen}::jsonb)
+          )
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM stock_registros sr
+          WHERE sr.importacion_id = c.id AND sr.cn = m.cn
+        )
+    ),
+    insertadas AS (
+      INSERT INTO stock_registros (importacion_id, cn, stock_unidades, stock_cajas, valor_total)
+      SELECT c.id, f.cn, 0, 0, NULL
+      FROM faltantes f, completado c
+      ON CONFLICT (importacion_id, cn) DO NOTHING
+      RETURNING cn
+    ),
+    auditoria AS (
+      INSERT INTO recuento_cambios (
+        importacion_id, area, ubicacion, cn, stock_anterior, stock_nuevo, origen, session_id
+      )
+      SELECT
+        c.id, ${params.area}, f.ubicacion, f.cn,
+        NULL, 0, 'faltantes_finales', ${params.sessionId}
+      FROM faltantes f, completado c
+      WHERE f.cn IN (SELECT cn FROM insertadas)
+      RETURNING id
+    ),
+    totales AS (
+      UPDATE importaciones_stock i
+      SET total_lineas = (
+            SELECT COUNT(DISTINCT sr.cn)::int
+            FROM stock_registros sr
+            WHERE sr.importacion_id = i.id
+          ) + (SELECT COUNT(*)::int FROM insertadas)
+      WHERE i.id IN (SELECT id FROM completado)
+      RETURNING manual_completado_en::text, revision_manual
+    )
+    SELECT
+      t.manual_completado_en,
+      t.revision_manual,
+      (SELECT COUNT(*)::int FROM insertadas) AS faltantes_anadidos,
+      (SELECT COUNT(*)::int FROM auditoria) AS auditadas
+    FROM totales t
+  `;
+  if (!rows[0]) return null;
+  return {
+    completadoEn: String(rows[0].manual_completado_en),
+    faltantesAnadidos: num(rows[0].faltantes_anadidos),
+    revision: num(rows[0].revision_manual),
+  };
+}
+
+export async function reabrirRecuentoManual(params: {
+  importacionId: number;
+  area: string;
+  sessionId: string;
+}): Promise<boolean> {
+  const sql = getDb();
+  const rows = await sql`
+    WITH reabierto AS (
+      UPDATE importaciones_stock
+      SET manual_completado_en = NULL,
+          manual_completado_session = NULL,
+          revision_manual = revision_manual + 1
+      WHERE id = ${params.importacionId}
+        AND area = ${params.area}
+        AND estado = 'pendiente'
+        AND manual_completado_en IS NOT NULL
+      RETURNING id
+    )
+    INSERT INTO recuento_cambios (
+      importacion_id, area, ubicacion, cn, stock_anterior, stock_nuevo, origen, session_id
+    )
+    SELECT id, ${params.area}, NULL, NULL, NULL, NULL, 'reapertura', ${params.sessionId}
+    FROM reabierto
+    RETURNING id
+  `;
+  return rows.length > 0;
+}
+
 export async function getRecuentosByArea(area: string): Promise<{
   pendiente: RecuentoCabecera | null;
   historico: RecuentoCabecera[];
@@ -240,15 +639,18 @@ export async function getRecuentoCabeceraById(importacionId: number): Promise<Re
 }
 
 export async function getPendienteRecuento(area: string): Promise<RecuentoCabecera | null> {
+  await ensureRecuentoManualSeguroSchema();
   const sql = getDb();
   const rows = (await sql`
-    SELECT id, area, estado, origen, fecha_recuento::text, importado_en::text, total_lineas, propuesta_id
+    SELECT id, area, estado, origen, fecha_recuento::text, importado_en::text,
+           total_lineas, propuesta_id, revision_manual, manual_completado_en::text
     FROM importaciones_stock
     WHERE area = ${area} AND estado = 'pendiente' AND origen <> ${ORIGEN_PEDIDO_ALMACEN}
     ORDER BY id DESC LIMIT 1;
   `) as Array<{
     id: number; area: string; estado: string; origen: string;
     fecha_recuento: string; importado_en: string; total_lineas: number; propuesta_id: number | null;
+    revision_manual: number; manual_completado_en: string | null;
   }>;
 
   const r = rows[0];
@@ -257,6 +659,8 @@ export async function getPendienteRecuento(area: string): Promise<RecuentoCabece
     id: num(r.id), area: r.area, estado: r.estado, origen: r.origen,
     fechaRecuento: r.fecha_recuento, importadoEn: r.importado_en,
     totalLineas: num(r.total_lineas), propuestaId: r.propuesta_id ? num(r.propuesta_id) : null,
+    revision: num(r.revision_manual),
+    manualCompletadoEn: r.manual_completado_en,
   };
 }
 
@@ -284,21 +688,42 @@ export async function insertarLineasRecuento(
   importacionId: number,
   lineas: Array<{ cn: string; stockUnidades: number; stockCajas: number; valorTotal: number | null }>
 ): Promise<void> {
+  if (lineas.length === 0) return;
+  await ensureRecuentoManualSeguroSchema();
   const sql = getDb();
-  for (const l of lineas) {
-    const stockUnidades = normalizeStockUnidades(l.stockUnidades);
-    await sql`
-      INSERT INTO stock_registros (importacion_id, cn, stock_unidades, stock_cajas, valor_total)
-      SELECT
-        ${importacionId},
-        m.cn,
-        ${stockUnidades},
-        round(${stockUnidades}::numeric / GREATEST(m.unidades_por_caja, 1), 4),
-        ${l.valorTotal}
-      FROM medicamentos m
-      WHERE m.cn = ${l.cn};
-    `;
-  }
+  const payload = JSON.stringify(lineas.map((linea, posicion) => ({
+    posicion,
+    cn: linea.cn,
+    stock_unidades: normalizeStockUnidades(linea.stockUnidades),
+    valor_total: linea.valorTotal,
+  })));
+  await sql`
+    WITH entrada AS (
+      SELECT posicion, cn, stock_unidades, valor_total
+      FROM jsonb_to_recordset(${payload}::jsonb)
+        AS x(posicion integer, cn text, stock_unidades integer, valor_total numeric)
+    ),
+    ultimas AS (
+      SELECT DISTINCT ON (cn) cn, stock_unidades, valor_total
+      FROM entrada
+      ORDER BY cn, posicion DESC
+    )
+    INSERT INTO stock_registros (
+      importacion_id, cn, stock_unidades, stock_cajas, valor_total
+    )
+    SELECT
+      ${importacionId},
+      m.cn,
+      u.stock_unidades,
+      round(u.stock_unidades::numeric / GREATEST(m.unidades_por_caja, 1), 4),
+      u.valor_total
+    FROM ultimas u
+    INNER JOIN medicamentos m ON m.cn = u.cn
+    ON CONFLICT (importacion_id, cn) DO UPDATE
+    SET stock_unidades = EXCLUDED.stock_unidades,
+        stock_cajas = EXCLUDED.stock_cajas,
+        valor_total = EXCLUDED.valor_total
+  `;
 }
 
 export async function getMedicamentosParaRecuento(
@@ -339,7 +764,10 @@ export async function getRecuentoById(id: number): Promise<{ id: number; area: s
 }
 
 export async function actualizarLineaRecuento(
-  importacionId: number, cn: string, _stockCajas: number, stockUnidades: number
+  importacionId: number,
+  cn: string,
+  _stockCajas: number,
+  stockUnidades: number,
 ): Promise<boolean> {
   const unidadesExactas = normalizeStockUnidades(stockUnidades);
   const sql = getDb();
@@ -364,6 +792,7 @@ export async function upsertLineaRecuento(
   importacionId: number,
   line: { cn: string; stockUnidades: number; stockCajas: number; valorTotal: number | null }
 ): Promise<'updated' | 'inserted'> {
+  await ensureRecuentoManualSeguroSchema();
   const updated = await actualizarLineaRecuento(
     importacionId,
     line.cn,
@@ -391,7 +820,11 @@ export async function upsertLineaRecuento(
       round(${unidadesExactas}::numeric / GREATEST(m.unidades_por_caja, 1), 4),
       ${line.valorTotal}
     FROM medicamentos m
-    WHERE m.cn = ${line.cn};
+    WHERE m.cn = ${line.cn}
+    ON CONFLICT (importacion_id, cn) DO UPDATE
+    SET stock_unidades = EXCLUDED.stock_unidades,
+        stock_cajas = EXCLUDED.stock_cajas,
+        valor_total = EXCLUDED.valor_total;
   `;
   return 'inserted';
 }
@@ -735,7 +1168,9 @@ async function marcarRecuentoComoGenerado(
   const rows = (await sql`
     UPDATE importaciones_stock
     SET estado = 'generado', generado_en = now(), propuesta_id = ${propuestaId}
-    WHERE id = ${importacionId} AND area = ${area}
+    WHERE id = ${importacionId}
+      AND area = ${area}
+      AND estado = 'procesando-stock'
     RETURNING id;
   `) as Array<{ id: number }>;
   return rows.length > 0;
@@ -752,7 +1187,7 @@ async function marcarRecuentoComoValidado(
     SET estado = 'validado', generado_en = now(), propuesta_id = ${propuestaId}
     WHERE id = ${importacionId}
       AND area = ${area}
-      AND estado = 'pendiente'
+      AND estado = 'procesando-stock'
       AND origen <> ${ORIGEN_PEDIDO_ALMACEN}
     RETURNING id;
   `) as Array<{ id: number }>;
@@ -768,45 +1203,90 @@ export async function finalizarRecuentoDesdeStock(
       ok: false;
       reason:
         | 'not_found_or_not_pending'
+        | 'manual_not_completed'
         | 'linked_draft_proposals'
         | 'no_proposals_generated';
     }
 > {
+  await ensureRecuentoManualSeguroSchema();
   const sql = getDb();
   const recuentoRows = (await sql`
-    SELECT id
-    FROM importaciones_stock
-    WHERE id = ${importacionId} AND area = ${area} AND estado = 'pendiente'
-    LIMIT 1;
+    UPDATE importaciones_stock
+    SET estado = 'procesando-stock'
+    WHERE id = ${importacionId}
+      AND area = ${area}
+      AND estado = 'pendiente'
+      AND (
+        LOWER(origen) <> 'manual'
+        OR fichero_nombre IS DISTINCT FROM 'APP Recuento Manual'
+        OR manual_completado_en IS NOT NULL
+      )
+    RETURNING id
   `) as Array<{ id: number }>;
 
   if (recuentoRows.length === 0) {
+    const sinCompletar = await sql`
+      SELECT id
+    FROM importaciones_stock
+      WHERE id = ${importacionId}
+        AND area = ${area}
+        AND estado = 'pendiente'
+        AND LOWER(origen) = 'manual'
+        AND fichero_nombre = 'APP Recuento Manual'
+        AND manual_completado_en IS NULL
+      LIMIT 1
+    `;
+    if (sinCompletar.length > 0) {
+      return { ok: false, reason: 'manual_not_completed' };
+    }
     return { ok: false, reason: 'not_found_or_not_pending' };
   }
 
-  if (isAlmacenArea(area)) {
-    await syncTodasPropuestasUbicacionDesdeRecuento(area, importacionId, {
-      createIfMissing: true,
-    });
-    const borradores = await listBorradoresPropuestaAlmacen(area, importacionId);
-    if (borradores.length === 0) {
-      return { ok: false, reason: 'no_proposals_generated' };
+  const restaurarPendiente = async () => {
+    await sql`
+      UPDATE importaciones_stock
+      SET estado = 'pendiente'
+      WHERE id = ${importacionId}
+        AND area = ${area}
+        AND estado = 'procesando-stock'
+    `;
+  };
+
+  try {
+    if (isAlmacenArea(area)) {
+      await syncTodasPropuestasUbicacionDesdeRecuento(area, importacionId, {
+        createIfMissing: true,
+      });
+      const borradores = await listBorradoresPropuestaAlmacen(area, importacionId);
+      if (borradores.length === 0) {
+        await restaurarPendiente();
+        return { ok: false, reason: 'no_proposals_generated' };
+      }
+      const propuestaId = borradores[0]?.id ?? null;
+      const validado = await marcarRecuentoComoValidado(importacionId, area, propuestaId);
+      if (!validado) await restaurarPendiente();
+      return validado
+        ? { ok: true, propuestaId }
+        : { ok: false, reason: 'not_found_or_not_pending' };
     }
-    const propuestaId = borradores[0]?.id ?? null;
-    const validado = await marcarRecuentoComoValidado(importacionId, area, propuestaId);
-    return validado
-      ? { ok: true, propuestaId }
-      : { ok: false, reason: 'not_found_or_not_pending' };
-  }
 
-  const resumen = await getResumenPropuestasRecuento(area, importacionId);
-  if (resumen.borradores > 0) {
-    return { ok: false, reason: 'linked_draft_proposals' };
-  }
+    const resumen = await getResumenPropuestasRecuento(area, importacionId);
+    if (resumen.borradores > 0) {
+      await restaurarPendiente();
+      return { ok: false, reason: 'linked_draft_proposals' };
+    }
 
-  const propuestaId = resumen.tramitadas > 0 ? resumen.propuestaIdSugerida : null;
-  await marcarRecuentoComoGenerado(importacionId, area, propuestaId);
-  return { ok: true, propuestaId };
+    const propuestaId = resumen.tramitadas > 0 ? resumen.propuestaIdSugerida : null;
+    const generado = await marcarRecuentoComoGenerado(importacionId, area, propuestaId);
+    if (!generado) {
+      await restaurarPendiente();
+      return { ok: false, reason: 'not_found_or_not_pending' };
+    }
+    return { ok: true, propuestaId };
+  } catch (error) {
+    await restaurarPendiente();
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------------------

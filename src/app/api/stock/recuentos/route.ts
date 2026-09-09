@@ -149,16 +149,19 @@ export async function POST(req: NextRequest) {
     if (lineasInsert.length === 0) {
       return NextResponse.json({ error: 'No se pudo generar un recuento valido.', errores }, { status: 400 });
     }
+    const lineasUnicas = [
+      ...new Map(lineasInsert.map((linea) => [linea.cn, linea])).values(),
+    ];
 
     const importacionId = await crearRecuento({
       area: session.area,
       origen: origen === 'MANUAL' ? 'Manual' : 'SAP',
       fechaRecuento,
       ficheroNombre: file.name,
-      totalLineas: lineasInsert.length,
+      totalLineas: lineasUnicas.length,
     });
 
-    await insertarLineasRecuento(importacionId, lineasInsert);
+    await insertarLineasRecuento(importacionId, lineasUnicas);
     const preciosActualizados =
       origen === 'SAP'
         ? await actualizarPreciosCatalogoDesdeSap(session.area, preciosDesdeSap)
@@ -167,7 +170,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       importacionId,
-      totalLineas: lineasInsert.length,
+      totalLineas: lineasUnicas.length,
       errores,
       preciosActualizados,
     });

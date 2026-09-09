@@ -19,16 +19,18 @@ import {
 } from '@/lib/cantidades';
 import {
   crearRecuento,
+  completarRecuentoManual,
   eliminarLineaPedidoAlmacenPorCnEnSesion,
+  ensureRecuentoManualSeguroSchema,
+  getFaltantesRecuentoManual,
   getCantidadesPedidoAlmacenParaVista,
   getLineasRecuento,
   getPedidoAlmacenPendiente,
   getPendienteRecuento,
-  incorporarFaltantesRecuento,
+  guardarLineasRecuentoManual,
   listBorradoresPropuestaAlmacen,
+  reabrirRecuentoManual,
   recalcularTotalLineasPedidoAlmacen,
-  recalcularTotalLineasRecuento,
-  upsertLineaRecuento,
 } from '@/lib/stock-propuesta-neon';
 
 export const runtime = 'nodejs';
@@ -38,6 +40,7 @@ type BodyLinea = {
   cn?: unknown;
   cajas?: unknown;
   unidadesSueltas?: unknown;
+  stockAnteriorEsperado?: unknown;
 };
 
 function normalizeText(value: string | null | undefined): string {
@@ -54,6 +57,11 @@ function parseNonNegativeInteger(value: unknown): number | null {
   if (num < 0) return null;
   if (!Number.isInteger(num)) return null;
   return num;
+}
+
+function getRecuentoSessionId(req: NextRequest): string {
+  const value = req.headers.get('x-recuento-session')?.trim() ?? '';
+  return /^[a-zA-Z0-9-]{8,80}$/.test(value) ? value : 'sesion-no-identificada';
 }
 
 function buildUbicacionesMap(
@@ -87,6 +95,7 @@ function withAreaCookie(res: NextResponse, area: AreaId): NextResponse {
 
 export async function GET(req: NextRequest) {
   try {
+    await ensureRecuentoManualSeguroSchema();
     const areaQuery = req.nextUrl.searchParams.get('area');
     if (areaQuery && !isValidArea(areaQuery)) {
       return NextResponse.json({ error: 'Area no valida.' }, { status: 400 });
@@ -116,8 +125,13 @@ export async function GET(req: NextRequest) {
       ubicaciones.find((u) => normalizeText(u) === selectedKey) ?? null;
 
     const letraParam = req.nextUrl.searchParams.get('letra');
+    const revisionFinal = req.nextUrl.searchParams.get('revision') === 'final';
 
-    if (isAlmacenArea(area) && !ubicacionAlmacenUsaRecuentoStock(ubicacionSeleccionada)) {
+    if (
+      isAlmacenArea(area) &&
+      !revisionFinal &&
+      !ubicacionAlmacenUsaRecuentoStock(ubicacionSeleccionada)
+    ) {
       const pedidoPendiente = await getPedidoAlmacenPendiente(area);
       const borradoresPedido = pedidoPendiente
         ? await listBorradoresPropuestaAlmacen(area, pedidoPendiente.id)
@@ -291,6 +305,30 @@ export async function GET(req: NextRequest) {
         ).length
       : 0;
 
+    const ubicacionesConRecuento = [...ubicacionesMap.values()].filter(
+      (ubicacion) => !isAlmacenArea(area) || ubicacionAlmacenUsaRecuentoStock(ubicacion),
+    );
+    const progresoUbicaciones = ubicacionesConRecuento
+      .map((ubicacion) => {
+        const key = normalizeText(ubicacion);
+        const activos = catalogo.filter(
+          (med) => med.activo && normalizeText(med.ubicacion) === key,
+        );
+        const registrados = activos.filter((med) => lineasCn.has(med.cn)).length;
+        return {
+          ubicacion,
+          totalActivos: activos.length,
+          registrados,
+          faltantes: activos.length - registrados,
+        };
+      })
+      .sort((a, b) => a.ubicacion.localeCompare(b.ubicacion, 'es', { sensitivity: 'base' }));
+
+    const faltantesFinales =
+      revisionFinal && pendiente
+        ? await getFaltantesRecuentoManual(pendiente.id, area)
+        : undefined;
+
     const res = NextResponse.json({
       area,
       modo: 'recuento',
@@ -301,6 +339,8 @@ export async function GET(req: NextRequest) {
       faltantesActivosArea,
       faltantesActivosUbicacion,
       faltantesInactivosUbicacion,
+      progresoUbicaciones,
+      faltantesFinales,
     });
     return withAreaCookie(res, area);
   } catch (err) {
@@ -311,6 +351,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    await ensureRecuentoManualSeguroSchema();
     const body = (await req.json()) as {
       action?: unknown;
       area?: unknown;
@@ -333,6 +374,7 @@ export async function POST(req: NextRequest) {
     if (!area) {
       return NextResponse.json({ error: 'Area no seleccionada o no valida.' }, { status: 400 });
     }
+    const sessionId = getRecuentoSessionId(req);
 
     if (action === 'editar-catalogo') {
       if (!isAlmacenArea(area)) {
@@ -451,49 +493,60 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'incorporar-faltantes') {
-      const catalogo = await listMedicamentosByArea(area);
+      return NextResponse.json(
+        { error: 'Los faltantes solo se pueden añadir desde la revisión final del recuento.' },
+        { status: 400 },
+      );
+    }
+
+    if (action === 'completar-manual') {
       const pendiente = await getPendienteRecuento(area);
       if (!pendiente) {
-        return NextResponse.json({ error: 'No hay recuento pendiente en esta area.' }, { status: 404 });
+        return NextResponse.json({ error: 'No hay recuento pendiente en esta área.' }, { status: 404 });
       }
-
-      const ubicacionRaw = String(body.ubicacion ?? '').trim();
-      if (isAlmacenArea(area) && !ubicacionRaw) {
-        return NextResponse.json(
-          { error: 'En Almacén solo se pueden incorporar faltantes de la ubicación de recuento seleccionada.' },
-          { status: 400 }
-        );
-      }
-      if (isAlmacenArea(area) && !ubicacionAlmacenUsaRecuentoStock(ubicacionRaw)) {
-        return NextResponse.json(
-          { error: 'Esta ubicación de Almacén usa cantidades directas a pedir, no recuento de stock.' },
-          { status: 400 }
-        );
-      }
-      const ubicacionesMap = buildUbicacionesMap(catalogo);
-      let ubicacionKey: string | undefined;
-      if (ubicacionRaw) {
-        ubicacionKey = normalizeText(ubicacionRaw);
-        if (!ubicacionesMap.has(ubicacionKey)) {
-          return NextResponse.json({ error: 'Ubicacion no valida para el area seleccionada.' }, { status: 400 });
-        }
-      }
-
-      const { insertadas, totalLineas } = await incorporarFaltantesRecuento(
-        pendiente.id,
-        catalogo,
-        ubicacionKey ? { ubicacionNormalizada: ubicacionKey } : undefined
+      const revisionEsperada = Number(
+        (body as { revision?: unknown }).revision,
       );
-
-      const res = NextResponse.json({
-        ok: true,
-        action: 'incorporar-faltantes',
+      if (!Number.isInteger(revisionEsperada) || revisionEsperada < 0) {
+        return NextResponse.json({ error: 'Revisión de recuento no válida.' }, { status: 400 });
+      }
+      const completado = await completarRecuentoManual({
         importacionId: pendiente.id,
-        insertadas,
-        totalLineas,
-        alcance: ubicacionKey ? 'ubicacion' : 'area',
+        area,
+        revisionEsperada,
+        sessionId,
       });
-      return withAreaCookie(res, area);
+      if (!completado) {
+        return NextResponse.json(
+          {
+            error: 'El recuento cambió mientras se revisaba. Actualiza la revisión final antes de completarlo.',
+          },
+          { status: 409 },
+        );
+      }
+      return withAreaCookie(
+        NextResponse.json({ ok: true, action, ...completado }),
+        area,
+      );
+    }
+
+    if (action === 'reabrir-manual') {
+      const pendiente = await getPendienteRecuento(area);
+      if (!pendiente) {
+        return NextResponse.json({ error: 'No hay recuento pendiente en esta área.' }, { status: 404 });
+      }
+      const reabierto = await reabrirRecuentoManual({
+        importacionId: pendiente.id,
+        area,
+        sessionId,
+      });
+      if (!reabierto) {
+        return NextResponse.json({ error: 'El recuento no estaba completado.' }, { status: 409 });
+      }
+      return withAreaCookie(
+        NextResponse.json({ ok: true, action }),
+        area,
+      );
     }
 
     const ubicacionRaw = String(body.ubicacion ?? '').trim();
@@ -533,12 +586,21 @@ export async function POST(req: NextRequest) {
       cn: string;
       stockUnidades: number;
       stockCajas: number;
+      stockAnteriorEsperado: number | null;
     }> = [];
 
     for (const raw of inputLineas) {
       const cn = String(raw.cn ?? '').trim();
       const cajas = parseNonNegativeInteger(raw.cajas);
       const unidadesSueltas = parseNonNegativeInteger(raw.unidadesSueltas);
+      const tieneStockEsperado = Object.prototype.hasOwnProperty.call(
+        raw,
+        'stockAnteriorEsperado',
+      );
+      const stockAnteriorEsperado =
+        raw.stockAnteriorEsperado == null
+          ? null
+          : parseNonNegativeInteger(raw.stockAnteriorEsperado);
 
       if (!cn) {
         errores.push('Linea sin CN.');
@@ -546,6 +608,13 @@ export async function POST(req: NextRequest) {
       }
       if (cajas == null || unidadesSueltas == null) {
         errores.push(`CN ${cn}: cajas y unidades sueltas deben ser enteros >= 0.`);
+        continue;
+      }
+      if (
+        !tieneStockEsperado ||
+        (raw.stockAnteriorEsperado != null && stockAnteriorEsperado == null)
+      ) {
+        errores.push(`CN ${cn}: falta el valor base necesario para guardar con seguridad.`);
         continue;
       }
 
@@ -571,6 +640,7 @@ export async function POST(req: NextRequest) {
         cn,
         stockUnidades,
         stockCajas,
+        stockAnteriorEsperado,
       });
     }
 
@@ -582,6 +652,12 @@ export async function POST(req: NextRequest) {
     }
 
     const pendiente = await getPendienteRecuento(area);
+    if (pendiente?.manualCompletadoEn) {
+      return NextResponse.json(
+        { error: 'El recuento manual está completado. Reábrelo antes de corregir cantidades.' },
+        { status: 409 },
+      );
+    }
 
     if (!pendiente && preparadas.length === 0) {
       return NextResponse.json(
@@ -590,61 +666,82 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const importacionId =
-      pendiente?.id ??
-      (await crearRecuento({
-        area,
-        origen: 'Manual',
-        fechaRecuento,
-        ficheroNombre: 'APP Recuento Manual',
-        totalLineas: 0,
-      }));
-
-    const existentes = await getLineasRecuento(importacionId);
-    const existentesByCn = new Map(existentes.map((linea) => [linea.cn, linea]));
-
-    let insertadas = 0;
-    let actualizadas = 0;
-    let sinCambios = 0;
-
-    for (const linea of preparadas) {
-      const actual = existentesByCn.get(linea.cn);
-      const stockActual = actual != null
-        ? Math.max(0, Math.round(Number(actual.stockUnidades)))
-        : null;
-
-      if (stockActual !== null && stockActual === linea.stockUnidades) {
-        sinCambios += 1;
-        continue;
+    let importacionId = pendiente?.id ?? null;
+    if (importacionId == null) {
+      try {
+        importacionId = await crearRecuento({
+          area,
+          origen: 'Manual',
+          fechaRecuento,
+          ficheroNombre: 'APP Recuento Manual',
+          totalLineas: 0,
+        });
+      } catch (error) {
+        const concurrente = await getPendienteRecuento(area);
+        if (!concurrente) throw error;
+        importacionId = concurrente.id;
       }
-
-      const result = await upsertLineaRecuento(importacionId, {
-        cn: linea.cn,
-        stockUnidades: linea.stockUnidades,
-        stockCajas: linea.stockCajas,
-        valorTotal: null,
-      });
-      if (result === 'inserted') insertadas += 1;
-      else actualizadas += 1;
     }
 
-    if (insertadas === 0 && actualizadas === 0) {
+    const revisionEsperada = Number(
+      (body as { revision?: unknown }).revision,
+    );
+    if (!Number.isInteger(revisionEsperada) || revisionEsperada < 0) {
+      return NextResponse.json({ error: 'Revisión de recuento no válida.' }, { status: 400 });
+    }
+
+    let guardado;
+    try {
+      guardado = await guardarLineasRecuentoManual({
+        importacionId,
+        area,
+        ubicacion: ubicacionSeleccionada,
+        sessionId,
+        revisionEsperada,
+        lineas: preparadas,
+      });
+    } catch (error) {
+      const codigo = error instanceof Error ? error.message : '';
+      if (
+        codigo === 'CONFLICTO_REVISION_RECUENTO' ||
+        codigo === 'CONFLICTO_LINEAS_RECUENTO'
+      ) {
+        const actual = await getPendienteRecuento(area);
+        return NextResponse.json(
+          {
+            error: actual?.manualCompletadoEn
+              ? 'El recuento acaba de completarse. Reábrelo antes de corregir cantidades.'
+              : 'El recuento cambió en otro dispositivo. Revisa los datos y vuelve a guardar.',
+            revisionActual: actual?.revision ?? null,
+          },
+          { status: 409 },
+        );
+      }
+      throw error;
+    }
+
+    if (guardado.insertadas === 0 && guardado.actualizadas === 0) {
       return NextResponse.json(
         { error: 'No hay cambios para guardar en esta ubicacion.' },
         { status: 400 }
       );
     }
 
-    const totalLineas = await recalcularTotalLineasRecuento(importacionId);
+    const [pendienteActualizado, faltantesUbicacion] = await Promise.all([
+      getPendienteRecuento(area),
+      getFaltantesRecuentoManual(importacionId, area, ubicacionSeleccionada),
+    ]);
 
     const res = NextResponse.json({
       ok: true,
       importacionId,
-      totalLineas,
+      totalLineas: pendienteActualizado?.totalLineas ?? 0,
       ubicacion: ubicacionSeleccionada,
-      insertadas,
-      actualizadas,
-      sinCambios,
+      insertadas: guardado.insertadas,
+      actualizadas: guardado.actualizadas,
+      sinCambios: guardado.sinCambios,
+      revision: guardado.revision,
+      faltantesUbicacion,
     });
     return withAreaCookie(res, area);
   } catch (err) {

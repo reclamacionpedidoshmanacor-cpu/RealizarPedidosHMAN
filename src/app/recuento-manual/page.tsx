@@ -9,12 +9,34 @@ import {
   ubicacionAlmacenUsaLetras,
   ubicacionAlmacenUsaRecuentoStock,
 } from '@/lib/almacen';
+import { cantidadDesdeEntrada, limpiarEntradaCantidad } from '@/lib/recuento-input';
 import { cn, normalizarCnParaCima } from '@/lib/utils';
 import type { AlertaSuministroCn } from '@/lib/pedidos-pendientes';
 import { BadgeSuministro } from '@/components/BadgeSuministro';
 
 /* ─── tipos recuento manual ─── */
-type RecuentoPendiente = { id: number; origen: string; fechaRecuento: string; totalLineas: number } | null;
+type RecuentoPendiente = {
+  id: number;
+  origen: string;
+  fechaRecuento: string;
+  totalLineas: number;
+  revision?: number;
+  manualCompletadoEn?: string | null;
+} | null;
+
+type RecuentoFaltante = {
+  cn: string;
+  principioActivo: string | null;
+  nombre: string;
+  ubicacion: string;
+};
+
+type ProgresoUbicacion = {
+  ubicacion: string;
+  totalActivos: number;
+  registrados: number;
+  faltantes: number;
+};
 
 type MedicamentoManual = {
   cn: string;
@@ -61,6 +83,8 @@ type ApiResponse = {
   faltantesActivosArea?: number;
   faltantesActivosUbicacion?: number;
   faltantesInactivosUbicacion?: number;
+  progresoUbicaciones?: ProgresoUbicacion[];
+  faltantesFinales?: RecuentoFaltante[];
 };
 
 /* ─── tipos reposición (UPE y Oncología) ─── */
@@ -96,7 +120,7 @@ type ReposicionDetalleResponse = {
   lineas: ReposicionDetalleLinea[];
 };
 
-type Step = 'area' | 'ubicacion' | 'letra-almacen' | 'recuento' | 'pedido-almacen' | 'reposicion-ubicacion' | 'reposicion-recuento' | 'reposicion-consulta';
+type Step = 'area' | 'ubicacion' | 'letra-almacen' | 'recuento' | 'recuento-revision' | 'pedido-almacen' | 'reposicion-ubicacion' | 'reposicion-recuento' | 'reposicion-consulta';
 
 type DraftLinea = { cajas: number; unidadesSueltas: number };
 type AlmacenDraftLinea = { cajasPedidas: number };
@@ -196,34 +220,57 @@ function restoreScrollY(y: number) {
   });
 }
 
-function toIntInput(v: string): number {
-  const n = Number(v);
-  if (!Number.isFinite(n) || n < 0) return 0;
-  return Math.trunc(n);
+let fallbackRecuentoSessionId: string | null = null;
+
+function crearRecuentoSessionId(): string {
+  return typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `rec-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function RecuentoCantidadInput({
+function getRecuentoSessionId(): string {
+  const key = 'recuento_manual_session_id';
+  try {
+    const existing = window.localStorage.getItem(key);
+    if (existing) return existing;
+    const created = crearRecuentoSessionId();
+    window.localStorage.setItem(key, created);
+    return created;
+  } catch {
+    fallbackRecuentoSessionId ??= crearRecuentoSessionId();
+    return fallbackRecuentoSessionId;
+  }
+}
+
+function headersRecuentoJson(): HeadersInit {
+  return {
+    'Content-Type': 'application/json',
+    'x-recuento-session': getRecuentoSessionId(),
+  };
+}
+
+function CantidadEnteraInput({
   value,
   onCommit,
   className,
+  min = 0,
+  disabled = false,
 }: {
   value: number;
   onCommit: (n: number) => void;
   className: string;
+  min?: number;
+  disabled?: boolean;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
-  const valueOnFocusRef = useRef(value);
 
   const handleFocus = (e: React.FocusEvent<HTMLInputElement>) => {
-    valueOnFocusRef.current = value;
     setEditing('');
     requestAnimationFrame(() => e.currentTarget.select());
   };
 
   const handleBlur = () => {
     if (editing === null) return;
-    const next = editing === '' ? valueOnFocusRef.current : toIntInput(editing);
-    onCommit(next);
     setEditing(null);
   };
 
@@ -235,8 +282,19 @@ function RecuentoCantidadInput({
       placeholder="0"
       value={editing !== null ? editing : String(value)}
       onFocus={handleFocus}
-      onChange={(e) => setEditing(e.target.value.replace(/\D/g, ''))}
+      onChange={(e) => {
+        const limpio = limpiarEntradaCantidad(e.target.value);
+        if (limpio === '' && e.target.value !== '') return;
+        setEditing(limpio);
+        const cantidad = cantidadDesdeEntrada(limpio, min);
+        if (cantidad != null) onCommit(cantidad);
+      }}
       onBlur={handleBlur}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+        if (e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
+      }}
+      disabled={disabled}
       className={className}
     />
   );
@@ -268,7 +326,8 @@ export default function RecuentoManualPage() {
   const [data, setData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [incorporando, setIncorporando] = useState(false);
+  const [completandoRecuento, setCompletandoRecuento] = useState(false);
+  const [faltantesTrasGuardar, setFaltantesTrasGuardar] = useState<RecuentoFaltante[]>([]);
 
   /* ── estado recuento manual ── */
   const [draft, setDraft] = useState<Record<string, DraftLinea>>({});
@@ -297,15 +356,24 @@ export default function RecuentoManualPage() {
   const [repoBusqueda, setRepoBusqueda] = useState('');
   const [finalizando, setFinalizando] = useState(false);
   const deepLinkHandledRef = useRef(false);
+  const cambiosPendientesRef = useRef(false);
 
   const tableRef = useRef<HTMLDivElement>(null);
   const areaConfig = AREAS.find((a) => a.id === area) ?? AREAS[0];
   const almacenConLetras = ubicacion ? ubicacionAlmacenUsaLetras(ubicacion) : false;
 
+  const confirmarSalidaConCambios = () => {
+    if (!cambiosPendientesRef.current) return true;
+    return window.confirm(
+      'Hay cantidades sin guardar. Si continúas, se perderán los cambios. ¿Salir igualmente?',
+    );
+  };
+
   /* ════════ RECUENTO MANUAL ════════ */
 
   const cargarUbicacion = async (ub: string, letraFiltro?: string | null) => {
     setLoading(true);
+    setFaltantesTrasGuardar([]);
     try {
       const params = new URLSearchParams({ ubicacion: ub });
       if (letraFiltro) params.set('letra', letraFiltro);
@@ -429,6 +497,7 @@ export default function RecuentoManualPage() {
       setRepoLineasByUbicacion({});
       setRepoConsultaElegida('');
       setRepoCrearNuevo(false);
+      setFaltantesTrasGuardar([]);
       setStep('ubicacion');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
@@ -438,6 +507,12 @@ export default function RecuentoManualPage() {
   };
 
   const seleccionarUbicacion = async (ub: string) => {
+    const esUbicacionDeRecuento =
+      area !== 'almacen' || ubicacionAlmacenUsaRecuentoStock(ub);
+    if (esUbicacionDeRecuento && data?.pendiente?.manualCompletadoEn) {
+      toast.info('El recuento está completado. Reábrelo si necesitas corregir cantidades.');
+      return;
+    }
     setUbicacion(ub);
     setExtrasAlmacen([]);
     setSustitucionCnViejo(null);
@@ -491,40 +566,6 @@ export default function RecuentoManualPage() {
       return recuentoLineaCambiada(med, cur, base, Boolean(editadosCn[med.cn]));
     });
   }, [data, draft, baseline, editadosCn]);
-
-  const handleIncorporarFaltantes = async (alcance: 'ubicacion' | 'area') => {
-    if (!data?.pendiente) {
-      toast.error('No hay recuento pendiente.');
-      return;
-    }
-    if (alcance === 'ubicacion' && !ubicacion) return;
-
-    setIncorporando(true);
-    try {
-      const res = await fetch('/api/recuento-manual', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'incorporar-faltantes',
-          ubicacion: alcance === 'ubicacion' ? ubicacion : undefined,
-        }),
-      });
-      const payload = await res.json();
-      if (!res.ok) throw new Error(payload?.error ?? 'No se pudieron incorporar faltantes.');
-      toast.success(`✅ ${payload.insertadas} medicamento(s) añadido(s) con stock 0`);
-      if (alcance === 'ubicacion' && ubicacion) {
-        await cargarUbicacion(ubicacion);
-      } else {
-        const res2 = await fetch('/api/recuento-manual', { cache: 'no-store' });
-        const data2 = (await res2.json()) as ApiResponse;
-        setData(data2);
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Error inesperado');
-    } finally {
-      setIncorporando(false);
-    }
-  };
 
   const medicamentosAlmacenVisibles = useMemo(() => {
     const base = data?.medicamentos ?? [];
@@ -816,6 +857,9 @@ export default function RecuentoManualPage() {
           cn: med.cn,
           cajas: cur.cajas,
           unidadesSueltas: cur.unidadesSueltas,
+          stockAnteriorEsperado: med.registradoEnRecuento
+            ? base.cajas * med.unidadesPorCaja + base.unidadesSueltas
+            : null,
           changed: recuentoLineaCambiada(med, cur, base, Boolean(editadosCn[med.cn])),
         };
       })
@@ -828,17 +872,116 @@ export default function RecuentoManualPage() {
     try {
       const res = await fetch('/api/recuento-manual', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ubicacion, lineas: cambios }),
+        headers: headersRecuentoJson(),
+        body: JSON.stringify({
+          ubicacion,
+          lineas: cambios,
+          revision: data.pendiente?.revision ?? 0,
+        }),
       });
       const payload = await res.json();
-      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo guardar.');
-      toast.success(`✅ Recuento guardado (${payload.insertadas + payload.actualizadas} líneas)`);
+      if (!res.ok) {
+        if (res.status === 409 && Number.isInteger(payload?.revisionActual)) {
+          setData((actual) => actual?.pendiente
+            ? {
+                ...actual,
+                pendiente: { ...actual.pendiente, revision: payload.revisionActual },
+              }
+            : actual);
+        }
+        throw new Error(payload?.error ?? 'No se pudo guardar.');
+      }
       await cargarUbicacion(ubicacion);
+      const faltantes = Array.isArray(payload.faltantesUbicacion)
+        ? payload.faltantesUbicacion as RecuentoFaltante[]
+        : [];
+      setFaltantesTrasGuardar(faltantes);
+      if (faltantes.length > 0) {
+        toast.info(
+          `Recuento guardado. Quedan ${faltantes.length} medicamento(s) sin registrar en esta ubicación.`,
+        );
+      } else {
+        toast.success(`✅ Ubicación completa (${payload.insertadas + payload.actualizadas} líneas guardadas)`);
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const cargarResumenArea = async () => {
+    const url = area === 'almacen'
+      ? '/api/recuento-manual?revision=final'
+      : '/api/recuento-manual';
+    const res = await fetch(url, { cache: 'no-store' });
+    const payload = await res.json() as ApiResponse & { error?: string };
+    if (!res.ok) throw new Error(payload.error ?? 'No se pudo actualizar el recuento.');
+    setData(payload);
+  };
+
+  const abrirRevisionFinal = async () => {
+    if (!confirmarSalidaConCambios()) return;
+    setLoading(true);
+    try {
+      const res = await fetch('/api/recuento-manual?revision=final', { cache: 'no-store' });
+      const payload = await res.json() as ApiResponse & { error?: string };
+      if (!res.ok) throw new Error(payload.error ?? 'No se pudo preparar la revisión final.');
+      if (!payload.pendiente) {
+        throw new Error('No hay un recuento pendiente para completar.');
+      }
+      setData(payload);
+      setStep('recuento-revision');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const completarRecuento = async () => {
+    if (!data?.pendiente) return;
+    setCompletandoRecuento(true);
+    try {
+      const res = await fetch('/api/recuento-manual', {
+        method: 'POST',
+        headers: headersRecuentoJson(),
+        body: JSON.stringify({
+          action: 'completar-manual',
+          revision: data.pendiente.revision ?? 0,
+        }),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo completar el recuento.');
+      await cargarResumenArea();
+      setStep('ubicacion');
+      toast.success(
+        `✅ Recuento completado. ${Number(payload.faltantesAnadidos ?? 0)} faltante(s) añadidos con stock 0.`,
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setCompletandoRecuento(false);
+    }
+  };
+
+  const reabrirRecuento = async () => {
+    if (!data?.pendiente) return;
+    setCompletandoRecuento(true);
+    try {
+      const res = await fetch('/api/recuento-manual', {
+        method: 'POST',
+        headers: headersRecuentoJson(),
+        body: JSON.stringify({ action: 'reabrir-manual' }),
+      });
+      const payload = await res.json();
+      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo reabrir el recuento.');
+      await cargarResumenArea();
+      toast.success('Recuento reabierto para correcciones.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Error inesperado');
+    } finally {
+      setCompletandoRecuento(false);
     }
   };
 
@@ -976,6 +1119,19 @@ export default function RecuentoManualPage() {
     }
     return false;
   }, [repoDraft, repoBaselineDraft]);
+
+  const hayCambiosSinGuardar = hasChanges || almacenHasChanges || repoHasChanges;
+  cambiosPendientesRef.current = hayCambiosSinGuardar;
+
+  useEffect(() => {
+    const avisarAntesDeSalir = (event: BeforeUnloadEvent) => {
+      if (!cambiosPendientesRef.current) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', avisarAntesDeSalir);
+    return () => window.removeEventListener('beforeunload', avisarAntesDeSalir);
+  }, []);
 
   const handleGuardarUbicacionRepo = async () => {
     if (!ubicacion) return;
@@ -1143,7 +1299,9 @@ export default function RecuentoManualPage() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 flex flex-col p-6 gap-6">
         <div className="flex items-center gap-4">
-          <button onClick={() => setStep('area')}
+          <button onClick={() => {
+            if (confirmarSalidaConCambios()) setStep('area');
+          }}
             className="rounded-xl border-2 border-slate-300 bg-white px-5 py-3 text-xl font-bold text-slate-600 shadow-sm hover:bg-slate-50 active:scale-95">
             ← Volver
           </button>
@@ -1153,7 +1311,7 @@ export default function RecuentoManualPage() {
           </div>
         </div>
 
-        {area === 'almacen' ? (
+        {area === 'almacen' && !data?.pendiente ? (
           data?.pedidoDirectoEnCurso ? (
             <div className="rounded-2xl border-2 border-amber-200 bg-amber-50 px-6 py-4">
               <p className="text-lg font-semibold text-amber-800">📦 Pedido directo en curso</p>
@@ -1169,23 +1327,29 @@ export default function RecuentoManualPage() {
             </div>
           )
         ) : data?.pendiente ? (
-          <div className="rounded-2xl border-2 border-teal-200 bg-teal-50 px-6 py-4 space-y-3">
+          <div className={`rounded-2xl border-2 px-6 py-4 space-y-3 ${
+            data.pendiente.manualCompletadoEn
+              ? 'border-emerald-300 bg-emerald-50'
+              : 'border-teal-200 bg-teal-50'
+          }`}>
             <div>
-              <p className="text-lg font-semibold text-teal-700">📂 Recuento en curso: #{data.pendiente.id}</p>
-              <p className="text-base text-teal-600">
+              <p className={`text-lg font-semibold ${
+                data.pendiente.manualCompletadoEn ? 'text-emerald-800' : 'text-teal-700'
+              }`}>
+                {data.pendiente.manualCompletadoEn ? '✓ Recuento manual completado' : `📂 Recuento en curso: #${data.pendiente.id}`}
+              </p>
+              <p className={`text-base ${
+                data.pendiente.manualCompletadoEn ? 'text-emerald-700' : 'text-teal-600'
+              }`}>
                 Fecha: {formatDate(data.pendiente.fechaRecuento)} · {data.pendiente.origen} · {data.pendiente.totalLineas} líneas
               </p>
+              {data.pendiente.manualCompletadoEn && (
+                <button type="button" onClick={() => void reabrirRecuento()} disabled={completandoRecuento}
+                  className="mt-3 rounded-xl border-2 border-emerald-300 bg-white px-4 py-2 text-sm font-bold text-emerald-800 hover:bg-emerald-100 disabled:opacity-50">
+                  Reabrir para corregir
+                </button>
+              )}
             </div>
-            {(data.faltantesActivosArea ?? 0) > 0 && (
-              <button
-                type="button"
-                onClick={() => void handleIncorporarFaltantes('area')}
-                disabled={incorporando}
-                className="w-full rounded-xl border-2 border-teal-400 bg-white px-4 py-3 text-base font-bold text-teal-800 hover:bg-teal-100 active:scale-[0.99] disabled:opacity-50"
-              >
-                {incorporando ? 'Incorporando…' : `➕ Añadir ${data.faltantesActivosArea} activo(s) faltante(s) con stock 0`}
-              </button>
-            )}
           </div>
         ) : (
           <div className="rounded-2xl border-2 border-amber-200 bg-amber-50 px-6 py-4">
@@ -1207,6 +1371,9 @@ export default function RecuentoManualPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {ubicaciones.map((ub) => {
                 const usaRecuentoStock = area === 'almacen' && ubicacionAlmacenUsaRecuentoStock(ub);
+                const progreso = data?.progresoUbicaciones?.find(
+                  (item) => normalizeAlmacenText(item.ubicacion) === normalizeAlmacenText(ub),
+                );
                 return (
                   <button key={ub} onClick={() => void seleccionarUbicacion(ub)}
                     className="rounded-2xl border-2 border-slate-300 bg-white px-6 py-6 text-left text-2xl font-bold text-slate-700 shadow-sm hover:border-teal-400 hover:bg-teal-50 hover:text-teal-700 active:scale-95 transition-all">
@@ -1220,12 +1387,31 @@ export default function RecuentoManualPage() {
                           : 'Pedido directo · cantidad a pedir'}
                       </span>
                     )}
+                    {progreso && (
+                      <span className={`mt-2 block text-sm font-semibold ${
+                        progreso.faltantes === 0 ? 'text-emerald-700' : 'text-amber-700'
+                      }`}>
+                        {progreso.faltantes === 0
+                          ? `✓ Completa · ${progreso.registrados}/${progreso.totalActivos}`
+                          : `${progreso.registrados}/${progreso.totalActivos} registrados · ${progreso.faltantes} pendientes`}
+                      </span>
+                    )}
                   </button>
                 );
               })}
             </div>
           )}
         </div>
+
+        {((area !== 'almacen' && data?.pendiente) || area === 'almacen') && (
+          <div className="pt-4 border-t-2 border-slate-200">
+            <button type="button" onClick={() => void abrirRevisionFinal()}
+              disabled={loading || Boolean(data?.pendiente?.manualCompletadoEn)}
+              className="w-full rounded-2xl bg-teal-700 px-6 py-5 text-xl font-extrabold text-white hover:bg-teal-800 active:scale-95 disabled:opacity-40">
+              Revisar y completar recuento
+            </button>
+          </div>
+        )}
 
         {/* Pedido interno a Farmacia */}
         {(area === 'upe' || area === 'oncologia') && (
@@ -1251,7 +1437,9 @@ export default function RecuentoManualPage() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-amber-50 to-orange-50 flex flex-col p-6 gap-6">
         <div className="flex items-center gap-4">
-          <button onClick={() => setStep('ubicacion')}
+          <button onClick={() => {
+            if (confirmarSalidaConCambios()) setStep('ubicacion');
+          }}
             className="rounded-xl border-2 border-slate-300 bg-white px-5 py-3 text-xl font-bold text-slate-600 shadow-sm hover:bg-slate-50 active:scale-95">
             ← Volver
           </button>
@@ -1296,7 +1484,11 @@ export default function RecuentoManualPage() {
       <div className="min-h-screen bg-amber-50 flex flex-col pb-40" ref={tableRef}>
         <div className="sticky top-0 z-20 bg-white border-b-2 border-amber-200 shadow-sm px-4 py-3 flex items-center gap-3 flex-wrap">
           <button
-            onClick={() => setStep(almacenConLetras ? 'letra-almacen' : 'ubicacion')}
+            onClick={() => {
+              if (confirmarSalidaConCambios()) {
+                setStep(almacenConLetras ? 'letra-almacen' : 'ubicacion');
+              }
+            }}
             className="rounded-xl border-2 border-slate-300 bg-white px-4 py-2 text-lg font-bold text-slate-600 hover:bg-slate-50 active:scale-95"
           >
             {almacenConLetras ? '← Letra' : '← Ubicaciones'}
@@ -1353,6 +1545,7 @@ export default function RecuentoManualPage() {
                         )}
                         <AlmacenMedCard
                           med={med}
+                          saving={saving}
                           cantidadCajas={qty}
                           changed={changed}
                           index={presentacionIndex}
@@ -1423,6 +1616,89 @@ export default function RecuentoManualPage() {
     );
   }
 
+  /* ── Revisión final del recuento manual ── */
+  if (step === 'recuento-revision') {
+    const faltantes = data?.faltantesFinales ?? [];
+    const porUbicacion = new Map<string, RecuentoFaltante[]>();
+    for (const item of faltantes) {
+      const key = item.ubicacion || 'Sin ubicación';
+      const lista = porUbicacion.get(key) ?? [];
+      lista.push(item);
+      porUbicacion.set(key, lista);
+    }
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col p-6 gap-6">
+        <div className="flex items-center gap-4">
+          <button type="button" onClick={() => setStep('ubicacion')}
+            className="rounded-xl border-2 border-slate-300 bg-white px-5 py-3 text-xl font-bold text-slate-600 hover:bg-slate-50">
+            ← Volver
+          </button>
+          <div>
+            <p className="text-base font-semibold text-teal-600">{areaConfig.label}</p>
+            <h2 className="text-3xl font-extrabold text-slate-800">Revisión final del recuento</h2>
+          </div>
+        </div>
+
+        <div className={`rounded-2xl border-2 px-6 py-5 ${
+          faltantes.length > 0
+            ? 'border-amber-300 bg-amber-50'
+            : 'border-emerald-300 bg-emerald-50'
+        }`}>
+          <p className={`text-2xl font-extrabold ${
+            faltantes.length > 0 ? 'text-amber-800' : 'text-emerald-800'
+          }`}>
+            {faltantes.length > 0
+              ? `${faltantes.length} medicamento(s) sin registrar`
+              : 'Todos los medicamentos activos están registrados'}
+          </p>
+          <p className="mt-2 text-base text-slate-600">
+            {faltantes.length > 0
+              ? 'Puedes volver a contarlos o confirmar que los restantes se registren con stock 0.'
+              : 'El recuento está listo para marcarse como completado.'}
+          </p>
+        </div>
+
+        {faltantes.length > 0 && (
+          <div className="space-y-4">
+            {[...porUbicacion.entries()].map(([ub, items]) => (
+              <section key={ub} className="rounded-2xl border-2 border-slate-200 bg-white p-5">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-xl font-extrabold text-slate-800">{ub}</h3>
+                  <button type="button" onClick={() => void seleccionarUbicacion(ub)}
+                    className="rounded-xl border-2 border-teal-300 px-4 py-2 text-sm font-bold text-teal-700 hover:bg-teal-50">
+                    Ir a contar
+                  </button>
+                </div>
+                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {items.map((item) => (
+                    <p key={item.cn} className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                      <strong>{item.principioActivo ?? item.nombre}</strong>
+                      <span className="block text-slate-500">CN {item.cn} · {item.nombre}</span>
+                    </p>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        )}
+
+        <button type="button" onClick={() => {
+          const mensaje = faltantes.length > 0
+            ? `Se añadirán ${faltantes.length} medicamento(s) con stock 0. ¿Completar el recuento?`
+            : '¿Marcar el recuento manual como completado?';
+          if (window.confirm(mensaje)) void completarRecuento();
+        }} disabled={completandoRecuento}
+          className="w-full rounded-2xl bg-teal-700 px-6 py-5 text-xl font-extrabold text-white hover:bg-teal-800 disabled:opacity-50">
+          {completandoRecuento
+            ? 'Completando…'
+            : faltantes.length > 0
+              ? `Añadir ${faltantes.length} como stock 0 y completar`
+              : 'Completar recuento'}
+        </button>
+      </div>
+    );
+  }
+
   /* ── PASO 3: Recuento de medicamentos ── */
   if (step === 'recuento') {
     const medicamentos = data?.medicamentos ?? [];
@@ -1431,7 +1707,9 @@ export default function RecuentoManualPage() {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col pb-36" ref={tableRef}>
         <div className="sticky top-0 z-20 bg-white border-b-2 border-slate-200 shadow-sm px-4 py-3 flex items-center gap-3 flex-wrap">
-          <button onClick={() => setStep('ubicacion')}
+          <button onClick={() => {
+            if (confirmarSalidaConCambios()) setStep('ubicacion');
+          }}
             className="rounded-xl border-2 border-slate-300 bg-white px-4 py-2 text-lg font-bold text-slate-600 hover:bg-slate-50 active:scale-95">
             ← Ubicación
           </button>
@@ -1457,6 +1735,29 @@ export default function RecuentoManualPage() {
             </div>
           ) : (
             <>
+              {faltantesTrasGuardar.length > 0 && (
+                <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 px-5 py-4">
+                  <p className="text-lg font-extrabold text-amber-800">
+                    Recuento guardado · quedan {faltantesTrasGuardar.length} sin registrar
+                  </p>
+                  <p className="mt-1 text-sm text-amber-700">
+                    Revisa si se han omitido antes de salir de esta ubicación.
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {faltantesTrasGuardar.slice(0, 12).map((item) => (
+                      <span key={item.cn}
+                        className="rounded-lg bg-white px-3 py-1 text-sm font-semibold text-amber-800 border border-amber-200">
+                        {item.principioActivo ?? item.nombre} · CN {item.cn}
+                      </span>
+                    ))}
+                    {faltantesTrasGuardar.length > 12 && (
+                      <span className="px-2 py-1 text-sm font-semibold text-amber-700">
+                        y {faltantesTrasGuardar.length - 12} más
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-base text-slate-500 font-semibold">
                   {nActivos} activo{nActivos !== 1 ? 's' : ''}
@@ -1467,23 +1768,13 @@ export default function RecuentoManualPage() {
                     </span>
                   )}
                 </p>
-                {(data?.faltantesActivosUbicacion ?? 0) > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => void handleIncorporarFaltantes('ubicacion')}
-                    disabled={incorporando}
-                    className="rounded-xl border-2 border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 active:scale-95 disabled:opacity-50"
-                  >
-                    {incorporando ? '…' : `➕ ${data?.faltantesActivosUbicacion} faltante(s) → stock 0`}
-                  </button>
-                )}
               </div>
               {medicamentos.map((med, idx) => {
                 const val = draft[med.cn] ?? { cajas: 0, unidadesSueltas: 0 };
                 const base = baseline[med.cn] ?? { cajas: 0, unidadesSueltas: 0 };
                 const changed = recuentoLineaCambiada(med, val, base, Boolean(editadosCn[med.cn]));
                 return (
-                  <MedCard key={med.cn} med={med} val={val} changed={changed}
+                  <MedCard key={med.cn} med={med} val={val} changed={changed} saving={saving}
                     index={idx + 1} total={medicamentos.length}
                     onChange={(patch) => setLinea(med.cn, patch)} />
                 );
@@ -1520,6 +1811,7 @@ export default function RecuentoManualPage() {
       <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 flex flex-col p-6 gap-6">
         <div className="flex items-center gap-4">
           <button onClick={() => {
+            if (!confirmarSalidaConCambios()) return;
             setRepoBorrador(null);
             setRepoConsultaElegida('');
             setRepoCrearNuevo(false);
@@ -1598,7 +1890,9 @@ export default function RecuentoManualPage() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-orange-50 to-amber-50 flex flex-col p-6 gap-6">
         <div className="flex items-center gap-4">
-          <button onClick={() => setStep('ubicacion')}
+          <button onClick={() => {
+            if (confirmarSalidaConCambios()) setStep('ubicacion');
+          }}
             className="rounded-xl border-2 border-slate-300 bg-white px-5 py-3 text-xl font-bold text-slate-600 shadow-sm hover:bg-slate-50 active:scale-95">
             ← Volver
           </button>
@@ -1686,7 +1980,9 @@ export default function RecuentoManualPage() {
     return (
       <div className="min-h-screen bg-orange-50 flex flex-col pb-40">
         <div className="sticky top-0 z-20 bg-white border-b-2 border-orange-200 shadow-sm px-4 py-3 flex items-center gap-3 flex-wrap">
-          <button onClick={() => setStep('reposicion-ubicacion')}
+          <button onClick={() => {
+            if (confirmarSalidaConCambios()) setStep('reposicion-ubicacion');
+          }}
             className="rounded-xl border-2 border-slate-300 bg-white px-4 py-2 text-lg font-bold text-slate-600 hover:bg-slate-50 active:scale-95">
             ← Ubicaciones
           </button>
@@ -1732,6 +2028,7 @@ export default function RecuentoManualPage() {
               const overMax = med.stockMaximo != null && qty > med.stockMaximo;
               return (
                 <RepoMedCard key={med.id} med={med} cantidadCajas={qty} changed={changed} overMax={overMax}
+                  saving={saving}
                   index={idx + 1} total={medicamentos.length}
                   onChange={(v) => setRepoDraft((prev) => ({ ...prev, [key]: { cantidadCajas: v } }))} />
               );
@@ -1769,10 +2066,11 @@ export default function RecuentoManualPage() {
 
 /* ════════════════ Tarjeta de medicamento — recuento manual ════════════════ */
 function MedCard({
-  med, val, changed, index, total, onChange,
+  med, val, changed, index, total, onChange, saving,
 }: {
   med: MedicamentoManual; val: DraftLinea; changed: boolean;
   index: number; total: number; onChange: (patch: Partial<DraftLinea>) => void;
+  saving: boolean;
 }) {
   const inactivo = med.activo === false;
   return (
@@ -1821,9 +2119,10 @@ function MedCard({
         /* Múltiplo 1: solo cajas, a pantalla completa */
         <div className="space-y-1">
           <label className="block text-sm font-bold text-slate-600 uppercase tracking-wider">📦 Cajas</label>
-          <RecuentoCantidadInput
+          <CantidadEnteraInput
             value={val.cajas}
             onCommit={(cajas) => onChange({ cajas })}
+            disabled={saving}
             className="w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-3xl font-bold text-center text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
           />
         </div>
@@ -1832,17 +2131,19 @@ function MedCard({
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-1">
             <label className="block text-sm font-bold text-slate-600 uppercase tracking-wider">📦 Cajas</label>
-            <RecuentoCantidadInput
+            <CantidadEnteraInput
               value={val.cajas}
               onCommit={(cajas) => onChange({ cajas })}
+              disabled={saving}
               className="w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-3xl font-bold text-center text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
             />
           </div>
           <div className="space-y-1">
             <label className="block text-sm font-bold text-slate-600 uppercase tracking-wider">💊 Uds. sueltas</label>
-            <RecuentoCantidadInput
+            <CantidadEnteraInput
               value={val.unidadesSueltas}
               onCommit={(unidadesSueltas) => onChange({ unidadesSueltas })}
+              disabled={saving}
               className="w-full rounded-xl border-2 border-slate-300 px-4 py-4 text-3xl font-bold text-center text-slate-800 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-200"
             />
             <p className="text-sm text-slate-400 text-center">(1 caja = {med.unidadesPorCaja} udes)</p>
@@ -2160,13 +2461,10 @@ function SustituirPorPanel({
       )}
       <div className="space-y-1">
         <label className="block text-sm font-bold text-violet-800">📦 Cajas a pedir del nuevo CN</label>
-        <input
-          type="number"
-          inputMode="numeric"
-          min={0}
-          value={cajas === 0 ? '' : cajas}
-          placeholder="0"
-          onChange={(e) => setCajas(toIntInput(e.target.value))}
+        <CantidadEnteraInput
+          value={cajas}
+          onCommit={setCajas}
+          disabled={busy}
           className="w-full rounded-xl border-2 border-violet-200 px-4 py-3 text-2xl font-bold text-center"
         />
       </div>
@@ -2209,11 +2507,12 @@ function SustituirPorPanel({
 
 /* ════════════════ Tarjeta de medicamento — pedido almacén ════════════════ */
 function AlmacenMedCard({
-  med, cantidadCajas, changed, index, total, onChange, onEditar, onSustituir, onToggleActivo, inactivando,
+  med, cantidadCajas, changed, index, total, onChange, onEditar, onSustituir, onToggleActivo, inactivando, saving,
   edicionAbierta, sustitucionAbierta,
 }: {
   med: MedicamentoManual; cantidadCajas: number; changed: boolean;
   index: number; total: number; onChange: (v: number) => void;
+  saving: boolean;
   onEditar?: () => void;
   onSustituir?: () => void;
   onToggleActivo?: () => void;
@@ -2297,14 +2596,10 @@ function AlmacenMedCard({
 
       <div className="space-y-1">
         <label className="block text-sm font-bold text-amber-700 uppercase tracking-wider">📦 Cajas a pedir</label>
-        <input
-          type="number"
-          inputMode="numeric"
-          min={0}
-          step={1}
-          value={cantidadCajas === 0 ? '' : cantidadCajas}
-          placeholder="0"
-          onChange={(e) => onChange(toIntInput(e.target.value))}
+        <CantidadEnteraInput
+          value={cantidadCajas}
+          onCommit={onChange}
+          disabled={saving}
           className="w-full rounded-xl border-2 border-slate-300 px-4 py-3 text-2xl font-bold text-center text-slate-800 focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-200 bg-white"
         />
         {med.unidadesPorCaja > 0 ? (
@@ -2348,11 +2643,12 @@ function AlmacenMedCard({
 
 /* ════════════════ Tarjeta de medicamento — reposición ════════════════ */
 function RepoMedCard({
-  med, cantidadCajas, changed, overMax, index, total, onChange,
+  med, cantidadCajas, changed, overMax, index, total, onChange, saving,
 }: {
   med: ReposicionCatalogoItem; cantidadCajas: number; changed: boolean;
   overMax: boolean;
   index: number; total: number; onChange: (v: number) => void;
+  saving: boolean;
 }) {
   return (
     <div className={`rounded-2xl border-2 bg-white px-5 py-4 shadow-sm transition-all ${
@@ -2387,9 +2683,10 @@ function RepoMedCard({
         <label className={`block text-sm font-bold uppercase tracking-wider ${
           overMax ? 'text-rose-600' : changed ? 'text-emerald-600' : 'text-orange-600'
         }`}>📦 {med.unidadPedido === 'unidades' ? 'Unidades' : 'Cajas'} a pedir</label>
-        <input type="number" inputMode="numeric" min={0} step={1}
-          value={cantidadCajas === 0 ? '' : cantidadCajas} placeholder="0"
-          onChange={(e) => onChange(toIntInput(e.target.value))}
+        <CantidadEnteraInput
+          value={cantidadCajas}
+          onCommit={onChange}
+          disabled={saving}
           className={`w-full rounded-xl border-2 px-4 py-4 text-3xl font-bold text-center focus:outline-none focus:ring-2 ${
             overMax
               ? 'border-rose-300 text-rose-700 focus:border-rose-500 focus:ring-rose-200'
