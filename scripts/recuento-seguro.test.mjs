@@ -66,6 +66,16 @@ test('completar no pone a cero las ubicaciones no iniciadas', async () => {
   assert.match(page, /ubicaciones ya contadas/);
 });
 
+test('tramitar todas las ubicaciones cierra el recuento en Stock', async () => {
+  const source = await readFile(
+    new URL('../src/lib/stock-propuesta-neon.ts', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /AND estado IN \('pendiente', 'procesando-stock', 'validado'\)/);
+  assert.match(source, /recuentoTieneTodosLosBloquesTramitados/);
+  assert.match(source, /marcarRecuentoComoGenerado/);
+});
+
 test('la persistencia serializa y detecta concurrencia', async () => {
   const source = await readFile(
     new URL('../src/lib/stock-propuesta-neon.ts', import.meta.url),

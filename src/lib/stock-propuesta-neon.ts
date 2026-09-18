@@ -1262,10 +1262,15 @@ async function marcarRecuentoComoGenerado(
   const sql = getDb();
   const rows = (await sql`
     UPDATE importaciones_stock
-    SET estado = 'generado', generado_en = now(), propuesta_id = ${propuestaId}
+    SET
+      estado = 'generado',
+      generado_en = now(),
+      propuesta_id = ${propuestaId},
+      manual_completado_en = COALESCE(manual_completado_en, now())
     WHERE id = ${importacionId}
       AND area = ${area}
-      AND estado = 'procesando-stock'
+      AND origen <> ${ORIGEN_PEDIDO_ALMACEN}
+      AND estado IN ('pendiente', 'procesando-stock', 'validado')
     RETURNING id;
   `) as Array<{ id: number }>;
   return rows.length > 0;
@@ -2399,13 +2404,11 @@ export async function tramitarPropuesta(
     WHERE id = ${propuestaId};
   `;
 
-  const recuentoGenerado = area
-    ? await recuentoTieneTodosLosBloquesTramitados(area, importacionStockId)
-    : false;
-
-  if (recuentoGenerado && area) {
-    await marcarRecuentoComoGenerado(importacionStockId, area, propuestaId);
-  }
+  const recuentoGenerado = Boolean(
+    area &&
+      (await recuentoTieneTodosLosBloquesTramitados(area, importacionStockId)) &&
+      (await marcarRecuentoComoGenerado(importacionStockId, area, propuestaId)),
+  );
 
   return { recuentoGenerado };
 }
