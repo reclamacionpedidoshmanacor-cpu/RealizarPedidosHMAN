@@ -60,7 +60,8 @@ test('completar no pone a cero las ubicaciones no iniciadas', async () => {
   );
   assert.match(source, /ubicaciones_iniciadas/);
   assert.match(source, /getCierreRecuentoManual/);
-  assert.match(source, /ubi_key IN \(SELECT ubi_key FROM ubicaciones_iniciadas\)/);
+  assert.match(source, /FROM ubicaciones_iniciadas ui WHERE ui\.ubi_key = cp\.ubi_key/);
+  assert.match(source, /cabecera AS MATERIALIZED/);
   assert.match(page, /Ubicaciones no contadas/);
   assert.match(page, /ubicaciones ya contadas/);
 });

@@ -526,9 +526,25 @@ export async function POST(req: NextRequest) {
         sessionId,
       });
       if (!completado) {
+        const actual = await getPendienteRecuento(area);
+        if (actual?.manualCompletadoEn) {
+          const cierre = await getCierreRecuentoManual(actual.id, area);
+          return withAreaCookie(
+            NextResponse.json({
+              ok: true,
+              action,
+              completadoEn: actual.manualCompletadoEn,
+              faltantesAnadidos: 0,
+              ubicacionesExcluidas: cierre.ubicacionesExcluidas.length,
+              revision: actual.revision ?? 0,
+            }),
+            area,
+          );
+        }
         return NextResponse.json(
           {
             error: 'El recuento cambió mientras se revisaba. Actualiza la revisión final antes de completarlo.',
+            revision: actual?.revision ?? null,
           },
           { status: 409 },
         );

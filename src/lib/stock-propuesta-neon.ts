@@ -467,11 +467,9 @@ export async function completarRecuentoManual(params: {
     [...ALMACEN_UBICACIONES_RECUENTO_STOCK].map(normalizeUbicacionKey),
   );
   const rows = await sql`
-    WITH completado AS (
-      UPDATE importaciones_stock
-      SET manual_completado_en = NOW(),
-          manual_completado_session = ${params.sessionId},
-          revision_manual = revision_manual + 1
+    WITH cabecera AS MATERIALIZED (
+      SELECT id
+      FROM importaciones_stock
       WHERE id = ${params.importacionId}
         AND area = ${params.area}
         AND estado = 'pendiente'
@@ -481,7 +479,7 @@ export async function completarRecuentoManual(params: {
           SELECT 1 FROM stock_registros sr
           WHERE sr.importacion_id = importaciones_stock.id
         )
-      RETURNING id, manual_completado_en, revision_manual
+      FOR UPDATE
     ),
     ubicaciones_iniciadas AS (
       SELECT DISTINCT TRANSLATE(
@@ -491,7 +489,7 @@ export async function completarRecuentoManual(params: {
       ) AS ubi_key
       FROM stock_registros sr
       INNER JOIN medicamentos m ON m.cn = sr.cn AND m.area = ${params.area}
-      INNER JOIN completado c ON c.id = sr.importacion_id
+      INNER JOIN cabecera c ON c.id = sr.importacion_id
     ),
     catalogo_pendiente AS (
       SELECT
@@ -502,7 +500,7 @@ export async function completarRecuentoManual(params: {
           'áéíóúüñ',
           'aeiouun'
         ) AS ubi_key
-      FROM medicamentos m, completado c
+      FROM medicamentos m, cabecera c
       WHERE m.area = ${params.area}
         AND m.activo = TRUE
         AND (
@@ -523,7 +521,9 @@ export async function completarRecuentoManual(params: {
     faltantes AS (
       SELECT cp.cn, cp.ubicacion
       FROM catalogo_pendiente cp
-      WHERE cp.ubi_key IN (SELECT ubi_key FROM ubicaciones_iniciadas)
+      WHERE EXISTS (
+        SELECT 1 FROM ubicaciones_iniciadas ui WHERE ui.ubi_key = cp.ubi_key
+      )
     ),
     excluidas AS (
       SELECT DISTINCT cp.ubi_key
@@ -535,7 +535,7 @@ export async function completarRecuentoManual(params: {
     insertadas AS (
       INSERT INTO stock_registros (importacion_id, cn, stock_unidades, stock_cajas, valor_total)
       SELECT c.id, f.cn, 0, 0, NULL
-      FROM faltantes f, completado c
+      FROM faltantes f, cabecera c
       ON CONFLICT (importacion_id, cn) DO NOTHING
       RETURNING cn
     ),
@@ -546,29 +546,33 @@ export async function completarRecuentoManual(params: {
       SELECT
         c.id, ${params.area}, f.ubicacion, f.cn,
         NULL, 0, 'faltantes_finales', ${params.sessionId}
-      FROM faltantes f, completado c
+      FROM faltantes f, cabecera c
       WHERE f.cn IN (SELECT cn FROM insertadas)
       RETURNING id
     ),
-    totales AS (
+    completado AS (
       UPDATE importaciones_stock i
-      SET total_lineas = (
-            SELECT COUNT(DISTINCT sr.cn)::int
-            FROM stock_registros sr
-            WHERE sr.importacion_id = i.id
-          ) + (SELECT COUNT(*)::int FROM insertadas)
-      WHERE i.id IN (SELECT id FROM completado)
+      SET
+        manual_completado_en = NOW(),
+        manual_completado_session = ${params.sessionId},
+        revision_manual = revision_manual + 1,
+        total_lineas = (
+          SELECT COUNT(DISTINCT sr.cn)::int
+          FROM stock_registros sr
+          WHERE sr.importacion_id = i.id
+        ) + (SELECT COUNT(*)::int FROM insertadas)
+      WHERE i.id IN (SELECT id FROM cabecera)
       RETURNING manual_completado_en::text, revision_manual
     )
     SELECT
-      t.manual_completado_en,
-      t.revision_manual,
+      c.manual_completado_en,
+      c.revision_manual,
       (SELECT COUNT(*)::int FROM insertadas) AS faltantes_anadidos,
-      (SELECT COUNT(*)::int FROM auditoria) AS auditadas,
-      (SELECT COUNT(*)::int FROM excluidas) AS ubicaciones_excluidas
-    FROM totales t
+      (SELECT COUNT(*)::int FROM excluidas) AS ubicaciones_excluidas,
+      (SELECT COUNT(*)::int FROM cabecera) AS disponible
+    FROM completado c
   `;
-  if (!rows[0]) return null;
+  if (!rows[0] || num(rows[0].disponible) === 0) return null;
   return {
     completadoEn: String(rows[0].manual_completado_en),
     faltantesAnadidos: num(rows[0].faltantes_anadidos),

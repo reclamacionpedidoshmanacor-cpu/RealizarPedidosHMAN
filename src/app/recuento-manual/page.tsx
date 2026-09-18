@@ -949,16 +949,38 @@ export default function RecuentoManualPage() {
     if (!data?.pendiente) return;
     setCompletandoRecuento(true);
     try {
+      const previa = await fetch('/api/recuento-manual?revision=final', { cache: 'no-store' });
+      const previaPayload = await previa.json() as ApiResponse & { error?: string };
+      if (!previa.ok) throw new Error(previaPayload.error ?? 'No se pudo actualizar la revisión final.');
+      if (!previaPayload.pendiente) {
+        throw new Error('No hay un recuento pendiente para completar.');
+      }
+      if (previaPayload.pendiente.manualCompletadoEn) {
+        setData(previaPayload);
+        setStep('ubicacion');
+        toast.success('✅ El recuento ya estaba completado.');
+        return;
+      }
+      setData(previaPayload);
+
       const res = await fetch('/api/recuento-manual', {
         method: 'POST',
         headers: headersRecuentoJson(),
         body: JSON.stringify({
           action: 'completar-manual',
-          revision: data.pendiente.revision ?? 0,
+          area,
+          revision: previaPayload.pendiente.revision ?? 0,
         }),
       });
       const payload = await res.json();
-      if (!res.ok) throw new Error(payload?.error ?? 'No se pudo completar el recuento.');
+      if (!res.ok) {
+        if (res.status === 409) {
+          const actualizada = await fetch('/api/recuento-manual?revision=final', { cache: 'no-store' });
+          const actualizadaPayload = await actualizada.json() as ApiResponse;
+          if (actualizada.ok) setData(actualizadaPayload);
+        }
+        throw new Error(payload?.error ?? 'No se pudo completar el recuento.');
+      }
       await cargarResumenArea();
       setStep('ubicacion');
       const cero = Number(payload.faltantesAnadidos ?? 0);
