@@ -22,6 +22,7 @@ import {
   completarRecuentoManual,
   eliminarLineaPedidoAlmacenPorCnEnSesion,
   ensureRecuentoManualSeguroSchema,
+  getCierreRecuentoManual,
   getFaltantesRecuentoManual,
   getCantidadesPedidoAlmacenParaVista,
   getLineasRecuento,
@@ -324,9 +325,9 @@ export async function GET(req: NextRequest) {
       })
       .sort((a, b) => a.ubicacion.localeCompare(b.ubicacion, 'es', { sensitivity: 'base' }));
 
-    const faltantesFinales =
+    const cierreRecuento =
       revisionFinal && pendiente
-        ? await getFaltantesRecuentoManual(pendiente.id, area)
+        ? await getCierreRecuentoManual(pendiente.id, area)
         : undefined;
 
     const res = NextResponse.json({
@@ -340,7 +341,8 @@ export async function GET(req: NextRequest) {
       faltantesActivosUbicacion,
       faltantesInactivosUbicacion,
       progresoUbicaciones,
-      faltantesFinales,
+      faltantesFinales: cierreRecuento?.faltantesACero,
+      ubicacionesExcluidas: cierreRecuento?.ubicacionesExcluidas,
     });
     return withAreaCookie(res, area);
   } catch (err) {
@@ -509,6 +511,13 @@ export async function POST(req: NextRequest) {
       );
       if (!Number.isInteger(revisionEsperada) || revisionEsperada < 0) {
         return NextResponse.json({ error: 'Revisión de recuento no válida.' }, { status: 400 });
+      }
+      const lineasRegistradas = await getLineasRecuento(pendiente.id);
+      if (lineasRegistradas.length === 0) {
+        return NextResponse.json(
+          { error: 'No se puede completar un recuento sin ninguna ubicación contada.' },
+          { status: 400 },
+        );
       }
       const completado = await completarRecuentoManual({
         importacionId: pendiente.id,

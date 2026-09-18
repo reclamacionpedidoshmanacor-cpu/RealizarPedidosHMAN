@@ -38,6 +38,11 @@ type ProgresoUbicacion = {
   faltantes: number;
 };
 
+type UbicacionExcluida = {
+  ubicacion: string;
+  totalActivos: number;
+};
+
 type MedicamentoManual = {
   cn: string;
   principioActivo: string | null;
@@ -85,6 +90,7 @@ type ApiResponse = {
   faltantesInactivosUbicacion?: number;
   progresoUbicaciones?: ProgresoUbicacion[];
   faltantesFinales?: RecuentoFaltante[];
+  ubicacionesExcluidas?: UbicacionExcluida[];
 };
 
 /* ─── tipos reposición (UPE y Oncología) ─── */
@@ -955,8 +961,15 @@ export default function RecuentoManualPage() {
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo completar el recuento.');
       await cargarResumenArea();
       setStep('ubicacion');
+      const cero = Number(payload.faltantesAnadidos ?? 0);
+      const excluidas = Number(payload.ubicacionesExcluidas ?? 0);
+      const extraExcluidas = excluidas > 0
+        ? ` ${excluidas} ubicación(es) no contada(s) quedan fuera de este recuento.`
+        : '';
       toast.success(
-        `✅ Recuento completado. ${Number(payload.faltantesAnadidos ?? 0)} faltante(s) añadidos con stock 0.`,
+        cero > 0
+          ? `✅ Recuento completado. ${cero} faltante(s) añadidos con stock 0.${extraExcluidas}`
+          : `✅ Recuento completado.${extraExcluidas}`,
       );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
@@ -1387,13 +1400,19 @@ export default function RecuentoManualPage() {
                           : 'Pedido directo · cantidad a pedir'}
                       </span>
                     )}
-                    {progreso && (
+                    {progreso && progreso.totalActivos > 0 && (
                       <span className={`mt-2 block text-sm font-semibold ${
-                        progreso.faltantes === 0 ? 'text-emerald-700' : 'text-amber-700'
+                        progreso.registrados === 0
+                          ? 'text-slate-500'
+                          : progreso.faltantes === 0
+                            ? 'text-emerald-700'
+                            : 'text-amber-700'
                       }`}>
-                        {progreso.faltantes === 0
-                          ? `✓ Completa · ${progreso.registrados}/${progreso.totalActivos}`
-                          : `${progreso.registrados}/${progreso.totalActivos} registrados · ${progreso.faltantes} pendientes`}
+                        {progreso.registrados === 0
+                          ? `Sin contar · ${progreso.totalActivos} medicamentos`
+                          : progreso.faltantes === 0
+                            ? `✓ Completa · ${progreso.registrados}/${progreso.totalActivos}`
+                            : `${progreso.registrados}/${progreso.totalActivos} registrados · ${progreso.faltantes} pendientes`}
                       </span>
                     )}
                   </button>
@@ -1619,6 +1638,7 @@ export default function RecuentoManualPage() {
   /* ── Revisión final del recuento manual ── */
   if (step === 'recuento-revision') {
     const faltantes = data?.faltantesFinales ?? [];
+    const excluidas = data?.ubicacionesExcluidas ?? [];
     const porUbicacion = new Map<string, RecuentoFaltante[]>();
     for (const item of faltantes) {
       const key = item.ubicacion || 'Sin ubicación';
@@ -1626,6 +1646,8 @@ export default function RecuentoManualPage() {
       lista.push(item);
       porUbicacion.set(key, lista);
     }
+    const hayPendientesContados = faltantes.length > 0;
+    const hayExcluidas = excluidas.length > 0;
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col p-6 gap-6">
         <div className="flex items-center gap-4">
@@ -1640,28 +1662,33 @@ export default function RecuentoManualPage() {
         </div>
 
         <div className={`rounded-2xl border-2 px-6 py-5 ${
-          faltantes.length > 0
+          hayPendientesContados
             ? 'border-amber-300 bg-amber-50'
             : 'border-emerald-300 bg-emerald-50'
         }`}>
           <p className={`text-2xl font-extrabold ${
-            faltantes.length > 0 ? 'text-amber-800' : 'text-emerald-800'
+            hayPendientesContados ? 'text-amber-800' : 'text-emerald-800'
           }`}>
-            {faltantes.length > 0
-              ? `${faltantes.length} medicamento(s) sin registrar`
-              : 'Todos los medicamentos activos están registrados'}
+            {hayPendientesContados
+              ? `${faltantes.length} medicamento(s) sin registrar en ubicaciones ya contadas`
+              : hayExcluidas
+                ? 'Las ubicaciones iniciadas están completas'
+                : 'Todos los medicamentos activos están registrados'}
           </p>
           <p className="mt-2 text-base text-slate-600">
-            {faltantes.length > 0
-              ? 'Puedes volver a contarlos o confirmar que los restantes se registren con stock 0.'
-              : 'El recuento está listo para marcarse como completado.'}
+            {hayPendientesContados
+              ? 'Los pendientes de una ubicación ya empezada hay que contarlos o confirmarlos a stock 0. Las ubicaciones no iniciadas no se ponen a 0.'
+              : hayExcluidas
+                ? 'Las ubicaciones no contadas quedan fuera de este recuento. Se podrán contar en el siguiente.'
+                : 'El recuento está listo para marcarse como completado.'}
           </p>
         </div>
 
-        {faltantes.length > 0 && (
+        {hayPendientesContados && (
           <div className="space-y-4">
+            <h3 className="text-xl font-extrabold text-slate-800">Pendientes de ubicaciones contadas</h3>
             {[...porUbicacion.entries()].map(([ub, items]) => (
-              <section key={ub} className="rounded-2xl border-2 border-slate-200 bg-white p-5">
+              <section key={ub} className="rounded-2xl border-2 border-amber-200 bg-white p-5">
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="text-xl font-extrabold text-slate-800">{ub}</h3>
                   <button type="button" onClick={() => void seleccionarUbicacion(ub)}
@@ -1682,16 +1709,48 @@ export default function RecuentoManualPage() {
           </div>
         )}
 
+        {hayExcluidas && (
+          <div className="space-y-4">
+            <h3 className="text-xl font-extrabold text-slate-800">Ubicaciones no contadas</h3>
+            <p className="text-base text-slate-600">
+              Quedan fuera de este recuento. No se registran como stock 0. El siguiente recuento irá aparte.
+            </p>
+            {excluidas.map((ub) => (
+              <section key={ub.ubicacion} className="rounded-2xl border-2 border-slate-200 bg-white p-5">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-xl font-extrabold text-slate-800">{ub.ubicacion}</h3>
+                    <p className="text-sm text-slate-500">{ub.totalActivos} medicamento(s) activos</p>
+                  </div>
+                  <button type="button" onClick={() => void seleccionarUbicacion(ub.ubicacion)}
+                    className="rounded-xl border-2 border-teal-300 px-4 py-2 text-sm font-bold text-teal-700 hover:bg-teal-50">
+                    Ir a contar
+                  </button>
+                </div>
+              </section>
+            ))}
+          </div>
+        )}
+
         <button type="button" onClick={() => {
-          const mensaje = faltantes.length > 0
-            ? `Se añadirán ${faltantes.length} medicamento(s) con stock 0. ¿Completar el recuento?`
+          const partes: string[] = [];
+          if (hayPendientesContados) {
+            partes.push(`Se añadirán ${faltantes.length} medicamento(s) con stock 0 en las ubicaciones ya contadas.`);
+          }
+          if (hayExcluidas) {
+            partes.push(
+              `${excluidas.length} ubicación(es) no contada(s) quedarán fuera de este recuento. El siguiente recuento irá aparte.`,
+            );
+          }
+          const mensaje = partes.length > 0
+            ? `${partes.join(' ')} ¿Completar el recuento?`
             : '¿Marcar el recuento manual como completado?';
           if (window.confirm(mensaje)) void completarRecuento();
         }} disabled={completandoRecuento}
           className="w-full rounded-2xl bg-teal-700 px-6 py-5 text-xl font-extrabold text-white hover:bg-teal-800 disabled:opacity-50">
           {completandoRecuento
             ? 'Completando…'
-            : faltantes.length > 0
+            : hayPendientesContados
               ? `Añadir ${faltantes.length} como stock 0 y completar`
               : 'Completar recuento'}
         </button>

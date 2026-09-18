@@ -49,6 +49,22 @@ test('protege navegación y edición durante el guardado', async () => {
   assert.match(source, /disabled=\{saving\}/);
 });
 
+test('completar no pone a cero las ubicaciones no iniciadas', async () => {
+  const source = await readFile(
+    new URL('../src/lib/stock-propuesta-neon.ts', import.meta.url),
+    'utf8',
+  );
+  const page = await readFile(
+    new URL('../src/app/recuento-manual/page.tsx', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /ubicaciones_iniciadas/);
+  assert.match(source, /getCierreRecuentoManual/);
+  assert.match(source, /ubi_key IN \(SELECT ubi_key FROM ubicaciones_iniciadas\)/);
+  assert.match(page, /Ubicaciones no contadas/);
+  assert.match(page, /ubicaciones ya contadas/);
+});
+
 test('la persistencia serializa y detecta concurrencia', async () => {
   const source = await readFile(
     new URL('../src/lib/stock-propuesta-neon.ts', import.meta.url),

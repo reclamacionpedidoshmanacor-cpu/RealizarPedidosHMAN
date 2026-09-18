@@ -208,6 +208,16 @@ export type RecuentoFaltante = {
   ubicacion: string;
 };
 
+export type UbicacionExcluidaRecuento = {
+  ubicacion: string;
+  totalActivos: number;
+};
+
+export type CierreRecuentoManual = {
+  faltantesACero: RecuentoFaltante[];
+  ubicacionesExcluidas: UbicacionExcluidaRecuento[];
+};
+
 export async function getFaltantesRecuentoManual(
   importacionId: number,
   area: string,
@@ -247,6 +257,47 @@ export async function getFaltantesRecuentoManual(
     nombre: String(row.nombre),
     ubicacion: String(row.ubicacion),
   }));
+}
+
+export async function getCierreRecuentoManual(
+  importacionId: number,
+  area: string,
+): Promise<CierreRecuentoManual> {
+  const faltantes = await getFaltantesRecuentoManual(importacionId, area);
+  const sql = getDb();
+  const iniciadasRows = (await sql`
+    SELECT DISTINCT COALESCE(m.ubicacion, '') AS ubicacion
+    FROM stock_registros sr
+    INNER JOIN medicamentos m ON m.cn = sr.cn AND m.area = ${area}
+    WHERE sr.importacion_id = ${importacionId}
+  `) as Array<{ ubicacion: string }>;
+  const iniciadas = new Set(
+    iniciadasRows.map((row) => normalizeUbicacionKey(row.ubicacion)),
+  );
+
+  const faltantesACero: RecuentoFaltante[] = [];
+  const excluidasMap = new Map<string, UbicacionExcluidaRecuento>();
+  for (const item of faltantes) {
+    const key = normalizeUbicacionKey(item.ubicacion);
+    if (iniciadas.has(key)) {
+      faltantesACero.push(item);
+      continue;
+    }
+    const etiqueta = item.ubicacion.trim() || 'Sin ubicación';
+    const actual = excluidasMap.get(key);
+    if (actual) {
+      actual.totalActivos += 1;
+    } else {
+      excluidasMap.set(key, { ubicacion: etiqueta, totalActivos: 1 });
+    }
+  }
+
+  return {
+    faltantesACero,
+    ubicacionesExcluidas: [...excluidasMap.values()].sort((a, b) =>
+      a.ubicacion.localeCompare(b.ubicacion, 'es', { sensitivity: 'base' }),
+    ),
+  };
 }
 
 export async function guardarLineasRecuentoManual(params: {
@@ -404,7 +455,12 @@ export async function completarRecuentoManual(params: {
   area: string;
   revisionEsperada: number;
   sessionId: string;
-}): Promise<{ completadoEn: string; faltantesAnadidos: number; revision: number } | null> {
+}): Promise<{
+  completadoEn: string;
+  faltantesAnadidos: number;
+  ubicacionesExcluidas: number;
+  revision: number;
+} | null> {
   await ensureRecuentoManualSeguroSchema();
   const sql = getDb();
   const ubicacionesStockAlmacen = JSON.stringify(
@@ -421,10 +477,31 @@ export async function completarRecuentoManual(params: {
         AND estado = 'pendiente'
         AND manual_completado_en IS NULL
         AND revision_manual = ${params.revisionEsperada}
+        AND EXISTS (
+          SELECT 1 FROM stock_registros sr
+          WHERE sr.importacion_id = importaciones_stock.id
+        )
       RETURNING id, manual_completado_en, revision_manual
     ),
-    faltantes AS (
-      SELECT m.cn, COALESCE(m.ubicacion, '') AS ubicacion
+    ubicaciones_iniciadas AS (
+      SELECT DISTINCT TRANSLATE(
+        LOWER(REGEXP_REPLACE(TRIM(COALESCE(m.ubicacion, '')), '[[:space:]]+', ' ', 'g')),
+        'áéíóúüñ',
+        'aeiouun'
+      ) AS ubi_key
+      FROM stock_registros sr
+      INNER JOIN medicamentos m ON m.cn = sr.cn AND m.area = ${params.area}
+      INNER JOIN completado c ON c.id = sr.importacion_id
+    ),
+    catalogo_pendiente AS (
+      SELECT
+        m.cn,
+        COALESCE(m.ubicacion, '') AS ubicacion,
+        TRANSLATE(
+          LOWER(REGEXP_REPLACE(TRIM(COALESCE(m.ubicacion, '')), '[[:space:]]+', ' ', 'g')),
+          'áéíóúüñ',
+          'aeiouun'
+        ) AS ubi_key
       FROM medicamentos m, completado c
       WHERE m.area = ${params.area}
         AND m.activo = TRUE
@@ -442,6 +519,18 @@ export async function completarRecuentoManual(params: {
           SELECT 1 FROM stock_registros sr
           WHERE sr.importacion_id = c.id AND sr.cn = m.cn
         )
+    ),
+    faltantes AS (
+      SELECT cp.cn, cp.ubicacion
+      FROM catalogo_pendiente cp
+      WHERE cp.ubi_key IN (SELECT ubi_key FROM ubicaciones_iniciadas)
+    ),
+    excluidas AS (
+      SELECT DISTINCT cp.ubi_key
+      FROM catalogo_pendiente cp
+      WHERE NOT EXISTS (
+        SELECT 1 FROM ubicaciones_iniciadas ui WHERE ui.ubi_key = cp.ubi_key
+      )
     ),
     insertadas AS (
       INSERT INTO stock_registros (importacion_id, cn, stock_unidades, stock_cajas, valor_total)
@@ -475,13 +564,15 @@ export async function completarRecuentoManual(params: {
       t.manual_completado_en,
       t.revision_manual,
       (SELECT COUNT(*)::int FROM insertadas) AS faltantes_anadidos,
-      (SELECT COUNT(*)::int FROM auditoria) AS auditadas
+      (SELECT COUNT(*)::int FROM auditoria) AS auditadas,
+      (SELECT COUNT(*)::int FROM excluidas) AS ubicaciones_excluidas
     FROM totales t
   `;
   if (!rows[0]) return null;
   return {
     completadoEn: String(rows[0].manual_completado_en),
     faltantesAnadidos: num(rows[0].faltantes_anadidos),
+    ubicacionesExcluidas: num(rows[0].ubicaciones_excluidas),
     revision: num(rows[0].revision_manual),
   };
 }
