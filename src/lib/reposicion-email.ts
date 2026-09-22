@@ -7,6 +7,7 @@ import {
 import {
   ensureTablesReposicion,
   getPedidoConLineas,
+  marcarPedidosEnviados,
 } from '@/lib/reposicion-neon';
 import {
   buildReposicionPdf,
@@ -128,10 +129,19 @@ export async function sendReposicionEmail(
       )
       .join('\n');
 
-    const subject = replaceVars(subjectTemplate);
+    const hayModificados = pedidos.some((p) => p.cabecera.modificado);
+    const subjectBase = replaceVars(subjectTemplate);
+    const subject = hayModificados && !subjectBase.includes('MODIFICADO')
+      ? `[MODIFICADO] ${subjectBase}`
+      : subjectBase;
     const cuerpoBase = replaceVars(bodyTemplate);
+    const avisoModificado = hayModificados
+      ? 'ATENCION: Este albaran corresponde a un pedido modificado y sustituye al anterior.\n\n'
+      : '';
     const textBody =
-      pedidos.length > 1 ? `${cuerpoBase}\n\nAlbaranes adjuntos:\n${detalleConsultas}` : cuerpoBase;
+      pedidos.length > 1
+        ? `${avisoModificado}${cuerpoBase}\n\nAlbaranes adjuntos:\n${detalleConsultas}`
+        : `${avisoModificado}${cuerpoBase}`;
     const htmlBody = textBody
       .split('\n')
       .map((line) => (line.trim() ? `<p style="margin:0 0 8px;color:#334155;font-size:14px;">${line}</p>` : '<br/>'))
@@ -146,12 +156,15 @@ export async function sendReposicionEmail(
         p.lineas,
         p.cabecera.area,
         p.cabecera.consultaDestino,
+        p.cabecera.modificado,
+        p.cabecera.fechaModificado,
       );
       attachments.push({
         filename: buildReposicionPdfFilename(
           p.cabecera.id,
           p.cabecera.fechaCreacion,
           p.cabecera.consultaDestino,
+          p.cabecera.modificado,
         ),
         content: Buffer.from(pdfBytes),
         contentType: 'application/pdf',
@@ -171,6 +184,7 @@ export async function sendReposicionEmail(
       attachments,
     });
 
+    await marcarPedidosEnviados(pedidoIds);
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Error enviando email';

@@ -7,10 +7,14 @@ import {
   getPedidoConLineas,
   ensureTablesReposicion,
 } from '@/lib/reposicion-neon';
+import { sendReposicionEmail } from '@/lib/reposicion-email';
 import {
   esConsultaValida,
   normalizarConsulta,
 } from '@/lib/reposicion-consultas';
+
+export const runtime = 'nodejs';
+export const maxDuration = 30;
 
 export async function GET(
   req: NextRequest,
@@ -60,8 +64,8 @@ export async function PATCH(
     if (!pedido || pedido.cabecera.area !== session.area) {
       return NextResponse.json({ error: 'Pedido no encontrado en el área activa.' }, { status: 404 });
     }
-    if (pedido.cabecera.estado !== 'finalizado') {
-      return NextResponse.json({ error: 'Solo se pueden corregir pedidos finalizados.' }, { status: 400 });
+    if (pedido.cabecera.estado !== 'finalizado' && pedido.cabecera.estado !== 'enviado') {
+      return NextResponse.json({ error: 'Solo se pueden corregir pedidos finalizados o enviados.' }, { status: 400 });
     }
 
     const body = await req.json().catch(() => ({})) as {
@@ -95,13 +99,22 @@ export async function PATCH(
       return NextResponse.json({ error: 'El pedido debe conservar al menos una línea.' }, { status: 400 });
     }
 
-    const cabecera = await actualizarPedidoFinalizado(
+    let cabecera = await actualizarPedidoFinalizado(
       pedidoId,
       session.area,
       consultaDestino,
       lineas,
     );
-    return NextResponse.json({ ok: true, cabecera });
+    const email = await sendReposicionEmail(pedidoId);
+    const actualizado = await getPedidoConLineas(pedidoId);
+    if (actualizado) cabecera = actualizado.cabecera;
+
+    return NextResponse.json({
+      ok: true,
+      cabecera,
+      emailEnviado: email.success,
+      emailError: email.success ? undefined : email.error,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Error inesperado';
     return NextResponse.json({ error: message }, { status: 500 });

@@ -18,7 +18,7 @@ type RecuentoCabecera = {
 
 type ReposicionCabecera = {
   id: number;
-  estado: 'borrador' | 'finalizado';
+  estado: 'borrador' | 'finalizado' | 'enviado';
   fechaCreacion: string;
   fechaFinalizado: string | null;
   totalLineas: number;
@@ -374,6 +374,7 @@ export default function StockPage() {
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo enviar el email.');
       toast.success(`Email enviado para pedido #${pedidoId}.`);
+      await loadReposicion();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Error inesperado');
     } finally {
@@ -761,11 +762,13 @@ export default function StockPage() {
                       </td>
                       <td className="px-3 py-2 text-center">
                         <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
-                          rep.estado === 'finalizado'
-                            ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
-                            : 'bg-orange-50 text-orange-700 ring-1 ring-orange-200'
+                          rep.estado === 'enviado'
+                            ? 'bg-teal-50 text-teal-700 ring-1 ring-teal-200'
+                            : rep.estado === 'finalizado'
+                              ? 'bg-amber-50 text-amber-700 ring-1 ring-amber-200'
+                              : 'bg-orange-50 text-orange-700 ring-1 ring-orange-200'
                         }`}>
-                          {rep.estado === 'finalizado' ? 'Finalizado' : 'Borrador'}
+                          {rep.estado === 'enviado' ? 'Enviado' : rep.estado === 'finalizado' ? 'Finalizado' : 'Borrador'}
                         </span>
                       </td>
                       <td className="px-3 py-2 text-right text-slate-700">{rep.totalLineas}</td>

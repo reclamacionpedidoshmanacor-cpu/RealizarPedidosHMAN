@@ -5,11 +5,13 @@ import { toast } from 'sonner';
 
 type Cabecera = {
   id: number;
-  estado: 'borrador' | 'finalizado';
+  estado: 'borrador' | 'finalizado' | 'enviado';
   fechaCreacion: string;
   fechaFinalizado: string | null;
+  fechaEnviado?: string | null;
   totalLineas: number;
   consultaDestino: string | null;
+  modificado?: boolean;
 };
 
 type Linea = {
@@ -146,7 +148,7 @@ export default function ReposicionPage() {
   };
 
   const guardarCorreccion = async () => {
-    if (!detalle || detalle.cabecera.estado !== 'finalizado' || !consultaEdicion) return;
+    if (!detalle || (detalle.cabecera.estado !== 'finalizado' && detalle.cabecera.estado !== 'enviado') || !consultaEdicion) return;
     if (!confirm('¿Guardar las correcciones? El PDF se regenerará con los nuevos datos.')) return;
     setBusy(true);
     try {
@@ -163,7 +165,12 @@ export default function ReposicionPage() {
       });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo corregir el pedido.');
-      toast.success('Pedido corregido. Si ya se había enviado, vuelve a enviarlo por email.');
+      if (payload.emailEnviado) {
+        toast.success('Pedido corregido y reenviado por email.');
+      } else {
+        toast.success('Pedido corregido.');
+        toast.error(payload.emailError ?? 'No se pudo reenviar el email. Puedes reintentarlo desde Enviar.');
+      }
       setEditandoPedido(false);
       await load();
       await openPedido(detalle.cabecera.id);
@@ -181,6 +188,8 @@ export default function ReposicionPage() {
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo enviar.');
       toast.success('Albarán enviado por email.');
+      await load();
+      if (detalle?.cabecera.id === id) await openPedido(id);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Error inesperado');
     } finally {
@@ -207,6 +216,7 @@ export default function ReposicionPage() {
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo enviar.');
       toast.success(`${seleccionEnvio.length} albaranes enviados en un solo email.`);
       setSeleccionEnvio([]);
+      await load();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Error inesperado');
     } finally {
@@ -221,9 +231,9 @@ export default function ReposicionPage() {
   };
 
   const eliminarPedido = async (pedido: Cabecera) => {
-    const descripcion = pedido.estado === 'finalizado'
-      ? 'Este pedido finalizado desaparecerá del historial.'
-      : 'Se eliminará el borrador y todas sus líneas.';
+    const descripcion = pedido.estado === 'borrador'
+      ? 'Se eliminará el borrador y todas sus líneas.'
+      : 'Este pedido desaparecerá del historial.';
     if (!confirm(`¿Eliminar el pedido de reposición #${pedido.id}? ${descripcion}`)) return;
 
     setDeletingId(pedido.id);
@@ -458,10 +468,9 @@ export default function ReposicionPage() {
                       </td>
                       <td className="px-3 py-2.5 text-center">{pedido.totalLineas}</td>
                       <td className="px-3 py-2.5 text-center">
-                        <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                          pedido.estado === 'finalizado' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
-                        }`}>
-                          {pedido.estado === 'finalizado' ? 'Finalizado' : 'Borrador'}
+                        <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${estadoReposicionClase(pedido.estado)}`}>
+                          {estadoReposicionLabel(pedido.estado)}
+                          {pedido.modificado && pedido.estado !== 'borrador' ? ' · modificado' : ''}
                         </span>
                       </td>
                       <td className="px-4 py-2.5 text-right">
@@ -469,7 +478,7 @@ export default function ReposicionPage() {
                           <button onClick={() => openPedido(pedido.id)} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50">Ver</button>
                           <button onClick={() => openPedido(pedido.id, true)} className="rounded-lg border border-teal-300 px-2.5 py-1 text-xs font-semibold text-teal-700 hover:bg-teal-50">Editar</button>
                           <a href={`/api/reposicion/${pedido.id}/pdf`} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50">PDF</a>
-                          {pedido.estado === 'finalizado' && (
+                          {(pedido.estado === 'finalizado' || pedido.estado === 'enviado') && (
                             <button disabled={busy} onClick={() => enviar(pedido.id)} className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">Enviar</button>
                           )}
                           <button
@@ -767,10 +776,9 @@ export default function ReposicionPage() {
               <div>
                 <div className="flex items-center gap-2">
                   <h2 className="text-lg font-bold text-slate-800">Pedido de reposición #{detalle.cabecera.id}</h2>
-                  <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                    detalle.cabecera.estado === 'finalizado' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
-                  }`}>
-                    {detalle.cabecera.estado === 'finalizado' ? 'Finalizado' : 'Borrador'}
+                  <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${estadoReposicionClase(detalle.cabecera.estado)}`}>
+                    {estadoReposicionLabel(detalle.cabecera.estado)}
+                    {detalle.cabecera.modificado && detalle.cabecera.estado !== 'borrador' ? ' · modificado' : ''}
                   </span>
                   {detalle.cabecera.consultaDestino && (
                     <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-700">
@@ -908,4 +916,16 @@ export default function ReposicionPage() {
 
 function formatDate(value: string) {
   return new Date(value).toLocaleDateString('es-ES');
+}
+
+function estadoReposicionLabel(estado: Cabecera['estado']) {
+  if (estado === 'enviado') return 'Enviado';
+  if (estado === 'finalizado') return 'Finalizado';
+  return 'Borrador';
+}
+
+function estadoReposicionClase(estado: Cabecera['estado']) {
+  if (estado === 'enviado') return 'bg-teal-50 text-teal-700';
+  if (estado === 'finalizado') return 'bg-amber-50 text-amber-700';
+  return 'bg-slate-100 text-slate-600';
 }

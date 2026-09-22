@@ -1,12 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSessionOrArea } from '@/lib/api-auth';
 import { finalizarPedido, getPedidoConLineas, ensureTablesReposicion } from '@/lib/reposicion-neon';
+import { sendReposicionEmail } from '@/lib/reposicion-email';
 import {
   consultaUnicaDeArea,
   consultasDeArea,
   esConsultaValida,
   normalizarConsulta,
 } from '@/lib/reposicion-consultas';
+
+export const runtime = 'nodejs';
+export const maxDuration = 30;
 
 export async function POST(
   req: NextRequest,
@@ -63,8 +67,16 @@ export async function POST(
       );
     }
 
-    const cabecera = await finalizarPedido(pedidoId, consultaDestino);
-    return NextResponse.json({ cabecera });
+    let cabecera = await finalizarPedido(pedidoId, consultaDestino);
+    const email = await sendReposicionEmail(pedidoId);
+    const actualizado = await getPedidoConLineas(pedidoId);
+    if (actualizado) cabecera = actualizado.cabecera;
+
+    return NextResponse.json({
+      cabecera,
+      emailEnviado: email.success,
+      emailError: email.success ? undefined : email.error,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Error inesperado';
     return NextResponse.json({ error: message }, { status: 500 });

@@ -1239,7 +1239,12 @@ export default function RecuentoManualPage() {
       });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? 'No se pudo finalizar el pedido.');
-      toast.success(`✅ Pedido finalizado para la consulta ${repoConsultaElegida}.`);
+      if (payload?.emailEnviado) {
+        toast.success(`✅ Pedido finalizado y enviado por email a Farmacia (${repoConsultaElegida}).`);
+      } else {
+        toast.success(`✅ Pedido finalizado para la consulta ${repoConsultaElegida}.`);
+        toast.error(payload?.emailError ?? 'No se pudo enviar el email. Reenvíalo desde la pestaña Reposición.');
+      }
       setRepoBorrador(null);
       setRepoUbicacionesUsadas([]);
       setRepoLineasByUbicacion({});
@@ -1923,8 +1928,8 @@ export default function RecuentoManualPage() {
             <button onClick={() => void handleFinalizarPedido()} disabled={finalizando || repoBorrador.totalLineas <= 0}
               className="mt-2 w-full rounded-2xl bg-orange-600 px-6 py-4 text-xl font-extrabold text-white hover:bg-orange-700 active:scale-95 disabled:opacity-50">
               {finalizando
-                ? 'Finalizando…'
-                : `✅ Finalizar pedido para ${repoConsultaElegida}`}
+                ? 'Finalizando y enviando…'
+                : `✅ Finalizar y enviar pedido para ${repoConsultaElegida}`}
             </button>
             {repoBorrador.totalLineas <= 0 && (
               <p className="text-base font-semibold text-orange-700">

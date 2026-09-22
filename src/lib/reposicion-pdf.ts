@@ -224,11 +224,13 @@ export function buildReposicionPdfFilename(
   pedidoId: number,
   fechaCreacion: string,
   consultaDestino?: string | null,
+  modificado = false,
 ): string {
   const fecha = formatPdfDate(fechaCreacion).replace(/\//g, '-');
   const consulta = consultaDestino?.trim();
   const sufijo = consulta ? `-${consulta}` : '';
-  return `albaran-reposicion-${pedidoId}-${fecha}${sufijo}.pdf`;
+  const marca = modificado ? '-MODIFICADO' : '';
+  return `albaran-reposicion-${pedidoId}-${fecha}${sufijo}${marca}.pdf`;
 }
 
 async function loadLogo(doc: PDFDocument): Promise<PDFImage | null> {
@@ -246,6 +248,8 @@ export async function buildReposicionPdf(
   lineas: ReposicionLinea[],
   area = 'upe',
   consultaDestino: string | null = null,
+  modificado = false,
+  fechaModificado: string | null = null,
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
   const regular = await doc.embedFont(StandardFonts.Helvetica);
@@ -290,7 +294,22 @@ export async function buildReposicionPdf(
 
   const meta = `Nº Pedido: ${pedidoId}    Fecha: ${formatPdfDate(fechaCreacion)}${fechaFinalizado ? `    Finalizado: ${formatPdfDate(fechaFinalizado)}` : ''}`;
   w.text(meta, MARGIN, { size: 10, font: regular, color: rgb(0.2, 0.2, 0.2) });
-  w.moveDown(18);
+  w.moveDown(16);
+
+  if (modificado) {
+    w.ensureSpace(36);
+    w.text('PEDIDO MODIFICADO', MARGIN, { size: 12, font: bold, color: rgb(0.55, 0.2, 0.05) });
+    w.moveDown(14);
+    const fechaCorr = fechaModificado ? ` Fecha de correccion: ${formatPdfDate(fechaModificado)}.` : '';
+    w.text(
+      `Este albaran sustituye al pedido enviado anteriormente.${fechaCorr}`,
+      MARGIN,
+      { size: 9, font: regular, color: rgb(0.45, 0.22, 0.05), maxWidth: USABLE_W },
+    );
+    w.moveDown(16);
+  } else {
+    w.moveDown(2);
+  }
 
   const COL = {
     cn: MARGIN,

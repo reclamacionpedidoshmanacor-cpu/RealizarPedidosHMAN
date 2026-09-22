@@ -35,6 +35,9 @@ export async function ensureTablesReposicion() {
     )
   `;
   await sql`ALTER TABLE pedidos_reposicion ADD COLUMN IF NOT EXISTS consulta_destino TEXT;`;
+  await sql`ALTER TABLE pedidos_reposicion ADD COLUMN IF NOT EXISTS fecha_enviado TIMESTAMPTZ;`;
+  await sql`ALTER TABLE pedidos_reposicion ADD COLUMN IF NOT EXISTS modificado BOOLEAN NOT NULL DEFAULT FALSE;`;
+  await sql`ALTER TABLE pedidos_reposicion ADD COLUMN IF NOT EXISTS fecha_modificado TIMESTAMPTZ;`;
   await sql`ALTER TABLE pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS catalogo_id INTEGER;`;
   await sql`ALTER TABLE pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS codigo_item TEXT;`;
   await sql`ALTER TABLE pedidos_reposicion_lineas ADD COLUMN IF NOT EXISTS tipo_item TEXT NOT NULL DEFAULT 'medicamento';`;
@@ -87,14 +90,19 @@ export async function ensureTablesReposicion() {
 }
 
 /* ─── TIPOS ─── */
+export type ReposicionEstado = 'borrador' | 'finalizado' | 'enviado';
+
 export type ReposicionCabecera = {
   id: number;
   area: string;
-  estado: 'borrador' | 'finalizado';
+  estado: ReposicionEstado;
   fechaCreacion: string;
   fechaFinalizado: string | null;
+  fechaEnviado: string | null;
   totalLineas: number;
   consultaDestino: string | null;
+  modificado: boolean;
+  fechaModificado: string | null;
 };
 
 export type ReposicionLinea = {
@@ -121,7 +129,8 @@ export type ReposicionLinea = {
 export async function getPedidosBorrador(area: string): Promise<ReposicionCabecera[]> {
   const sql = getDb();
   const rows = await sql`
-    SELECT id, area, estado, fecha_creacion, fecha_finalizado, total_lineas, consulta_destino
+    SELECT id, area, estado, fecha_creacion, fecha_finalizado, fecha_enviado,
+           total_lineas, consulta_destino, modificado, fecha_modificado
     FROM pedidos_reposicion
     WHERE area = ${area} AND estado = 'borrador'
     ORDER BY fecha_creacion DESC
@@ -136,7 +145,8 @@ export async function getPedidoBorrador(
   const sql = getDb();
   const rows = consultaDestino
     ? await sql`
-        SELECT id, area, estado, fecha_creacion, fecha_finalizado, total_lineas, consulta_destino
+        SELECT id, area, estado, fecha_creacion, fecha_finalizado, fecha_enviado,
+               total_lineas, consulta_destino, modificado, fecha_modificado
         FROM pedidos_reposicion
         WHERE area = ${area}
           AND estado = 'borrador'
@@ -145,7 +155,8 @@ export async function getPedidoBorrador(
         LIMIT 1
       `
     : await sql`
-        SELECT id, area, estado, fecha_creacion, fecha_finalizado, total_lineas, consulta_destino
+        SELECT id, area, estado, fecha_creacion, fecha_finalizado, fecha_enviado,
+               total_lineas, consulta_destino, modificado, fecha_modificado
         FROM pedidos_reposicion
         WHERE area = ${area} AND estado = 'borrador'
         ORDER BY fecha_creacion DESC
@@ -158,9 +169,10 @@ export async function getPedidoBorrador(
 export async function getHistorialReposicion(area: string): Promise<ReposicionCabecera[]> {
   const sql = getDb();
   const rows = await sql`
-    SELECT id, area, estado, fecha_creacion, fecha_finalizado, total_lineas, consulta_destino
+    SELECT id, area, estado, fecha_creacion, fecha_finalizado, fecha_enviado,
+           total_lineas, consulta_destino, modificado, fecha_modificado
     FROM pedidos_reposicion
-    WHERE area = ${area} AND estado = 'finalizado'
+    WHERE area = ${area} AND estado IN ('finalizado', 'enviado')
     ORDER BY fecha_creacion DESC
     LIMIT 50
   `;
@@ -172,7 +184,8 @@ export async function getPedidoConLineas(
 ): Promise<{ cabecera: ReposicionCabecera; lineas: ReposicionLinea[] } | null> {
   const sql = getDb();
   const cab = await sql`
-    SELECT id, area, estado, fecha_creacion, fecha_finalizado, total_lineas, consulta_destino
+    SELECT id, area, estado, fecha_creacion, fecha_finalizado, fecha_enviado,
+           total_lineas, consulta_destino, modificado, fecha_modificado
     FROM pedidos_reposicion WHERE id = ${id}
   `;
   if (!cab[0]) return null;
@@ -195,7 +208,8 @@ export async function crearPedidoBorrador(
   const rows = await sql`
     INSERT INTO pedidos_reposicion (area, estado, total_lineas, consulta_destino)
     VALUES (${area}, 'borrador', 0, ${consultaDestino})
-    RETURNING id, area, estado, fecha_creacion, fecha_finalizado, total_lineas, consulta_destino
+    RETURNING id, area, estado, fecha_creacion, fecha_finalizado, fecha_enviado,
+              total_lineas, consulta_destino, modificado, fecha_modificado
   `;
   return mapCabecera(rows[0]);
 }
@@ -280,7 +294,8 @@ export async function finalizarPedido(
         fecha_finalizado = NOW(),
         consulta_destino = ${consultaDestino}
     WHERE id = ${id} AND estado = 'borrador'
-    RETURNING id, area, estado, fecha_creacion, fecha_finalizado, total_lineas, consulta_destino
+    RETURNING id, area, estado, fecha_creacion, fecha_finalizado, fecha_enviado,
+              total_lineas, consulta_destino, modificado, fecha_modificado
   `;
   if (!rows[0]) throw new Error('Pedido no encontrado o ya finalizado.');
   return mapCabecera(rows[0]);
@@ -327,14 +342,33 @@ export async function actualizarPedidoFinalizado(
     SET consulta_destino = ${consultaDestino},
         total_lineas = (
           SELECT COUNT(*) FROM pedidos_reposicion_lineas WHERE pedido_id = ${id}
-        )
+        ),
+        modificado = TRUE,
+        fecha_modificado = NOW()
     WHERE id = ${id}
       AND area = ${area}
-      AND estado = 'finalizado'
-    RETURNING id, area, estado, fecha_creacion, fecha_finalizado, total_lineas, consulta_destino
+      AND estado IN ('finalizado', 'enviado')
+    RETURNING id, area, estado, fecha_creacion, fecha_finalizado, fecha_enviado,
+              total_lineas, consulta_destino, modificado, fecha_modificado
   `;
   if (!rows[0]) throw new Error('Pedido finalizado no encontrado.');
   return mapCabecera(rows[0]);
+}
+
+export async function marcarPedidosEnviados(ids: number[]): Promise<void> {
+  const pedidoIds = [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))];
+  if (pedidoIds.length === 0) return;
+  const sql = getDb();
+  await sql`
+    UPDATE pedidos_reposicion
+    SET estado = 'enviado',
+        fecha_enviado = NOW()
+    WHERE id IN (
+      SELECT value::int
+      FROM jsonb_array_elements_text(${JSON.stringify(pedidoIds)}::jsonb)
+    )
+      AND estado IN ('finalizado', 'enviado')
+  `;
 }
 
 export async function eliminarPedidoReposicion(
@@ -368,14 +402,20 @@ async function recalcularTotalLineas(pedidoId: number) {
 
 /* ─── mappers ─── */
 function mapCabecera(r: Record<string, unknown>): ReposicionCabecera {
+  const estado = String(r.estado);
   return {
     id: Number(r.id),
     area: String(r.area),
-    estado: r.estado as 'borrador' | 'finalizado',
+    estado: estado === 'enviado' || estado === 'finalizado' || estado === 'borrador'
+      ? estado
+      : 'finalizado',
     fechaCreacion: String(r.fecha_creacion),
     fechaFinalizado: r.fecha_finalizado ? String(r.fecha_finalizado) : null,
+    fechaEnviado: r.fecha_enviado ? String(r.fecha_enviado) : null,
     totalLineas: Number(r.total_lineas),
     consultaDestino: r.consulta_destino ? String(r.consulta_destino) : null,
+    modificado: r.modificado === true || r.modificado === 't' || r.modificado === 'true',
+    fechaModificado: r.fecha_modificado ? String(r.fecha_modificado) : null,
   };
 }
 

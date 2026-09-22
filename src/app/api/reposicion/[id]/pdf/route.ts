@@ -36,12 +36,15 @@ export async function GET(
       result.lineas,
       result.cabecera.area,
       result.cabecera.consultaDestino,
+      result.cabecera.modificado,
+      result.cabecera.fechaModificado,
     );
 
     const filename = buildReposicionPdfFilename(
       pedidoId,
       result.cabecera.fechaCreacion,
       result.cabecera.consultaDestino,
+      result.cabecera.modificado,
     );
 
     // Copiar a ArrayBuffer puro para compatibilidad con BodyInit / BlobPart
