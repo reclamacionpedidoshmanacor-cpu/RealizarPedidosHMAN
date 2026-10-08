@@ -226,6 +226,7 @@ export type TemporalPoint = {
   pacientes: number;
   lunesRef?: string | null;
   gastoPorGrupo?: Partial<Record<DiagnosticoGrupo, number>>;
+  gastoPorVia?: GastoPorVia;
 };
 
 export type MedicamentoEnProtocolo = {
@@ -1099,6 +1100,8 @@ type MonthAcc = {
   mPac: number; sPac: number;
   mGastoPorGrupo: Map<DiagnosticoGrupo, number>;
   sGastoPorGrupo: Map<DiagnosticoGrupo, number>;
+  mGastoPorVia: GastoPorVia;
+  sGastoPorVia: GastoPorVia;
 };
 
 function pickFiable(mensual: number, semanal: number, anio: number, mes: number): number {
@@ -1116,6 +1119,7 @@ function monthAccToPoint(a: MonthAcc): TemporalPoint {
   return {
     anio: a.anio, mes: a.mes, semana: null,
     label: `${MESES_SHORT[a.mes - 1]} ${a.anio}`,
+    gastoPorVia: useSemanal ? a.sGastoPorVia : a.mGastoPorVia,
     gasto: pickFiable(a.mGasto, a.sGasto, a.anio, a.mes),
     viales: pickFiable(a.mViales, a.sViales, a.anio, a.mes),
     unidades: pickFiable(a.mUnits, a.sUnits, a.anio, a.mes),
@@ -1142,6 +1146,8 @@ function buildMonthlyTemporalFiable(rows: ClassifiedRow[]): TemporalPoint[] {
         mPac: 0, sPac: 0,
         mGastoPorGrupo: new Map<DiagnosticoGrupo, number>(),
         sGastoPorGrupo: new Map<DiagnosticoGrupo, number>(),
+        mGastoPorVia: emptyGastoPorVia(),
+        sGastoPorVia: emptyGastoPorVia(),
       };
       map.set(key, a);
     }
@@ -1156,7 +1162,9 @@ function buildMonthlyTemporalFiable(rows: ClassifiedRow[]): TemporalPoint[] {
       a.sUnits += r.unidades;
       a.sPrep += r.preparaciones; a.sPac += r.pacientes;
       a.sGastoPorGrupo.set(r.grupo, (a.sGastoPorGrupo.get(r.grupo) ?? 0) + r.gasto);
+      a.sGastoPorVia[r.via] += r.gasto;
     }
+    if (isMensual) a.mGastoPorVia[r.via] += r.gasto;
   }
   return [...map.values()]
     .map(monthAccToPoint)
@@ -1380,10 +1388,14 @@ function buildTopMeds(
         sPac: 0,
         mGastoPorGrupo: new Map<DiagnosticoGrupo, number>(),
         sGastoPorGrupo: new Map<DiagnosticoGrupo, number>(),
+        mGastoPorVia: emptyGastoPorVia(),
+        sGastoPorVia: emptyGastoPorVia(),
       };
       m.months.set(mk, ma);
     }
     const isMensual = r.semana_iso == null || r.semana_iso <= 0;
+    if (isMensual) ma.mGastoPorVia[r.via] += r.gasto;
+    else ma.sGastoPorVia[r.via] += r.gasto;
     if (isMensual) {
       ma.mGasto += r.gasto; ma.mViales += r.viales;
       ma.mUnits += r.unidades;
@@ -2113,7 +2125,7 @@ function computeGrupoDetalle(
 // ---------------------------------------------------------------------------
 // Función pública principal
 // ---------------------------------------------------------------------------
-export async function getAnalisisDatos(
+async function computeAnalisis(
   area: string,
   desde: string,
   hasta: string,
@@ -2122,7 +2134,7 @@ export async function getAnalisisDatos(
   modoComparativa: ModoComparativa = 'yoy',
   cnFiltro?: string | null,
   viaFiltro?: Via | null,
-): Promise<AnalisisDatos> {
+): Promise<{ datos: AnalisisDatos; scopeRows: ClassifiedRow[] }> {
   void modoComparativa;
   const modo: ModoComparativa = 'periodo-anterior';
   const { baseDesde, baseHasta } = resolvePeriodoBase(desde, hasta, modo);
@@ -2203,7 +2215,7 @@ export async function getAnalisisDatos(
     ? await buildMedicamentoDetalle(area, cnFiltro, scopeRows, scopeRowsBase, desde, hasta, comparativaEtiqueta)
     : null;
 
-  return {
+  const datos: AnalisisDatos = {
     periodo: { desde, hasta },
     scope: {
       servicio: servicioFiltro ? servicioLabel(servicioFiltro) : null,
@@ -2234,5 +2246,226 @@ export async function getAnalisisDatos(
     outliers:          buildOutliers(rowsForTops, temporalReciente),
     grupoDetalle,
     medicamentoDetalle,
+  };
+  return { datos, scopeRows };
+}
+
+export async function getAnalisisDatos(
+  area: string,
+  desde: string,
+  hasta: string,
+  grupoFiltro?: string | null,
+  servicioFiltro?: string | null,
+  modoComparativa: ModoComparativa = 'yoy',
+  cnFiltro?: string | null,
+  viaFiltro?: Via | null,
+): Promise<AnalisisDatos> {
+  const { datos } = await computeAnalisis(
+    area, desde, hasta, grupoFiltro, servicioFiltro, modoComparativa, cnFiltro, viaFiltro,
+  );
+  return datos;
+}
+
+// ---------------------------------------------------------------------------
+// Exportación (Excel): listas completas, tabla plana y compras vs consumo
+// ---------------------------------------------------------------------------
+export type FilaExportAnalisis = {
+  anio: number;
+  mes: number;
+  servicio: string;
+  grupo: string;
+  via: Via;
+  diagnostico: string;
+  indicacion: string;
+  protocolo: string;
+  cn: string;
+  principioActivo: string;
+  nombre: string;
+  cajas: number;
+  unidades: number;
+  preparaciones: number;
+  gasto: number;
+};
+
+export type CompraConsumoCn = {
+  cn: string;
+  principioActivo: string;
+  nombre: string;
+  via: Via;
+  consumoCajas: number;
+  consumoUnidades: number;
+  consumoGasto: number;
+  comprasCajas: number;
+  comprasUnidades: number;
+  comprasGasto: number;
+  pedidosRecibidos: number;
+};
+
+export type AnalisisExport = AnalisisDatos & {
+  protocolosCompletos: TopProtocolo[];
+  filas: FilaExportAnalisis[];
+  comprasVsConsumo: CompraConsumoCn[];
+  /** Primer pedido recibido registrado en Pedidos Pendientes (antes no hay compras). */
+  comprasRegistroDesde: string | null;
+  /** Inicio efectivo de la comparativa de compras vs consumo. */
+  comprasComparadasDesde: string;
+};
+
+async function loadInicioRegistroCompras(): Promise<string | null> {
+  const sql = getPedidosReadonlyClient();
+  const rows = (await sql`
+    SELECT MIN(recibido_at)::date::text AS desde
+    FROM public.orders
+    WHERE anulado = FALSE AND recibido_at IS NOT NULL
+  `) as Array<{ desde: string | null }>;
+  return rows[0]?.desde ?? null;
+}
+
+async function loadComprasRecibidasPorCn6(
+  cn6s: string[],
+  desde: string,
+  hasta: string,
+): Promise<Map<string, { unidades: number; pedidos: number }>> {
+  const out = new Map<string, { unidades: number; pedidos: number }>();
+  if (!cn6s.length) return out;
+  const sql = getPedidosReadonlyClient();
+  const rows = (await sql`
+    SELECT
+      lpad(right(regexp_replace(n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') AS cn6,
+      por_entregar_cantidad::text AS por_entregar_cantidad,
+      cantidad_recibida::text AS cantidad_recibida,
+      cantidad_pedido::text AS cantidad_pedido
+    FROM public.orders
+    WHERE anulado = FALSE
+      AND recibido_at IS NOT NULL
+      AND recibido_at::date >= ${desde}::date
+      AND recibido_at::date <= ${hasta}::date
+      AND n_mate_prov IS NOT NULL
+      AND lpad(right(regexp_replace(n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') = ANY(${cn6s}::text[])
+  `) as Array<{ cn6: string } & Omit<PedidoRecibidoRaw, 'recibido_at' | 'fecha_documento'>>;
+
+  for (const row of rows) {
+    const acc = out.get(row.cn6) ?? { unidades: 0, pedidos: 0 };
+    acc.unidades += cantidadUdsDesdePedido({
+      recibido: true,
+      por_entregar_cantidad: row.por_entregar_cantidad,
+      cantidad_recibida: row.cantidad_recibida,
+      cantidad_pedido: row.cantidad_pedido,
+    });
+    acc.pedidos += 1;
+    out.set(row.cn6, acc);
+  }
+  return out;
+}
+
+function buildFilasExport(rows: ClassifiedRow[]): FilaExportAnalisis[] {
+  const map = new Map<string, FilaExportAnalisis>();
+  for (const r of rows) {
+    const key = [r.anio, r.mes, r.servicioKey, r.grupo, r.via, r.diagnostico, r.indicacion, r.protocolo, r.cn].join('|');
+    const ex = map.get(key);
+    if (ex) {
+      ex.cajas += r.viales;
+      ex.unidades += r.unidades;
+      ex.preparaciones += r.preparaciones;
+      ex.gasto += r.gasto;
+    } else {
+      map.set(key, {
+        anio: r.anio,
+        mes: r.mes,
+        servicio: r.servicio,
+        grupo: GRUPO_LABELS[r.grupo],
+        via: r.via,
+        diagnostico: r.diagnostico,
+        indicacion: r.indicacion,
+        protocolo: r.protocolo,
+        cn: r.cn,
+        principioActivo: r.principio_activo,
+        nombre: r.nombre,
+        cajas: r.viales,
+        unidades: r.unidades,
+        preparaciones: r.preparaciones,
+        gasto: r.gasto,
+      });
+    }
+  }
+  return [...map.values()].sort((a, b) =>
+    a.anio - b.anio || a.mes - b.mes || b.gasto - a.gasto,
+  );
+}
+
+export async function getAnalisisExport(
+  area: string,
+  desde: string,
+  hasta: string,
+  grupoFiltro?: string | null,
+  servicioFiltro?: string | null,
+  cnFiltro?: string | null,
+  viaFiltro?: Via | null,
+): Promise<AnalisisExport> {
+  const [{ datos, scopeRows }, comprasRegistroDesde] = await Promise.all([
+    computeAnalisis(area, desde, hasta, grupoFiltro, servicioFiltro, 'periodo-anterior', cnFiltro, viaFiltro),
+    loadInicioRegistroCompras().catch(() => null),
+  ]);
+
+  const comprasComparadasDesde = comprasRegistroDesde ? maxIsoDate(desde, comprasRegistroDesde) : desde;
+  const { y: yC, m: mC } = isoToYM(comprasComparadasDesde);
+  const ymComparadoDesde = ymKey(yC, mC);
+
+  type ConsumoAcc = Omit<CompraConsumoCn, 'comprasCajas' | 'comprasUnidades' | 'comprasGasto' | 'pedidosRecibidos'> & {
+    unidadesPorCaja: number;
+    precioUnidad: number;
+  };
+  const consumoPorCn = new Map<string, ConsumoAcc>();
+  for (const r of scopeRows) {
+    let acc = consumoPorCn.get(r.cn);
+    if (!acc) {
+      acc = {
+        cn: r.cn,
+        principioActivo: r.principio_activo,
+        nombre: r.nombre,
+        via: r.via,
+        consumoCajas: 0,
+        consumoUnidades: 0,
+        consumoGasto: 0,
+        unidadesPorCaja: r.unidadesPorCaja,
+        precioUnidad: r.precioUnidad,
+      };
+      consumoPorCn.set(r.cn, acc);
+    }
+    if (ymKey(r.anio, r.mes) < ymComparadoDesde) continue;
+    acc.consumoCajas += r.viales;
+    acc.consumoUnidades += r.unidades;
+    acc.consumoGasto += r.gasto;
+  }
+
+  const cn6PorCn = new Map<string, string>();
+  for (const cn of consumoPorCn.keys()) {
+    const cn6 = cnClavePedidos(cn);
+    if (cn6) cn6PorCn.set(cn, cn6);
+  }
+  const compras = comprasComparadasDesde <= hasta
+    ? await loadComprasRecibidasPorCn6([...new Set(cn6PorCn.values())], comprasComparadasDesde, hasta)
+    : new Map<string, { unidades: number; pedidos: number }>();
+
+  const comprasVsConsumo: CompraConsumoCn[] = [...consumoPorCn.values()]
+    .map(({ unidadesPorCaja, precioUnidad, ...acc }) => {
+      const c = compras.get(cn6PorCn.get(acc.cn) ?? '') ?? { unidades: 0, pedidos: 0 };
+      return {
+        ...acc,
+        comprasUnidades: c.unidades,
+        comprasCajas: c.unidades / (unidadesPorCaja > 0 ? unidadesPorCaja : 1),
+        comprasGasto: c.unidades * precioUnidad,
+        pedidosRecibidos: c.pedidos,
+      };
+    })
+    .sort((a, b) => b.consumoGasto - a.consumoGasto);
+
+  return {
+    ...datos,
+    protocolosCompletos: buildTopProtocols(scopeRows.filter((r) => r.protocolo), Number.MAX_SAFE_INTEGER),
+    filas: buildFilasExport(scopeRows),
+    comprasVsConsumo,
+    comprasRegistroDesde,
+    comprasComparadasDesde,
   };
 }

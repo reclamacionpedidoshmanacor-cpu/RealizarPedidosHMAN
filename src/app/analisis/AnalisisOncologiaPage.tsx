@@ -1642,10 +1642,9 @@ function navToParams(nav: NavState): URLSearchParams {
   return params;
 }
 
-function apiParams(nav: NavState, { incluirCn = true } = {}): URLSearchParams {
+function apiParams(nav: NavState): URLSearchParams {
   const params = navToParams(nav);
   params.delete('anio');
-  if (!incluirCn) params.delete('cn');
   params.set('comparativa', 'periodo-anterior');
   return params;
 }
@@ -1946,7 +1945,7 @@ export default function AnalisisOncologiaPage() {
     : [];
 
   function handleExportar() {
-    window.open(`/api/analisis/exportar?${apiParams(nav, { incluirCn: false })}`, '_blank');
+    window.open(`/api/analisis/exportar?${apiParams(nav)}`, '_blank');
   }
 
   function handleExportarPdf() {
