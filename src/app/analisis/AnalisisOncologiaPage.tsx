@@ -194,9 +194,14 @@ const KPI_TONES = {
 
 type KpiTone = keyof typeof KPI_TONES;
 
-function YoyBadge({ pct }: { pct: number | null }) {
+export function fmtVariacion(pct: number): string {
+  const abs = Math.abs(pct);
+  return abs.toLocaleString('es-ES', { maximumFractionDigits: abs >= 100 ? 0 : 1 });
+}
+
+export function YoyBadge({ pct }: { pct: number | null }) {
   if (pct === null) {
-    return <span className="text-[10px] text-slate-400">sin base comparable</span>;
+    return <span className="whitespace-nowrap text-[10px] text-slate-400">sin base comparable</span>;
   }
   const down = pct < 0;
   const neutral = Math.abs(pct) < 3;
@@ -206,8 +211,8 @@ function YoyBadge({ pct }: { pct: number | null }) {
     ? 'bg-amber-50 text-amber-700 ring-amber-200'
     : 'bg-rose-50 text-rose-700 ring-rose-200';
   return (
-    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ${cls}`}>
-      {down ? '▼' : '▲'} {Math.abs(pct).toFixed(1)}%
+    <span className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ${cls}`}>
+      {down ? '▼' : '▲'} {fmtVariacion(pct)}%
     </span>
   );
 }
@@ -1318,9 +1323,8 @@ function MedicamentoListTable({
           <thead className="sticky top-0 bg-slate-50/95 backdrop-blur">
             <tr className="text-[10px] uppercase tracking-wide text-slate-400">
               <th className="px-3 py-2 text-left">Medicamento</th>
-              <th className="px-3 py-2 text-right">Gasto</th>
-              <th className="px-3 py-2 text-right">Cajas eq.</th>
-              <th className="px-3 py-2 text-right">Variación</th>
+              <th className="px-3 py-2 text-right">Gasto · cajas eq.</th>
+              <th className="w-24 px-3 py-2 text-right">Variación</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -1346,14 +1350,16 @@ function MedicamentoListTable({
                     CN {item.cn} · {item.nombre}
                   </p>
                 </td>
-                <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-slate-900">{fmtEur(item.totalGasto)}</td>
-                <td className="px-3 py-2.5 text-right tabular-nums text-slate-600">{fmtQty(item.totalViales)}</td>
-                <td className="px-3 py-2.5 text-right"><YoyBadge pct={item.variacionYoy} /></td>
+                <td className="px-3 py-2.5 text-right tabular-nums">
+                  <p className="whitespace-nowrap font-semibold text-slate-900">{fmtEur(item.totalGasto)}</p>
+                  <p className="whitespace-nowrap text-[10px] text-slate-500">{fmtQty(item.totalViales)} cajas</p>
+                </td>
+                <td className="w-24 px-3 py-2.5 text-right"><YoyBadge pct={item.variacionYoy} /></td>
               </tr>
             ))}
             {items.length === 0 && (
               <tr>
-                <td colSpan={4} className="px-4 py-8 text-center text-sm text-slate-400">
+                <td colSpan={3} className="px-4 py-8 text-center text-sm text-slate-400">
                   No hay medicamentos para el filtro actual.
                 </td>
               </tr>
