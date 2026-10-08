@@ -79,7 +79,7 @@ function daysBetween(desde: string, hasta: string): number {
   return Math.round((b.getTime() - a.getTime()) / 86400000);
 }
 
-function fmtEur(n: number): string {
+export function fmtEur(n: number): string {
   return n.toLocaleString('es-ES', {
     style: 'currency',
     currency: 'EUR',
@@ -91,7 +91,7 @@ function fmtNum(n: number, dec = 1): string {
   return n.toLocaleString('es-ES', { maximumFractionDigits: dec });
 }
 
-function fmtQty(n: number, dec = 1): string {
+export function fmtQty(n: number, dec = 1): string {
   const abs = Math.abs(n);
   const maxFractionDigits = abs > 0 && abs < 0.1
     ? 3
@@ -101,13 +101,13 @@ function fmtQty(n: number, dec = 1): string {
   return n.toLocaleString('es-ES', { maximumFractionDigits: maxFractionDigits });
 }
 
-function fmtEurShort(n: number): string {
+export function fmtEurShort(n: number): string {
   if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace('.', ',')} M€`;
   if (Math.abs(n) >= 1_000) return `${Math.round(n / 1_000)} k€`;
   return `${Math.round(n)} €`;
 }
 
-function fmtDate(iso: string): string {
+export function fmtDate(iso: string): string {
   if (!iso) return '—';
   const [y, m, d] = iso.split('-');
   return `${d}/${m}/${y}`;
@@ -144,7 +144,7 @@ const SERVICE_PALETTE = [
   '#9333ea',  // purple-600    — púrpura vivo
 ] as const;
 
-const VIA_META: Record<Via, { label: string; color: string; actividad: string }> = {
+export const VIA_META: Record<Via, { label: string; color: string; actividad: string }> = {
   IV:   { label: 'IV',   color: '#1e3a8a', actividad: 'preparaciones' },
   ORAL: { label: 'Oral', color: '#a16207', actividad: 'dispensaciones' },
 };
@@ -155,7 +155,7 @@ function actividadLabel(via: Via | null): string {
 
 const YEAR_PALETTE = ['#475569', '#0d9488', '#1d4ed8', '#a21caf', '#4d7c0f'] as const;
 
-function getYearColor(anio: number): string {
+export function getYearColor(anio: number): string {
   const n = YEAR_PALETTE.length;
   return YEAR_PALETTE[(((anio - 2024) % n) + n) % n] ?? YEAR_PALETTE[0];
 }
@@ -168,7 +168,7 @@ function hashText(value: string): number {
   return hash;
 }
 
-function getServiceColor(key: string): string {
+export function getServiceColor(key: string): string {
   return SERVICE_PALETTE[hashText(key) % SERVICE_PALETTE.length] ?? SERVICE_PALETTE[0];
 }
 
@@ -217,7 +217,7 @@ export function YoyBadge({ pct }: { pct: number | null }) {
   );
 }
 
-function ViaSplitBar({ porVia }: { porVia?: GastoPorVia }) {
+export function ViaSplitBar({ porVia }: { porVia?: GastoPorVia }) {
   if (!porVia) return null;
   const total = porVia.IV + porVia.ORAL;
   if (total <= 0) return null;
@@ -343,19 +343,23 @@ function TemporalTooltip({
   );
 }
 
-function TemporalChart({
+export function TemporalChart({
   data,
   title,
   emptyHint,
   showGrupoBreakdown = false,
   showMediaMovil = false,
+  anchoFijo,
 }: {
   data: TemporalPoint[];
   title: string;
   emptyHint: string;
   showGrupoBreakdown?: boolean;
   showMediaMovil?: boolean;
+  /** Ancho en px sin animaciones: para impresión, donde el contenedor no debe re-medirse. */
+  anchoFijo?: number;
 }) {
+  const animar = anchoFijo == null;
   // Grupos con gasto > 0 en el período (para no renderizar barras vacías)
   const gruposPresentes = useMemo(() => {
     if (!showGrupoBreakdown) return [];
@@ -413,7 +417,7 @@ function TemporalChart({
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <h3 className="text-sm font-semibold text-slate-700 mb-4">{title}</h3>
-      <ResponsiveContainer width="100%" height={280}>
+      <ResponsiveContainer width={anchoFijo ?? '100%'} height={280}>
         <ComposedChart data={chartData} margin={{ top: 10, right: 16, left: 0, bottom: 24 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
           <XAxis
@@ -468,6 +472,7 @@ function TemporalChart({
             fillOpacity={0.9}
             minPointSize={3}
             radius={[4, 4, 0, 0]}
+            isAnimationActive={animar}
           >
             {data.map((pt, i) => (
               <Cell key={`${pt.label}-${i}`} fill={getYearColor(pt.anio)} />
@@ -480,6 +485,7 @@ function TemporalChart({
             stroke={SERIES_COLORS.preparaciones}
             strokeWidth={2}
             dot={false}
+            isAnimationActive={animar}
           />
           {showMediaMovil && (
             <Line
@@ -491,6 +497,7 @@ function TemporalChart({
               strokeDasharray="6 3"
               dot={false}
               connectNulls={false}
+              isAnimationActive={animar}
             />
           )}
           {showGrupoBreakdown ? (
@@ -504,6 +511,7 @@ function TemporalChart({
                 fill={GRUPO_COLORS[g].chart}
                 fillOpacity={0.85}
                 radius={idx === gruposPresentes.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]}
+                isAnimationActive={animar}
               />
             ))
           ) : (
@@ -514,6 +522,7 @@ function TemporalChart({
               fill={SERIES_COLORS.gastoTemporal}
               fillOpacity={0.72}
               radius={[4, 4, 0, 0]}
+              isAnimationActive={animar}
             />
           )}
         </ComposedChart>
@@ -1649,6 +1658,21 @@ function apiParams(nav: NavState): URLSearchParams {
   return params;
 }
 
+export type NivelInforme = 'ejecutivo' | 'completo';
+
+const NIVELES_INFORME: Array<{ nivel: NivelInforme; titulo: string; descripcion: string }> = [
+  {
+    nivel: 'ejecutivo',
+    titulo: 'Informe ejecutivo',
+    descripcion: 'Resumen para gerencia: KPIs, IV/Oral, evolución, servicios, tipos tumorales y principales medicamentos.',
+  },
+  {
+    nivel: 'completo',
+    titulo: 'Informe completo',
+    descripcion: 'Añade detalle semanal, desglose diagnóstico, Pareto ABC, semanas atípicas y ficha del medicamento.',
+  },
+];
+
 type FiltroChip = { key: string; label: string; color: string; onRemove: () => void };
 
 function FiltrosActivosBar({
@@ -1725,6 +1749,7 @@ export default function AnalisisOncologiaPage() {
   const [nav, setNav] = useState<NavState>(() => initialNav(presets));
   const [historial, setHistorial] = useState<NavState[]>([]);
   const [soloSeleccionado, setSoloSeleccionado] = useState(false);
+  const [menuPdfAbierto, setMenuPdfAbierto] = useState(false);
   const [medQuery, setMedQuery] = useState('');
   const [datos, setDatos] = useState<AnalisisDatos | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1948,8 +1973,12 @@ export default function AnalisisOncologiaPage() {
     window.open(`/api/analisis/exportar?${apiParams(nav)}`, '_blank');
   }
 
-  function handleExportarPdf() {
-    window.open(`/api/analisis/informe/pdf?${apiParams(nav)}`, '_blank');
+  function handleExportarPdf(nivel: NivelInforme) {
+    setMenuPdfAbierto(false);
+    const params = navToParams(nav);
+    params.delete('anio');
+    params.set('nivel', nivel);
+    window.open(`/analisis/informe?${params}`, '_blank');
   }
 
   return (
@@ -1968,14 +1997,40 @@ export default function AnalisisOncologiaPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={handleExportarPdf}
-              disabled={!datos}
-              className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-medium text-teal-700 shadow-sm hover:bg-teal-100 disabled:opacity-40"
-            >
-              Exportar PDF
-            </button>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setMenuPdfAbierto((v) => !v)}
+                disabled={!datos}
+                aria-expanded={menuPdfAbierto}
+                className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-medium text-teal-700 shadow-sm hover:bg-teal-100 disabled:opacity-40"
+              >
+                Exportar PDF ▾
+              </button>
+              {menuPdfAbierto && (
+                <>
+                  <button
+                    type="button"
+                    aria-label="Cerrar menú"
+                    className="fixed inset-0 z-40 cursor-default"
+                    onClick={() => setMenuPdfAbierto(false)}
+                  />
+                  <div className="absolute right-0 z-50 mt-1 w-72 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
+                    {NIVELES_INFORME.map((n) => (
+                      <button
+                        key={n.nivel}
+                        type="button"
+                        onClick={() => handleExportarPdf(n.nivel)}
+                        className="block w-full px-4 py-2.5 text-left hover:bg-teal-50"
+                      >
+                        <span className="block text-xs font-semibold text-slate-800">{n.titulo}</span>
+                        <span className="block text-[11px] leading-snug text-slate-500">{n.descripcion}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
             <button
               type="button"
               onClick={handleExportar}

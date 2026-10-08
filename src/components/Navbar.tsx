@@ -163,7 +163,7 @@ export default function Navbar() {
     }
   };
 
-  if (pathname === '/login' || pathname.startsWith('/recuento-manual')) return null;
+  if (pathname === '/login' || pathname.startsWith('/recuento-manual') || pathname.startsWith('/analisis/informe')) return null;
 
   return (
     <nav className="sticky top-0 z-50 border-b border-slate-200/80 bg-white/80 backdrop-blur-lg">
