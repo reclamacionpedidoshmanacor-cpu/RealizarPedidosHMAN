@@ -844,14 +844,66 @@ export function MedicamentoComprasConsumoChart({
   );
 }
 
-/** Gasto mensual (barras) y actividad (líneas) de Hospital de Día y Consulta Farmacia. */
+/** Hospital de Día registra el consumo por semanas desde esta fecha. */
+export const INICIO_SEMANAS_HDD = '2026-05-04';
+const MAX_DIAS_VISTA_SEMANAL = 186;
+
+function domingoDe(lunes: string): string {
+  const d = new Date(`${lunes}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + 6);
+  return d.toISOString().slice(0, 10);
+}
+
+export type VistaAmbito = { data: TemporalPoint[]; semanal: boolean; incompletas: string[]; notas: string[] };
+
+/**
+ * Semanal si el período es de 6 meses o menos y hay datos semanales para todo él:
+ * FARONC siempre (fecha de dispensación) y HDD solo desde INICIO_SEMANAS_HDD.
+ */
+export function vistaAmbito(datos: AnalisisDatos, desde: string, hasta: string): VistaAmbito {
+  const corto = daysBetween(desde, hasta) <= MAX_DIAS_VISTA_SEMANAL;
+  const hayHdd = datos.scope.via !== 'ORAL' && datos.temporalHistorico.some((p) => (p.gastoPorVia?.IV ?? 0) > 0);
+  const semanas = datos.temporalReciente;
+  if (!corto || !semanas.length || (hayHdd && desde < INICIO_SEMANAS_HDD)) {
+    return {
+      data: datos.temporalHistorico,
+      semanal: false,
+      incompletas: [],
+      notas: corto && hayHdd
+        ? [`Vista mensual: Hospital de Día solo tiene datos semanales desde el ${fmtDate(INICIO_SEMANAS_HDD)}.`]
+        : [],
+    };
+  }
+
+  const notas: string[] = [];
+  const incompletas = semanas
+    .filter((p, i) => p.lunesRef && ((i === 0 && p.lunesRef < desde) || (i === semanas.length - 1 && domingoDe(p.lunesRef) > hasta)))
+    .map((p) => p.label);
+  if (incompletas.length) notas.push(`Semanas incompletas por el período elegido: ${incompletas.join(' y ')}.`);
+
+  let ultimaConDatos = -1;
+  semanas.forEach((p, i) => { if (p.gasto > 0) ultimaConDatos = i; });
+  const sinDatos = semanas.slice(ultimaConDatos + 1);
+  if (sinDatos.length) {
+    notas.push(`Sin consumo cargado desde la semana del ${sinDatos[0]!.label}.`);
+  }
+  return { data: semanas, semanal: true, incompletas, notas };
+}
+
+/** Gasto (barras) y actividad (líneas) de Hospital de Día y Consulta Farmacia, por meses o por semanas. */
 export function AmbitoTemporalChart({
   data,
+  semanal = false,
+  incompletas = [],
+  notas = [],
   via,
   anchoFijo,
   onSelectVia,
 }: {
   data: TemporalPoint[];
+  semanal?: boolean;
+  incompletas?: string[];
+  notas?: string[];
   via: Via | null;
   anchoFijo?: number;
   onSelectVia?: (via: Via) => void;
@@ -882,7 +934,9 @@ export function AmbitoTemporalChart({
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <h3 className="mb-4 text-sm font-semibold text-slate-700">Evolutivo mensual Hospital de Día y Consulta Farmacia</h3>
+      <h3 className="mb-4 text-sm font-semibold text-slate-700">
+        Evolutivo {semanal ? 'semanal' : 'mensual'} Hospital de Día y Consulta Farmacia
+      </h3>
       <ResponsiveContainer width={anchoFijo ?? '100%'} height={280}>
         <ComposedChart data={chartData} margin={{ top: 10, right: 16, left: 0, bottom: 24 }} barGap={1}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
@@ -934,7 +988,11 @@ export function AmbitoTemporalChart({
               isAnimationActive={animar}
               cursor={onSelectVia ? 'pointer' : undefined}
               onClick={onSelectVia ? () => onSelectVia(v) : undefined}
-            />
+            >
+              {incompletas.length > 0 && data.map((pt) => (
+                <Cell key={pt.label} fill={VIA_META[v].color} fillOpacity={incompletas.includes(pt.label) ? 0.4 : 1} />
+              ))}
+            </Bar>
           ))}
           {vias.map((v) => (
             <Line
@@ -969,6 +1027,11 @@ export function AmbitoTemporalChart({
           </span>
         )}
       </div>
+      {notas.length > 0 && (
+        <div className="mt-1.5 space-y-0.5 text-[10px] text-slate-500">
+          {notas.map((n) => <p key={n}>{n}</p>)}
+        </div>
+      )}
     </div>
   );
 }
@@ -1651,12 +1714,10 @@ function DiagnosticoAccordion({
 
 function GrupoDetallePanel({
   detalle,
-  showWeekly,
   onSelectMed,
   via,
 }: {
   detalle: GrupoDetalle;
-  showWeekly: boolean;
   onSelectMed: (cn: string) => void;
   via: Via | null;
 }) {
@@ -1674,21 +1735,12 @@ function GrupoDetallePanel({
         <KpiCard label="Medicamentos" value={String(detalle.kpis.medicamentosDistintos)} tone="violet" />
       </div>
 
-      <div className={`grid gap-4 ${showWeekly ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1'}`}>
-        <TemporalChart
-          data={detalle.temporalHistorico}
-          title="Evolución mensual del grupo"
-          emptyHint="Sin actividad mensual en el período."
-          showMediaMovil
-        />
-        {showWeekly && (
-          <TemporalChart
-            data={detalle.temporalReciente}
-            title="Detalle semanal del grupo"
-            emptyHint="Sin consumo semanal real en los últimos 6 meses del rango."
-          />
-        )}
-      </div>
+      <TemporalChart
+        data={detalle.temporalHistorico}
+        title="Evolución mensual del grupo"
+        emptyHint="Sin actividad mensual en el período."
+        showMediaMovil
+      />
 
       {via !== 'ORAL' && <TopProtocolosTable items={detalle.topProtocolos} />}
 
@@ -2604,25 +2656,20 @@ export default function AnalisisOncologiaPage() {
             </div>
           </div>
 
-          <div className={`grid gap-4 ${showWeekly ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1'}`}>
-            <TemporalChart
-              data={datos.temporalHistorico}
-              title="Evolutivo mensual"
-              emptyHint="Sin consumo mensual para el rango seleccionado."
-              showGrupoBreakdown
-              showMediaMovil
-              mostrarCajas={false}
-            />
-            {showWeekly && (
-              <TemporalChart
-                data={datos.temporalReciente}
-                title="Detalle semanal del alcance actual"
-                emptyHint="Sin consumo semanal real en los últimos 6 meses del rango."
-              />
-            )}
-          </div>
+          <TemporalChart
+            data={datos.temporalHistorico}
+            title="Evolutivo mensual"
+            emptyHint="Sin consumo mensual para el rango seleccionado."
+            showGrupoBreakdown
+            showMediaMovil
+            mostrarCajas={false}
+          />
 
-          <AmbitoTemporalChart data={datos.temporalHistorico} via={viaSel} onSelectVia={handleSelectVia} />
+          <AmbitoTemporalChart
+            {...vistaAmbito(datos, desde, hasta)}
+            via={viaSel}
+            onSelectVia={handleSelectVia}
+          />
 
           {viaSel !== 'ORAL' && <TopProtocolosTable items={datos.topProtocolos} />}
 
@@ -2636,7 +2683,6 @@ export default function AnalisisOncologiaPage() {
               </div>
               <GrupoDetallePanel
                 detalle={datos.grupoDetalle}
-                showWeekly={showWeekly}
                 onSelectMed={handleSelectCn}
                 via={viaSel}
               />

@@ -1267,29 +1267,53 @@ function buildWeeklyTemporal(rows: ClassifiedRow[], maxWeeks?: number): Temporal
     if (!ref.lunesRef) continue;
     if (r.via === 'IV' && (!inicioIvSemanal || ref.lunesRef < inicioIvSemanal)) inicioIvSemanal = ref.lunesRef;
 
-    const ex = map.get(ref.lunesRef);
-    if (ex) {
-      ex.viales += r.viales; ex.unidades += r.unidades; ex.gasto += r.gasto;
-      ex.preparaciones += r.preparaciones; ex.pacientes += r.pacientes;
-    } else {
+    let pt = map.get(ref.lunesRef);
+    if (!pt) {
       const semana = esSemanal ? r.semana_iso : ref.semana;
-      map.set(ref.lunesRef, {
+      pt = {
         anio: r.anio, mes: r.mes, semana,
         label: ref.label || weekLabel(r.anio, semana, r.mes),
         lunesRef: ref.lunesRef,
-        viales: r.viales,
-        unidades: r.unidades,
-        gasto: r.gasto,
-        preparaciones: r.preparaciones,
-        pacientes: r.pacientes,
-      });
+        viales: 0, unidades: 0, gasto: 0, preparaciones: 0, pacientes: 0,
+        gastoPorVia: { IV: 0, ORAL: 0 },
+        preparacionesPorVia: { IV: 0, ORAL: 0 },
+      };
+      map.set(ref.lunesRef, pt);
     }
+    pt.viales += r.viales; pt.unidades += r.unidades; pt.gasto += r.gasto;
+    pt.preparaciones += r.preparaciones; pt.pacientes += r.pacientes;
+    pt.gastoPorVia![r.via] += r.gasto;
+    pt.preparacionesPorVia![r.via] += r.preparaciones;
   }
   let sorted = [...map.values()].sort((a, b) => (a.lunesRef ?? '').localeCompare(b.lunesRef ?? ''));
   if (hayIvSoloMensual) {
     sorted = inicioIvSemanal ? sorted.filter((p) => (p.lunesRef ?? '') >= inicioIvSemanal!) : [];
   }
   return maxWeeks ? sorted.slice(-maxWeeks) : sorted;
+}
+
+/** Añade a cero las semanas del período sin consumo para que la serie lo cubra entero. */
+function rellenarSemanas(puntos: TemporalPoint[], desde: string, hasta: string): TemporalPoint[] {
+  if (!puntos.length) return puntos;
+  const porLunes = new Map(puntos.map((p) => [p.lunesRef ?? '', p]));
+  const primero = weekRefFromIsoDate(desde).lunesRef;
+  const ultimo = weekRefFromIsoDate(hasta).lunesRef;
+  if (!primero || !ultimo) return puntos;
+  const out: TemporalPoint[] = [];
+  for (let lunes = primero; lunes <= ultimo; lunes = addDays(lunes, 7)) {
+    const ref = weekRefFromIsoDate(lunes);
+    out.push(porLunes.get(lunes) ?? {
+      anio: Number(lunes.slice(0, 4)),
+      mes: Number(lunes.slice(5, 7)),
+      semana: ref.semana,
+      label: ref.label,
+      lunesRef: lunes,
+      viales: 0, unidades: 0, gasto: 0, preparaciones: 0, pacientes: 0,
+      gastoPorVia: { IV: 0, ORAL: 0 },
+      preparacionesPorVia: { IV: 0, ORAL: 0 },
+    });
+  }
+  return out;
 }
 
 function countSemanas(rows: ClassifiedRow[]): number {
@@ -2212,7 +2236,7 @@ async function computeAnalisis(
   const allProts       = new Set(scopeRows.map(r => r.protocolo).filter(Boolean));
   const allServicios   = new Set(scopeRows.map(r => r.servicioKey));
   const temporalHistorico = buildCompleteMonthlyTemporal(scopeRows, desde, hasta);
-  const temporalReciente = buildWeeklyTemporal(scopeRows);
+  const temporalReciente = rellenarSemanas(buildWeeklyTemporal(scopeRows), desde, hasta);
 
   const kpis: KpisAnalisis = {
     totalGasto: scopeGasto,

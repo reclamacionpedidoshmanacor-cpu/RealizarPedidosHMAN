@@ -20,6 +20,7 @@ import {
   hayFiltrosAlcance,
   inicioCompras,
   mesesEntre,
+  vistaAmbito,
   type NivelInforme,
 } from '../AnalisisOncologiaPage';
 
@@ -518,6 +519,7 @@ function Informe({ datos, nivel }: { datos: AnalisisDatos; nivel: NivelInforme }
   const resumen = construirResumen(datos);
   const completo = nivel === 'completo';
   const via = datos.scope.via;
+  const ambito = vistaAmbito(datos, datos.periodo.desde, datos.periodo.hasta);
   const generado = new Date().toLocaleString('es-ES', { dateStyle: 'short', timeStyle: 'short' });
 
   return (
@@ -605,21 +607,10 @@ function Informe({ datos, nivel }: { datos: AnalisisDatos; nivel: NivelInforme }
 
       <Seccion
         titulo="Evolutivo Hospital de Día y Consulta Farmacia"
-        subtitulo="Barras: gasto mensual de cada ámbito. Líneas: preparaciones en HDD y dispensaciones en FARONC."
+        subtitulo={`Barras: gasto ${ambito.semanal ? 'semanal' : 'mensual'} de cada ámbito. Líneas: preparaciones en HDD y dispensaciones en FARONC.`}
       >
-        <AmbitoTemporalChart data={datos.temporalHistorico} via={via} anchoFijo={ANCHO_GRAFICO} />
+        <AmbitoTemporalChart {...ambito} via={via} anchoFijo={ANCHO_GRAFICO} />
       </Seccion>
-
-      {completo && datos.temporalReciente.length > 0 && (
-        <Seccion titulo="Detalle semanal">
-          <TemporalChart
-            data={datos.temporalReciente}
-            title="Detalle semanal del alcance"
-            emptyHint="Sin consumo semanal."
-            anchoFijo={ANCHO_GRAFICO}
-          />
-        </Seccion>
-      )}
 
       <Seccion
         titulo="Gasto por servicio"
