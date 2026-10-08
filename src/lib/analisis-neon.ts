@@ -60,9 +60,9 @@ function mondayOfDate(date: Date): Date {
   return d;
 }
 
-function weekRefFromIsoDate(iso: string): { lunesRef: string; label: string } {
+function weekRefFromIsoDate(iso: string): { lunesRef: string; label: string; semana: number | null } {
   const parsed = parseDateOnly(iso);
-  if (!parsed) return { lunesRef: '', label: '—' };
+  if (!parsed) return { lunesRef: '', label: '—', semana: null };
   const monday = mondayOfDate(parsed);
   const tmp = new Date(Date.UTC(parsed.getFullYear(), parsed.getMonth(), parsed.getDate()));
   const day = tmp.getUTCDay() || 7;
@@ -74,6 +74,7 @@ function weekRefFromIsoDate(iso: string): { lunesRef: string; label: string } {
   return {
     lunesRef: fmtIsoDate(monday),
     label: `${d}/${m} (S${String(week).padStart(2, '0')})`,
+    semana: week,
   };
 }
 
@@ -498,6 +499,8 @@ type ClassifiedRow = {
   mes: number;
   semana_iso: number | null;
   fecha_min: string;      // fecha real ISO yyyy-MM-dd para el corte histórico/reciente
+  /** Lunes de la semana de dispensación: solo filas orales mensuales con fecha real. */
+  lunes_disp: string | null;
   servicio: string;
   servicioKey: string;
   diagnostico: string;
@@ -556,7 +559,13 @@ async function getAnalisisRaw(
       BOOL_OR(
         upper(COALESCE(m.via, '')) = 'ORAL'
         OR lower(COALESCE(cr.tipo_terapia, '')) LIKE 'oral%'
-      )                                                                       AS es_oral
+      )                                                                       AS es_oral,
+      CASE
+        WHEN COALESCE(cr.semana_iso, 0) <= 0
+          AND cr.dia IS NOT NULL
+          AND (upper(COALESCE(m.via, '')) = 'ORAL' OR lower(COALESCE(cr.tipo_terapia, '')) LIKE 'oral%')
+        THEN date_trunc('week', cr.fecha)::date::text
+      END                                                                     AS lunes_disp
     FROM consumo_registros cr
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
     JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
@@ -564,7 +573,7 @@ async function getAnalisisRaw(
       AND (cr.anio * 100 + cr.mes) >= ${ymDesde}
       AND (cr.anio * 100 + cr.mes) <= ${ymHasta}
       AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
-    GROUP BY cr.anio, cr.mes, cr.semana_iso, cr.servicio, cr.diagnostico, cr.indicacion, cr.protocolo, cr.cn
+    GROUP BY cr.anio, cr.mes, cr.semana_iso, cr.servicio, cr.diagnostico, cr.indicacion, cr.protocolo, cr.cn, lunes_disp
     ORDER BY cr.anio, cr.mes, cr.semana_iso, cr.servicio, cr.cn
   `) as Array<{
     anio: number; mes: number; semana_iso: number | null;
@@ -572,13 +581,14 @@ async function getAnalisisRaw(
     cn: string; principio_activo: string; nombre: string;
     unidades_por_caja: number; precio_unidad: number; unidades: number; viales: number;
     pacientes: number; preparaciones: number; gasto: number;
-    fecha_min: string; es_oral: boolean | null;
+    fecha_min: string; es_oral: boolean | null; lunes_disp: string | null;
   }>;
 
   return rows.map(r => ({
     anio: num(r.anio), mes: num(r.mes),
     semana_iso: r.semana_iso != null ? num(r.semana_iso) : null,
     fecha_min: r.fecha_min,
+    lunes_disp: r.lunes_disp,
     servicio: servicioLabel(r.servicio),
     servicioKey: servicioKey(r.servicio),
     diagnostico: r.diagnostico, indicacion: r.indicacion, protocolo: r.protocolo,
@@ -1241,22 +1251,32 @@ function buildCompleteMonthlyTemporal(
   return fillTemporalGaps(buildMonthlyTemporalFiable(rows), desde, hasta);
 }
 
+/**
+ * HDD llega por semanas desde CUT_YM; FARONC se agrupa por la semana de su fecha de dispensación.
+ * Si el alcance incluye HDD solo mensual, la serie empieza en su primera semana real para no
+ * mostrar semanas a medias.
+ */
 function buildWeeklyTemporal(rows: ClassifiedRow[], maxWeeks?: number): TemporalPoint[] {
   const map = new Map<string, TemporalPoint>();
+  let inicioIvSemanal: string | null = null;
+  let hayIvSoloMensual = false;
   for (const r of rows) {
-    const sem = r.semana_iso;
-    if (sem == null || sem <= 0) continue;
-    const key = `${r.anio}-W${sem}`;
-    const ex = map.get(key);
+    const esSemanal = r.semana_iso != null && r.semana_iso > 0;
+    if (r.via === 'IV' && !esSemanal) hayIvSoloMensual = true;
+    const ref = weekRefFromIsoDate(esSemanal ? r.fecha_min : r.lunes_disp ?? '');
+    if (!ref.lunesRef) continue;
+    if (r.via === 'IV' && (!inicioIvSemanal || ref.lunesRef < inicioIvSemanal)) inicioIvSemanal = ref.lunesRef;
+
+    const ex = map.get(ref.lunesRef);
     if (ex) {
       ex.viales += r.viales; ex.unidades += r.unidades; ex.gasto += r.gasto;
       ex.preparaciones += r.preparaciones; ex.pacientes += r.pacientes;
     } else {
-      const ref = weekRefFromIsoDate(r.fecha_min);
-      map.set(key, {
-        anio: r.anio, mes: r.mes, semana: sem,
-        label: ref.label || weekLabel(r.anio, sem, r.mes),
-        lunesRef: ref.lunesRef || null,
+      const semana = esSemanal ? r.semana_iso : ref.semana;
+      map.set(ref.lunesRef, {
+        anio: r.anio, mes: r.mes, semana,
+        label: ref.label || weekLabel(r.anio, semana, r.mes),
+        lunesRef: ref.lunesRef,
         viales: r.viales,
         unidades: r.unidades,
         gasto: r.gasto,
@@ -1265,10 +1285,10 @@ function buildWeeklyTemporal(rows: ClassifiedRow[], maxWeeks?: number): Temporal
       });
     }
   }
-  const sorted = [...map.values()].sort((a, b) => {
-    if (a.anio !== b.anio) return a.anio - b.anio;
-    return (a.semana ?? 0) - (b.semana ?? 0);
-  });
+  let sorted = [...map.values()].sort((a, b) => (a.lunesRef ?? '').localeCompare(b.lunesRef ?? ''));
+  if (hayIvSoloMensual) {
+    sorted = inicioIvSemanal ? sorted.filter((p) => (p.lunesRef ?? '') >= inicioIvSemanal!) : [];
+  }
   return maxWeeks ? sorted.slice(-maxWeeks) : sorted;
 }
 
@@ -1899,17 +1919,22 @@ function mergeMedicamentoTemporalSemanal(
   const keys = new Set<string>();
   for (const point of consumo) if (point.lunesRef) keys.add(point.lunesRef);
   for (const key of compras.keys()) keys.add(key);
+  const ordenadas = [...keys].sort((a, b) => a.localeCompare(b));
+  if (ordenadas.length > 1) {
+    for (let lunes = ordenadas[0]!; lunes < ordenadas.at(-1)!; lunes = addDays(lunes, 7)) keys.add(lunes);
+  }
 
   return [...keys]
     .sort((a, b) => a.localeCompare(b))
     .map((lunesRef) => {
       const point = consumo.find((item) => item.lunesRef === lunesRef);
       const compra = compras.get(lunesRef);
+      const ref = weekRefFromIsoDate(lunesRef);
       return {
         anio: point?.anio ?? Number(lunesRef.slice(0, 4)),
         mes: point?.mes ?? Number(lunesRef.slice(5, 7)),
-        semana: point?.semana ?? null,
-        label: point?.label ?? compra?.label ?? lunesRef,
+        semana: point?.semana ?? ref.semana,
+        label: point?.label ?? compra?.label ?? ref.label,
         lunesRef,
         consumoCajas: point?.viales ?? 0,
         consumoUnidades: point?.unidades ?? 0,

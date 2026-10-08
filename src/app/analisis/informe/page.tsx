@@ -2,9 +2,10 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { GRUPO_COLORS, GRUPO_LABELS } from '@/lib/diagnostico-grupos';
-import type { AnalisisDatos, MedicamentoDetalle } from '@/lib/analisis-neon';
+import type { AnalisisDatos, MedicamentoDetalle, Via } from '@/lib/analisis-neon';
 import {
   AmbitoTemporalChart,
+  MedicamentoComprasConsumoChart,
   TemporalChart,
   ViaSplitBar,
   VIA_META,
@@ -427,11 +428,13 @@ function FichaMedicamento({
   desde,
   hasta,
   comprasRegistroDesde,
+  via,
 }: {
   med: MedicamentoDetalle;
   desde: string;
   hasta: string;
   comprasRegistroDesde: string | null;
+  via: Via | null;
 }) {
   const meses = med.temporalMensual.filter((p) => p.consumoCajas > 0 || p.comprasCajas > 0);
   const nMeses = mesesEntre(desde, hasta);
@@ -469,6 +472,14 @@ function FichaMedicamento({
           />
           <Kpi label="Compra valorizada" value={fmtEur(med.compras.totalGasto)} sub={`${med.compras.nPedidosRecibidos} pedidos`} />
         </div>
+      </div>
+      <div className="break-inside-avoid">
+        <MedicamentoComprasConsumoChart
+          data={med.temporalMensual}
+          via={via}
+          comprasRegistroDesde={comprasRegistroDesde}
+          anchoFijo={ANCHO_GRAFICO}
+        />
       </div>
       {meses.length > 0 && (
         <Tabla
@@ -660,6 +671,7 @@ function Informe({ datos, nivel }: { datos: AnalisisDatos; nivel: NivelInforme }
             desde={datos.periodo.desde}
             hasta={datos.periodo.hasta}
             comprasRegistroDesde={datos.compras?.registroDesde ?? COMPRAS_REGISTRO_DESDE}
+            via={datos.medicamentos.find((m) => m.cn === datos.medicamentoDetalle?.cn)?.via ?? null}
           />
         </Seccion>
       )}

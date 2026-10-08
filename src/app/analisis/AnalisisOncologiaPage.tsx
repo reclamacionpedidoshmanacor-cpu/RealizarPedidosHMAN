@@ -33,6 +33,7 @@ import type {
   IndicacionDetalle,
   MedicamentoDetalle,
   MedicamentoListItem,
+  MedicamentoTemporalPoint,
   ServicioCard,
   TemporalPoint,
   TopProtocolo,
@@ -631,6 +632,214 @@ function AmbitoTooltip({
           </div>
         );
       })}
+    </div>
+  );
+}
+
+type FilaGraficaMed = MedicamentoTemporalPoint & { sinRegistro: boolean; acumulado: number | null };
+
+function fmtCajasSigno(n: number): string {
+  const r = Math.round(n * 10) / 10;
+  return `${r > 0 ? '+' : r < 0 ? '−' : ''}${fmtQty(Math.abs(r))}`;
+}
+
+/** El período del punto termina antes de que empiece el registro de compras. */
+function periodoAntesDeCompras(p: MedicamentoTemporalPoint, registroDesde: string): boolean {
+  if (p.lunesRef) {
+    const domingo = new Date(`${p.lunesRef}T12:00:00Z`);
+    domingo.setUTCDate(domingo.getUTCDate() + 6);
+    return domingo.toISOString().slice(0, 10) < registroDesde;
+  }
+  return `${p.anio}-${String(p.mes).padStart(2, '0')}-31` < registroDesde;
+}
+
+function MedicamentoTooltip({
+  active,
+  payload,
+  label,
+  actividad,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload?: FilaGraficaMed }>;
+  label?: string;
+  actividad: string;
+}) {
+  const p = active ? payload?.[0]?.payload : undefined;
+  if (!p) return null;
+  return (
+    <div className="min-w-[250px] rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs shadow-lg tabular-nums">
+      <p className="font-semibold text-slate-800">{label}</p>
+      <div className="mt-1.5 space-y-0.5 text-slate-700">
+        <p>
+          <span className="font-semibold" style={{ color: SERIES_COLORS.gasto }}>Consumo:</span>{' '}
+          {fmtEur(p.consumoGasto)} · {fmtQty(p.consumoCajas)} cajas
+        </p>
+        {p.sinRegistro ? (
+          <p className="text-slate-400">Compra: sin registro de compras</p>
+        ) : (
+          <>
+            <p>
+              <span className="font-semibold" style={{ color: SERIES_COLORS.comprasGasto }}>Compra:</span>{' '}
+              {fmtEur(p.comprasGasto)} · {fmtQty(p.comprasCajas)} cajas
+            </p>
+            <p className="text-slate-600">
+              Compras − consumo: {fmtCajasSigno(p.comprasCajas - p.consumoCajas)} cajas
+              {p.acumulado != null && <> · acumulado {fmtCajasSigno(p.acumulado)}</>}
+            </p>
+          </>
+        )}
+        <p className="text-slate-600">{fmtNum(p.preparaciones, 0)} {actividad}</p>
+      </div>
+    </div>
+  );
+}
+
+/** Consumo y compra en € (barras), diferencia acumulada en cajas y actividad (líneas) de un medicamento. */
+export function MedicamentoComprasConsumoChart({
+  data,
+  via,
+  comprasRegistroDesde,
+  anchoFijo,
+}: {
+  data: MedicamentoTemporalPoint[];
+  via: Via | null;
+  comprasRegistroDesde: string | null;
+  anchoFijo?: number;
+}) {
+  const animar = anchoFijo == null;
+  const actividad = via ? `${VIA_META[via].actividad} ${VIA_META[via].label}` : 'preparaciones / dispensaciones';
+
+  const filas = useMemo<FilaGraficaMed[]>(() => {
+    let acumulado = 0;
+    return data.map((p) => {
+      const sinRegistro = comprasRegistroDesde != null && periodoAntesDeCompras(p, comprasRegistroDesde);
+      if (!sinRegistro) acumulado += p.comprasCajas - p.consumoCajas;
+      return { ...p, sinRegistro, acumulado: sinRegistro ? null : acumulado };
+    });
+  }, [data, comprasRegistroDesde]);
+
+  const tramosAnio = useMemo(() => {
+    const tramos: Array<{ anio: number; x1: string; x2: string }> = [];
+    for (const p of filas) {
+      const last = tramos.at(-1);
+      if (last && last.anio === p.anio) last.x2 = p.label;
+      else tramos.push({ anio: p.anio, x1: p.label, x2: p.label });
+    }
+    return tramos;
+  }, [filas]);
+
+  if (!filas.length) return null;
+  const sinRegistro = filas.filter((p) => p.sinRegistro);
+  const nombreActividad = actividad.charAt(0).toUpperCase() + actividad.slice(1);
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <h4 className="mb-3 text-sm font-semibold text-slate-700">Consumo y compra del medicamento</h4>
+      <ResponsiveContainer width={anchoFijo ?? '100%'} height={anchoFijo ? 280 : 340}>
+        <ComposedChart data={filas} margin={{ top: 10, right: 16, left: 0, bottom: 24 }} barGap={1}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+          <XAxis
+            dataKey="label"
+            tick={{ fontSize: 10, fill: '#64748b' }}
+            interval="preserveStartEnd"
+            angle={filas.length > 10 ? -25 : 0}
+            textAnchor={filas.length > 10 ? 'end' : 'middle'}
+            height={filas.length > 10 ? 46 : 28}
+          />
+          <YAxis
+            yAxisId="left"
+            tick={{ fontSize: 10, fill: '#94a3b8' }}
+            tickFormatter={(v) => fmtNum(Number(v), 0)}
+            width={48}
+          />
+          <YAxis
+            yAxisId="right"
+            orientation="right"
+            tick={{ fontSize: 10, fill: '#94a3b8' }}
+            tickFormatter={(v) => fmtEurShort(Number(v))}
+            width={72}
+          />
+          <Tooltip content={<MedicamentoTooltip actividad={actividad} />} />
+          {tramosAnio.length > 1 && tramosAnio.map((t) => (
+            <ReferenceArea
+              key={`anio-${t.anio}`}
+              yAxisId="left"
+              x1={t.x1}
+              x2={t.x2}
+              fill={getYearColor(t.anio)}
+              fillOpacity={0.06}
+              strokeOpacity={0}
+              label={{ value: String(t.anio), position: 'insideTop', fontSize: 10, fontWeight: 700, fill: getYearColor(t.anio) }}
+            />
+          ))}
+          {sinRegistro.length > 0 && (
+            <ReferenceArea
+              yAxisId="left"
+              x1={sinRegistro[0]!.label}
+              x2={sinRegistro.at(-1)!.label}
+              fill="#94a3b8"
+              fillOpacity={0.14}
+              strokeOpacity={0}
+              label={{ value: 'Sin registro de compras', position: 'insideTop', offset: 22, fontSize: 10, fill: '#64748b' }}
+            />
+          )}
+          <ReferenceLine yAxisId="left" y={0} stroke="#cbd5e1" />
+          <Bar
+            yAxisId="right"
+            dataKey="consumoGasto"
+            name="Consumo valorizado"
+            fill={SERIES_COLORS.gasto}
+            radius={[3, 3, 0, 0]}
+            isAnimationActive={animar}
+          />
+          <Bar
+            yAxisId="right"
+            dataKey="comprasGasto"
+            name="Compra valorizada"
+            fill={SERIES_COLORS.comprasGasto}
+            radius={[3, 3, 0, 0]}
+            isAnimationActive={animar}
+          />
+          <Line
+            yAxisId="left"
+            dataKey="acumulado"
+            name="Compras − consumo acumulado (cajas)"
+            stroke={SERIES_COLORS.surface}
+            strokeWidth={2}
+            strokeDasharray="5 3"
+            dot={{ r: 2, fill: SERIES_COLORS.surface }}
+            connectNulls={false}
+            isAnimationActive={false}
+          />
+          <Line
+            yAxisId="left"
+            dataKey="preparaciones"
+            name={nombreActividad}
+            stroke={SERIES_COLORS.preparaciones}
+            strokeWidth={2}
+            dot={{ r: 2, fill: SERIES_COLORS.preparaciones }}
+            isAnimationActive={false}
+          />
+        </ComposedChart>
+      </ResponsiveContainer>
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-slate-600">
+        <span className="flex items-center gap-1">
+          <span className="h-2 w-2 flex-shrink-0 rounded-sm" style={{ backgroundColor: SERIES_COLORS.gasto }} />
+          Consumo valorizado
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="h-2 w-2 flex-shrink-0 rounded-sm" style={{ backgroundColor: SERIES_COLORS.comprasGasto }} />
+          Compra valorizada
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-3 flex-shrink-0 border-t-2 border-dashed" style={{ borderColor: SERIES_COLORS.surface }} />
+          Compras − consumo acumulado (cajas)
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="h-0.5 w-3 flex-shrink-0" style={{ backgroundColor: SERIES_COLORS.preparaciones }} />
+          {nombreActividad}
+        </span>
+      </div>
     </div>
   );
 }
@@ -1587,12 +1796,14 @@ function MedicamentoDetallePanel({
   desde,
   hasta,
   comprasRegistroDesde,
+  via,
 }: {
   detalle: MedicamentoDetalle;
   showWeeklyByDefault: boolean;
   desde: string;
   hasta: string;
   comprasRegistroDesde: string | null;
+  via: Via | null;
 }) {
   const meses = mesesEntre(desde, hasta);
   const desdeCompras = inicioCompras(desde, hasta, comprasRegistroDesde);
@@ -1679,61 +1890,16 @@ function MedicamentoDetallePanel({
           >
             Últimos 6 meses por semanas
           </button>
+          {modo === 'semanal' && canShowWeekly && (
+            <span className="text-[11px] text-slate-400">
+              {via === 'ORAL'
+                ? 'Consumo agrupado por la semana de la fecha de dispensación en Consulta Farmacia.'
+                : 'Hospital de Día registra el consumo por semanas desde mayo de 2026; antes solo hay datos mensuales.'}
+            </span>
+          )}
         </div>
 
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          <div className="rounded-xl border border-slate-200 p-4">
-            <h4 className="text-sm font-semibold text-slate-700 mb-3">Compras recibidas vs consumo en cajas equivalentes</h4>
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 24 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis
-                  dataKey="label"
-                  tick={{ fontSize: 10, fill: '#64748b' }}
-                  interval="preserveStartEnd"
-                  angle={data.length > 10 ? -25 : 0}
-                  textAnchor={data.length > 10 ? 'end' : 'middle'}
-                  height={data.length > 10 ? 46 : 28}
-                />
-                <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} width={60} tickFormatter={(v) => fmtQty(Number(v))} />
-                <Tooltip content={<TemporalTooltip />} />
-                <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Bar dataKey="comprasCajas" name="Compras recibidas" fill={SERIES_COLORS.compras} minPointSize={3} radius={[4, 4, 0, 0]} />
-                <Bar dataKey="consumoCajas" name="Consumo" fill={SERIES_COLORS.consumo} minPointSize={3} radius={[4, 4, 0, 0]} />
-                <Line
-                  dataKey="preparaciones"
-                  name="Preparaciones"
-                  stroke={SERIES_COLORS.preparaciones}
-                  strokeWidth={2}
-                  dot={false}
-                  isAnimationActive={false}
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          <div className="rounded-xl border border-slate-200 p-4">
-            <h4 className="text-sm font-semibold text-slate-700 mb-3">Compra valorizada vs consumo valorizado</h4>
-            <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 24 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis
-                  dataKey="label"
-                  tick={{ fontSize: 10, fill: '#64748b' }}
-                  interval="preserveStartEnd"
-                  angle={data.length > 10 ? -25 : 0}
-                  textAnchor={data.length > 10 ? 'end' : 'middle'}
-                  height={data.length > 10 ? 46 : 28}
-                />
-                <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} width={72} tickFormatter={(v) => fmtEurShort(Number(v))} />
-                <Tooltip content={<TemporalTooltip />} />
-                <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Bar dataKey="comprasGasto" name="Compra valorizada" fill={SERIES_COLORS.comprasGasto} minPointSize={3} radius={[4, 4, 0, 0]} />
-                <Bar dataKey="consumoGasto" name="Consumo valorizado" fill={SERIES_COLORS.gasto} minPointSize={3} radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
+        <MedicamentoComprasConsumoChart data={data} via={via} comprasRegistroDesde={comprasRegistroDesde} />
 
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
           <DistributionBars
@@ -2494,6 +2660,7 @@ export default function AnalisisOncologiaPage() {
                 desde={desde}
                 hasta={hasta}
                 comprasRegistroDesde={datos.compras?.registroDesde ?? null}
+                via={datos.medicamentos.find((m) => m.cn === datos.medicamentoDetalle?.cn)?.via ?? null}
               />
             ) : (
               <div className={`${ALTO_FICHA_XL} rounded-xl border border-slate-200 bg-slate-50 px-6 py-12 text-center text-sm text-slate-500 flex items-center justify-center`}>
