@@ -232,6 +232,8 @@ export type TemporalPoint = {
   lunesRef?: string | null;
   gastoPorGrupo?: Partial<Record<DiagnosticoGrupo, number>>;
   gastoPorVia?: GastoPorVia;
+  /** IV: preparaciones en HDD · ORAL: dispensaciones en FARONC. */
+  preparacionesPorVia?: GastoPorVia;
 };
 
 export type MedicamentoEnProtocolo = {
@@ -643,10 +645,17 @@ async function getGastoAnualPorServicioReal(area: string): Promise<GastoAnualSer
 // YoY año en curso: mismos meses fiables vs año anterior (sin doble conteo semanal).
 // ---------------------------------------------------------------------------
 
-function gastoCeldaFiable(mensual: number, semanal: number, anio: number, mes: number): number {
-  const ym = ymKey(anio, mes);
-  if (ym >= CUT_YM) return semanal > 0 ? semanal : mensual;
-  return mensual > 0 ? mensual : semanal;
+/**
+ * HDD (IV) pasa a registro semanal real desde mayo 2026 (el mensual de mayo solo cubre hasta el día 3).
+ * FARONC (oral) sigue importándose mensual: su mensual es el dato completo.
+ */
+function preferirSemanal(mensual: number, semanal: number, anio: number, mes: number, via: Via): boolean {
+  if (via === 'IV' && ymKey(anio, mes) >= CUT_YM) return semanal > 0;
+  return mensual <= 0 && semanal > 0;
+}
+
+function gastoCeldaFiable(mensual: number, semanal: number, anio: number, mes: number, via: Via): number {
+  return preferirSemanal(mensual, semanal, anio, mes, via) ? semanal : mensual;
 }
 
 type YAcc = {
@@ -683,27 +692,29 @@ async function getGastoAnualPorServicio(area: string): Promise<GastoAnualServici
       cr.mes::int                                                             AS mes,
       cr.semana_iso::int                                                      AS semana_iso,
       COALESCE(cr.diagnostico, '')                                            AS diagnostico,
+      (upper(COALESCE(m.via, '')) = 'ORAL' OR lower(COALESCE(cr.tipo_terapia, '')) LIKE 'oral%') AS es_oral,
       SUM(cr.viales_dispensados * COALESCE(m.precio_unidad, 0))::float        AS gasto
     FROM consumo_registros cr
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
     JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
     WHERE ic.area = ${area}
       AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
-    GROUP BY cr.anio, cr.mes, cr.semana_iso, cr.diagnostico
-  `) as Array<{ anio: number; mes: number; semana_iso: number | null; diagnostico: string; gasto: number }>;
+    GROUP BY cr.anio, cr.mes, cr.semana_iso, cr.diagnostico, es_oral
+  `) as Array<{ anio: number; mes: number; semana_iso: number | null; diagnostico: string; es_oral: boolean; gasto: number }>;
 
-  type Celda = { mensual: number; semanal: number; servicio: ReturnType<typeof getServicioFromGrupo> };
+  type Celda = { mensual: number; semanal: number; via: Via; servicio: ReturnType<typeof getServicioFromGrupo> };
   const celdas = new Map<string, Celda>();
 
   for (const r of rows) {
     const anio = num(r.anio);
     const mes  = num(r.mes);
     const g    = Number(r.gasto);
-    const key  = `${anio}|${mes}|${r.diagnostico}`;
+    const via: Via = r.es_oral ? 'ORAL' : 'IV';
+    const key  = `${anio}|${mes}|${via}|${r.diagnostico}`;
     const isMensual = r.semana_iso == null || r.semana_iso === 0;
     let c = celdas.get(key);
     if (!c) {
-      c = { mensual: 0, semanal: 0, servicio: getServicioFromGrupo(classifyDiagnostico(r.diagnostico)) };
+      c = { mensual: 0, semanal: 0, via, servicio: getServicioFromGrupo(classifyDiagnostico(r.diagnostico)) };
       celdas.set(key, c);
     }
     if (isMensual) c.mensual += g; else c.semanal += g;
@@ -715,7 +726,7 @@ async function getGastoAnualPorServicio(area: string): Promise<GastoAnualServici
     const [anioStr, mesStr] = key.split('|', 3);
     const anio = num(anioStr);
     const mes  = num(mesStr);
-    const g    = gastoCeldaFiable(c.mensual, c.semanal, anio, mes);
+    const g    = gastoCeldaFiable(c.mensual, c.semanal, anio, mes, c.via);
 
     let y = yearMap.get(anio);
     if (!y) {
@@ -807,6 +818,7 @@ async function getYoyYtd(area: string, mesHasta: number, anio: number): Promise<
       cr.mes::int                                                             AS mes,
       cr.semana_iso::int                                                      AS semana_iso,
       COALESCE(cr.diagnostico, '')                                            AS diagnostico,
+      BOOL_OR(upper(COALESCE(m.via, '')) = 'ORAL' OR lower(COALESCE(cr.tipo_terapia, '')) LIKE 'oral%') AS es_oral,
       SUM(cr.viales_dispensados * COALESCE(m.precio_unidad, 0))::float        AS gasto
     FROM consumo_registros cr
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
@@ -816,9 +828,9 @@ async function getYoyYtd(area: string, mesHasta: number, anio: number): Promise<
       AND cr.mes <= ${mesHasta}
       AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
     GROUP BY cr.cn, cr.anio, cr.mes, cr.semana_iso, cr.diagnostico
-  `) as Array<{ cn: string; anio: number; mes: number; semana_iso: number | null; diagnostico: string; gasto: number }>;
+  `) as Array<{ cn: string; anio: number; mes: number; semana_iso: number | null; diagnostico: string; es_oral: boolean; gasto: number }>;
 
-  type Celda = { mensual: number; semanal: number; cn: string; anio: number; mes: number; diagnostico: string };
+  type Celda = { mensual: number; semanal: number; cn: string; anio: number; mes: number; diagnostico: string; via: Via };
   const celdas = new Map<string, Celda>();
 
   for (const r of rows) {
@@ -826,7 +838,7 @@ async function getYoyYtd(area: string, mesHasta: number, anio: number): Promise<
     const isMensual = r.semana_iso == null || r.semana_iso === 0;
     let c = celdas.get(key);
     if (!c) {
-      c = { mensual: 0, semanal: 0, cn: r.cn, anio: num(r.anio), mes: num(r.mes), diagnostico: r.diagnostico };
+      c = { mensual: 0, semanal: 0, cn: r.cn, anio: num(r.anio), mes: num(r.mes), diagnostico: r.diagnostico, via: r.es_oral ? 'ORAL' : 'IV' };
       celdas.set(key, c);
     }
     const g = Number(r.gasto);
@@ -837,7 +849,7 @@ async function getYoyYtd(area: string, mesHasta: number, anio: number): Promise<
   const porCn    = new Map<string, { cur: number; prev: number }>();
 
   for (const c of celdas.values()) {
-    const g = gastoCeldaFiable(c.mensual, c.semanal, c.anio, c.mes);
+    const g = gastoCeldaFiable(c.mensual, c.semanal, c.anio, c.mes, c.via);
     const grupo = classifyDiagnostico(c.diagnostico);
     const isCur = c.anio === anio;
 
@@ -1096,80 +1108,88 @@ function splitRows(rows: ClassifiedRow[]): { historic: ClassifiedRow[]; recent: 
   return { historic, recent };
 }
 
-type MonthAcc = {
-  anio: number; mes: number;
-  mGasto: number; sGasto: number;
-  mViales: number; sViales: number;
-  mUnits: number; sUnits: number;
-  mPrep: number; sPrep: number;
-  mPac: number; sPac: number;
-  mGastoPorGrupo: Map<DiagnosticoGrupo, number>;
-  sGastoPorGrupo: Map<DiagnosticoGrupo, number>;
-  mGastoPorVia: GastoPorVia;
-  sGastoPorVia: GastoPorVia;
+type CeldaMes = {
+  gasto: number; viales: number; unidades: number; prep: number; pac: number;
+  porGrupo: Map<DiagnosticoGrupo, number>;
 };
 
-function pickFiable(mensual: number, semanal: number, anio: number, mes: number): number {
-  return gastoCeldaFiable(mensual, semanal, anio, mes);
+/** Mensual y semanal se guardan por ámbito: HDD llega semanal desde mayo 2026 y FARONC sigue mensual. */
+type MonthAcc = {
+  anio: number; mes: number;
+  mensual: Record<Via, CeldaMes>;
+  semanal: Record<Via, CeldaMes>;
+};
+
+function emptyCeldaMes(): CeldaMes {
+  return { gasto: 0, viales: 0, unidades: 0, prep: 0, pac: 0, porGrupo: new Map() };
+}
+
+function newMonthAcc(anio: number, mes: number): MonthAcc {
+  return {
+    anio, mes,
+    mensual: { IV: emptyCeldaMes(), ORAL: emptyCeldaMes() },
+    semanal: { IV: emptyCeldaMes(), ORAL: emptyCeldaMes() },
+  };
+}
+
+function addToMonthAcc(a: MonthAcc, r: ClassifiedRow): void {
+  const esMensual = r.semana_iso == null || r.semana_iso <= 0;
+  const c = (esMensual ? a.mensual : a.semanal)[r.via];
+  c.gasto += r.gasto;
+  c.viales += r.viales;
+  c.unidades += r.unidades;
+  c.prep += r.preparaciones;
+  c.pac += r.pacientes;
+  c.porGrupo.set(r.grupo, (c.porGrupo.get(r.grupo) ?? 0) + r.gasto);
 }
 
 function monthAccToPoint(a: MonthAcc): TemporalPoint {
-  const ym = ymKey(a.anio, a.mes);
-  const useSemanal = ym >= CUT_YM ? a.sGasto > 0 : a.mGasto === 0;
-  const srcGrupo = useSemanal ? a.sGastoPorGrupo : a.mGastoPorGrupo;
+  const total = emptyCeldaMes();
+  const gastoPorVia = emptyGastoPorVia();
+  const preparacionesPorVia = emptyGastoPorVia();
+  for (const via of ['IV', 'ORAL'] as const) {
+    const m = a.mensual[via];
+    const s = a.semanal[via];
+    const c = preferirSemanal(m.gasto, s.gasto, a.anio, a.mes, via) ? s : m;
+    total.gasto += c.gasto;
+    total.viales += c.viales;
+    total.unidades += c.unidades;
+    total.prep += c.prep;
+    total.pac += c.pac;
+    for (const [g, v] of c.porGrupo) total.porGrupo.set(g, (total.porGrupo.get(g) ?? 0) + v);
+    gastoPorVia[via] = c.gasto;
+    preparacionesPorVia[via] = c.prep;
+  }
   const gastoPorGrupo: Partial<Record<DiagnosticoGrupo, number>> = {};
-  for (const [g, v] of srcGrupo.entries()) {
+  for (const [g, v] of total.porGrupo) {
     if (v > 0) gastoPorGrupo[g] = v;
   }
   return {
     anio: a.anio, mes: a.mes, semana: null,
     label: `${MESES_SHORT[a.mes - 1]} ${a.anio}`,
-    gastoPorVia: useSemanal ? a.sGastoPorVia : a.mGastoPorVia,
-    gasto: pickFiable(a.mGasto, a.sGasto, a.anio, a.mes),
-    viales: pickFiable(a.mViales, a.sViales, a.anio, a.mes),
-    unidades: pickFiable(a.mUnits, a.sUnits, a.anio, a.mes),
-    preparaciones: pickFiable(a.mPrep, a.sPrep, a.anio, a.mes),
-    pacientes: pickFiable(a.mPac, a.sPac, a.anio, a.mes),
+    gastoPorVia,
+    preparacionesPorVia,
+    gasto: total.gasto,
+    viales: total.viales,
+    unidades: total.unidades,
+    preparaciones: total.prep,
+    pacientes: total.pac,
     lunesRef: null,
     gastoPorGrupo,
   };
 }
 
-/** Agrega por mes preferiendo filas mensuales (evita subtotales semanales parciales). */
+/** Agrega por mes eligiendo, para cada ámbito, la fuente fiable (mensual o semanal). */
 function buildMonthlyTemporalFiable(rows: ClassifiedRow[]): TemporalPoint[] {
   const map = new Map<string, MonthAcc>();
   for (const r of rows) {
     const key = `${r.anio}-${String(r.mes).padStart(2, '0')}`;
     let a = map.get(key);
     if (!a) {
-      a = {
-        anio: r.anio, mes: r.mes,
-        mGasto: 0, sGasto: 0,
-        mViales: 0, sViales: 0,
-        mUnits: 0, sUnits: 0,
-        mPrep: 0, sPrep: 0,
-        mPac: 0, sPac: 0,
-        mGastoPorGrupo: new Map<DiagnosticoGrupo, number>(),
-        sGastoPorGrupo: new Map<DiagnosticoGrupo, number>(),
-        mGastoPorVia: emptyGastoPorVia(),
-        sGastoPorVia: emptyGastoPorVia(),
-      };
+      a = newMonthAcc(r.anio, r.mes);
       map.set(key, a);
     }
-    const isMensual = r.semana_iso == null || r.semana_iso <= 0;
-    if (isMensual) {
-      a.mGasto += r.gasto; a.mViales += r.viales;
-      a.mUnits += r.unidades;
-      a.mPrep += r.preparaciones; a.mPac += r.pacientes;
-      a.mGastoPorGrupo.set(r.grupo, (a.mGastoPorGrupo.get(r.grupo) ?? 0) + r.gasto);
-    } else {
-      a.sGasto += r.gasto; a.sViales += r.viales;
-      a.sUnits += r.unidades;
-      a.sPrep += r.preparaciones; a.sPac += r.pacientes;
-      a.sGastoPorGrupo.set(r.grupo, (a.sGastoPorGrupo.get(r.grupo) ?? 0) + r.gasto);
-      a.sGastoPorVia[r.via] += r.gasto;
-    }
-    if (isMensual) a.mGastoPorVia[r.via] += r.gasto;
+    addToMonthAcc(a, r);
   }
   return [...map.values()]
     .map(monthAccToPoint)
@@ -1378,40 +1398,10 @@ function buildTopMeds(
     const mk = `${r.anio}-${String(r.mes).padStart(2, '0')}`;
     let ma = m.months.get(mk);
     if (!ma) {
-      ma = {
-        anio: r.anio,
-        mes: r.mes,
-        mGasto: 0,
-        sGasto: 0,
-        mViales: 0,
-        sViales: 0,
-        mUnits: 0,
-        sUnits: 0,
-        mPrep: 0,
-        sPrep: 0,
-        mPac: 0,
-        sPac: 0,
-        mGastoPorGrupo: new Map<DiagnosticoGrupo, number>(),
-        sGastoPorGrupo: new Map<DiagnosticoGrupo, number>(),
-        mGastoPorVia: emptyGastoPorVia(),
-        sGastoPorVia: emptyGastoPorVia(),
-      };
+      ma = newMonthAcc(r.anio, r.mes);
       m.months.set(mk, ma);
     }
-    const isMensual = r.semana_iso == null || r.semana_iso <= 0;
-    if (isMensual) ma.mGastoPorVia[r.via] += r.gasto;
-    else ma.sGastoPorVia[r.via] += r.gasto;
-    if (isMensual) {
-      ma.mGasto += r.gasto; ma.mViales += r.viales;
-      ma.mUnits += r.unidades;
-      ma.mPrep += r.preparaciones; ma.mPac += r.pacientes;
-      ma.mGastoPorGrupo.set(r.grupo, (ma.mGastoPorGrupo.get(r.grupo) ?? 0) + r.gasto);
-    } else {
-      ma.sGasto += r.gasto; ma.sViales += r.viales;
-      ma.sUnits += r.unidades;
-      ma.sPrep += r.preparaciones; ma.sPac += r.pacientes;
-      ma.sGastoPorGrupo.set(r.grupo, (ma.sGastoPorGrupo.get(r.grupo) ?? 0) + r.gasto);
-    }
+    addToMonthAcc(ma, r);
 
     // Apilado por tipo tumoral (vista total)
     let mg = m.monthGrupo.get(mk);

@@ -144,9 +144,10 @@ const SERVICE_PALETTE = [
   '#9333ea',  // purple-600    — púrpura vivo
 ] as const;
 
-export const VIA_META: Record<Via, { label: string; nombre: string; color: string; actividad: string }> = {
-  IV:   { label: 'HDD',    nombre: 'Hospital de Día (HDD)',      color: '#1e3a8a', actividad: 'preparaciones' },
-  ORAL: { label: 'FARONC', nombre: 'Consulta Farmacia (FARONC)', color: '#0f766e', actividad: 'dispensaciones' },
+/** `color` para barras y rellenos; `texto` para letras y etiquetas (contraste ≥ 4,5:1 sobre blanco). */
+export const VIA_META: Record<Via, { label: string; nombre: string; color: string; texto: string; linea: string; actividad: string }> = {
+  IV:   { label: 'HDD',    nombre: 'Hospital de Día (HDD)',      color: '#660F5A', texto: '#660F5A', linea: '#3F0838', actividad: 'preparaciones' },
+  ORAL: { label: 'FARONC', nombre: 'Consulta Farmacia (FARONC)', color: '#5EAEA5', texto: '#2E7D75', linea: '#2E7D75', actividad: 'dispensaciones' },
 };
 
 function actividadLabel(via: Via | null): string {
@@ -230,8 +231,8 @@ export function ViaSplitBar({ porVia, grande = false }: { porVia?: GastoPorVia; 
         <div style={{ width: `${pctOral}%`, backgroundColor: VIA_META.ORAL.color }} />
       </div>
       <p className={`mt-1 flex justify-between tabular-nums ${grande ? 'text-[11px] font-bold' : 'text-[10px] font-semibold'}`}>
-        <span style={{ color: VIA_META.IV.color }}>{VIA_META.IV.label} {pctIv.toFixed(0)}%</span>
-        <span style={{ color: VIA_META.ORAL.color }}>{VIA_META.ORAL.label} {pctOral.toFixed(0)}%</span>
+        <span style={{ color: VIA_META.IV.texto }}>{VIA_META.IV.label} {pctIv.toFixed(0)}%</span>
+        <span style={{ color: VIA_META.ORAL.texto }}>{VIA_META.ORAL.label} {pctOral.toFixed(0)}%</span>
       </p>
     </div>
   );
@@ -569,6 +570,159 @@ export function TemporalChart({
   );
 }
 
+function AmbitoTooltip({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload?: Record<string, unknown> }>;
+  label?: string;
+}) {
+  if (!active || !payload?.length) return null;
+  const row = payload[0]?.payload ?? {};
+  return (
+    <div className="min-w-[230px] rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs shadow-lg">
+      <p className="font-semibold text-slate-800">{label}</p>
+      {(['IV', 'ORAL'] as const).map((via) => {
+        const gasto = Number(row[`gasto_${via}`] ?? 0);
+        const actividad = Number(row[`act_${via}`] ?? 0);
+        if (row[`gasto_${via}`] == null) return null;
+        return (
+          <div key={via} className="mt-1.5 border-t border-slate-100 pt-1.5 tabular-nums">
+            <p className="font-semibold" style={{ color: VIA_META[via].texto }}>{VIA_META[via].nombre}</p>
+            <p className="text-slate-700">Gasto: {fmtEur(gasto)}</p>
+            <p className="text-slate-600">
+              {fmtNum(actividad, 0)} {VIA_META[via].actividad}
+              {actividad > 0 && <span className="text-slate-400"> · {fmtEur(gasto / actividad)} / {VIA_META[via].actividad.slice(0, -1)}</span>}
+            </p>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Gasto mensual (barras) y actividad (líneas) de Hospital de Día y Consulta Farmacia. */
+export function AmbitoTemporalChart({
+  data,
+  via,
+  anchoFijo,
+}: {
+  data: TemporalPoint[];
+  via: Via | null;
+  anchoFijo?: number;
+}) {
+  const animar = anchoFijo == null;
+  const vias: Via[] = via ? [via] : ['IV', 'ORAL'];
+
+  const chartData = useMemo(() => data.map((pt) => {
+    const flat: Record<string, unknown> = { label: pt.label, anio: pt.anio };
+    for (const v of via ? [via] : (['IV', 'ORAL'] as const)) {
+      flat[`gasto_${v}`] = pt.gastoPorVia?.[v] ?? 0;
+      flat[`act_${v}`] = pt.preparacionesPorVia?.[v] ?? 0;
+    }
+    return flat;
+  }), [data, via]);
+
+  const tramosAnio = useMemo(() => {
+    const tramos: Array<{ anio: number; x1: string; x2: string }> = [];
+    for (const pt of data) {
+      const last = tramos.at(-1);
+      if (last && last.anio === pt.anio) last.x2 = pt.label;
+      else tramos.push({ anio: pt.anio, x1: pt.label, x2: pt.label });
+    }
+    return tramos;
+  }, [data]);
+
+  if (!data.length) return null;
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h3 className="mb-4 text-sm font-semibold text-slate-700">Evolutivo mensual Hospital de Día y Consulta Farmacia</h3>
+      <ResponsiveContainer width={anchoFijo ?? '100%'} height={280}>
+        <ComposedChart data={chartData} margin={{ top: 10, right: 16, left: 0, bottom: 24 }} barGap={1}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+          <XAxis
+            dataKey="label"
+            tick={{ fontSize: 10, fill: '#64748b' }}
+            interval="preserveStartEnd"
+            angle={data.length > 10 ? -25 : 0}
+            textAnchor={data.length > 10 ? 'end' : 'middle'}
+            height={data.length > 10 ? 46 : 28}
+          />
+          <YAxis
+            yAxisId="left"
+            tick={{ fontSize: 10, fill: '#94a3b8' }}
+            tickFormatter={(v) => fmtNum(Number(v), 0)}
+            width={48}
+          />
+          <YAxis
+            yAxisId="right"
+            orientation="right"
+            tick={{ fontSize: 10, fill: '#94a3b8' }}
+            tickFormatter={(v) => fmtEurShort(Number(v))}
+            width={72}
+          />
+          <Tooltip content={<AmbitoTooltip />} />
+          {tramosAnio.length > 1 && tramosAnio.map((t) => (
+            <ReferenceArea
+              key={`anio-${t.anio}`}
+              yAxisId="left"
+              x1={t.x1}
+              x2={t.x2}
+              fill={getYearColor(t.anio)}
+              fillOpacity={0.06}
+              strokeOpacity={0}
+              label={{ value: String(t.anio), position: 'insideTop', fontSize: 10, fontWeight: 700, fill: getYearColor(t.anio) }}
+            />
+          ))}
+          {tramosAnio.slice(1).map((t) => (
+            <ReferenceLine key={`sep-${t.anio}`} yAxisId="left" x={t.x1} position="start" stroke="#64748b" strokeDasharray="4 3" />
+          ))}
+          {vias.map((v) => (
+            <Bar
+              key={`gasto-${v}`}
+              yAxisId="right"
+              dataKey={`gasto_${v}`}
+              name={`Gasto ${VIA_META[v].label}`}
+              fill={VIA_META[v].color}
+              radius={[3, 3, 0, 0]}
+              isAnimationActive={animar}
+            />
+          ))}
+          {vias.map((v) => (
+            <Line
+              key={`act-${v}`}
+              yAxisId="left"
+              dataKey={`act_${v}`}
+              name={`${VIA_META[v].actividad} ${VIA_META[v].label}`}
+              stroke={VIA_META[v].linea}
+              strokeWidth={2}
+              dot={{ r: 2.5, fill: VIA_META[v].linea }}
+              isAnimationActive={animar}
+            />
+          ))}
+        </ComposedChart>
+      </ResponsiveContainer>
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-slate-600">
+        {vias.map((v) => (
+          <span key={`lg-${v}`} className="flex items-center gap-1">
+            <span className="h-2 w-2 flex-shrink-0 rounded-sm" style={{ backgroundColor: VIA_META[v].color }} />
+            Gasto {VIA_META[v].label}
+          </span>
+        ))}
+        {vias.map((v) => (
+          <span key={`la-${v}`} className="flex items-center gap-1">
+            <span className="h-0.5 w-3 flex-shrink-0" style={{ backgroundColor: VIA_META[v].linea }} />
+            {VIA_META[v].actividad.charAt(0).toUpperCase() + VIA_META[v].actividad.slice(1)} {VIA_META[v].label}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ServicioCardUI({
   item,
   selected,
@@ -712,7 +866,7 @@ function ViaCardUI({
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-2">
           <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: meta.color }} />
-          <p className="text-sm font-bold leading-tight" style={{ color: meta.color }}>
+          <p className="text-sm font-bold leading-tight" style={{ color: meta.texto }}>
             {meta.nombre}
           </p>
         </div>
@@ -1303,6 +1457,9 @@ function GrupoDetallePanel({
   );
 }
 
+/** Altura de una ficha de medicamento típica; la lista toma la altura de la ficha o, sin selección, esta. */
+const ALTO_FICHA_XL = 'xl:h-[1050px]';
+
 function MedicamentoListTable({
   items,
   selectedCn,
@@ -1317,7 +1474,7 @@ function MedicamentoListTable({
   onSelect: (cn: string) => void;
 }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+    <div className="absolute inset-0 flex flex-col rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
       <div className="px-5 py-3 border-b border-slate-100 bg-slate-50 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h3 className="text-sm font-semibold text-slate-700">Ficha de medicamento</h3>
@@ -1330,7 +1487,7 @@ function MedicamentoListTable({
           className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm min-w-[260px] shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-400"
         />
       </div>
-      <div className="flex-1 min-h-[520px] overflow-auto">
+      <div className="flex-1 min-h-0 overflow-auto">
         <table className="w-full text-xs">
           <thead className="sticky top-0 bg-slate-50/95 backdrop-blur">
             <tr className="text-[10px] uppercase tracking-wide text-slate-400">
@@ -1353,7 +1510,7 @@ function MedicamentoListTable({
                     {item.principioActivo || item.nombre}
                     <span
                       className="ml-1.5 rounded px-1 py-px align-middle text-[9px] font-bold text-white"
-                      style={{ backgroundColor: VIA_META[item.via].color }}
+                      style={{ backgroundColor: VIA_META[item.via].texto }}
                     >
                       {VIA_META[item.via].label}
                     </span>
@@ -1950,7 +2107,7 @@ export default function AnalisisOncologiaPage() {
     chips.push({
       key: 'via',
       label: VIA_META[viaSel].nombre,
-      color: VIA_META[viaSel].color,
+      color: VIA_META[viaSel].texto,
       onRemove: () => updateNav({ via: null }),
     });
   }
@@ -2242,6 +2399,8 @@ export default function AnalisisOncologiaPage() {
             )}
           </div>
 
+          <AmbitoTemporalChart data={datos.temporalHistorico} via={viaSel} />
+
           {viaSel !== 'ORAL' && <TopProtocolosTable items={datos.topProtocolos} />}
 
           {grupoSel && datos.grupoDetalle && (
@@ -2262,17 +2421,19 @@ export default function AnalisisOncologiaPage() {
           )}
 
           <div className="grid items-stretch grid-cols-1 xl:grid-cols-[1.05fr_1.45fr] gap-4">
-            <MedicamentoListTable
-              items={medicamentosFiltrados}
-              selectedCn={cnSel}
-              query={medQuery}
-              onQueryChange={setMedQuery}
-              onSelect={handleSelectCn}
-            />
+            <div className="relative h-[600px] xl:h-auto">
+              <MedicamentoListTable
+                items={medicamentosFiltrados}
+                selectedCn={cnSel}
+                query={medQuery}
+                onQueryChange={setMedQuery}
+                onSelect={handleSelectCn}
+              />
+            </div>
             {datos.medicamentoDetalle ? (
               <MedicamentoDetallePanel detalle={datos.medicamentoDetalle} showWeeklyByDefault={showWeekly} desde={desde} hasta={hasta} />
             ) : (
-              <div className="h-full rounded-xl border border-slate-200 bg-slate-50 px-6 py-12 text-center text-sm text-slate-500 flex items-center justify-center">
+              <div className={`${ALTO_FICHA_XL} rounded-xl border border-slate-200 bg-slate-50 px-6 py-12 text-center text-sm text-slate-500 flex items-center justify-center`}>
                 Selecciona un medicamento para abrir su ficha de análisis.
               </div>
             )}

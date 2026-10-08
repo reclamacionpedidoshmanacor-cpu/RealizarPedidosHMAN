@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { GRUPO_COLORS, GRUPO_LABELS } from '@/lib/diagnostico-grupos';
 import type { AnalisisDatos, MedicamentoDetalle } from '@/lib/analisis-neon';
 import {
+  AmbitoTemporalChart,
   TemporalChart,
   ViaSplitBar,
   VIA_META,
@@ -176,7 +177,7 @@ function ViaTag({ via }: { via: keyof typeof VIA_META }) {
   return (
     <span
       className="rounded px-1 py-px text-[8px] font-bold text-white"
-      style={{ backgroundColor: VIA_META[via].color }}
+      style={{ backgroundColor: VIA_META[via].texto }}
     >
       {VIA_META[via].label}
     </span>
@@ -507,7 +508,7 @@ function Informe({ datos, nivel }: { datos: AnalisisDatos; nivel: NivelInforme }
                 style={{ borderLeftColor: VIA_META[v.via].color }}
               >
                 <div className="flex items-baseline justify-between">
-                  <p className="text-[10px] font-bold uppercase tracking-wide" style={{ color: VIA_META[v.via].color }}>
+                  <p className="text-[10px] font-bold uppercase tracking-wide" style={{ color: VIA_META[v.via].texto }}>
                     {v.label}
                   </p>
                   <YoyBadge pct={v.variacionYoy} />
@@ -542,6 +543,13 @@ function Informe({ datos, nivel }: { datos: AnalisisDatos; nivel: NivelInforme }
           mostrarCajas={false}
           anchoFijo={ANCHO_GRAFICO}
         />
+      </Seccion>
+
+      <Seccion
+        titulo="Evolutivo Hospital de Día y Consulta Farmacia"
+        subtitulo="Barras: gasto mensual de cada ámbito. Líneas: preparaciones en HDD y dispensaciones en FARONC."
+      >
+        <AmbitoTemporalChart data={datos.temporalHistorico} via={via} anchoFijo={ANCHO_GRAFICO} />
       </Seccion>
 
       {completo && datos.temporalReciente.length > 0 && (

@@ -285,6 +285,8 @@ export async function GET(req: NextRequest) {
       { header: 'Media móvil 3 meses (gasto)', key: 'mm3', width: 18, fmt: FMT.eur },
       { header: 'Cajas eq.', key: 'cajas', width: 12, fmt: FMT.dec },
       { header: 'Preparaciones / dispensaciones', key: 'prep', width: 18, fmt: FMT.int },
+      { header: 'Preparaciones HDD', key: 'prepIv', width: 16, fmt: FMT.int },
+      { header: 'Dispensaciones FARONC', key: 'dispOral', width: 18, fmt: FMT.int },
     ],
     datos.temporalHistorico.map((t, i) => ({
       anio: t.anio,
@@ -295,6 +297,8 @@ export async function GET(req: NextRequest) {
       mm3: mm[i] != null ? round2(mm[i]!) : null,
       cajas: t.viales,
       prep: t.preparaciones,
+      prepIv: t.preparacionesPorVia?.IV ?? 0,
+      dispOral: t.preparacionesPorVia?.ORAL ?? 0,
     })),
     { relleno: (row) => yearTint(Number(row.anio)) },
   );
