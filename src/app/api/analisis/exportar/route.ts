@@ -192,8 +192,16 @@ function buildResumen(wb: ExcelJS.Workbook, datos: AnalisisExport, subtitulo: st
 
   const k = datos.kpis;
   label('Indicadores');
-  kv('Gasto valorizado', round2(k.totalGasto), FMT.eur);
+  kv('Consumo valorizado', round2(k.totalGasto), FMT.eur);
   kv('Variación frente al período anterior', variacionFraccion(k.variacionYoy), FMT.variacion, true);
+  if (datos.compras?.desdeEfectivo) {
+    kv('Compra valorizada (total del área)', round2(datos.compras.totalGasto), FMT.eur);
+    if (datos.compras.desdeEfectivo > datos.periodo.desde) {
+      kv('Compras contadas desde', fmtFecha(datos.compras.desdeEfectivo));
+    }
+  } else {
+    kv('Compra valorizada (total del área)', 'Sin registro de compras en el período');
+  }
   kv('Consumo (cajas equivalentes)', k.totalViales, FMT.dec);
   kv('Consumo (unidades)', k.totalUnidades, FMT.int);
   kv('Preparaciones HDD / dispensaciones FARONC', k.totalPreparaciones, FMT.int);
@@ -225,7 +233,8 @@ function buildResumen(wb: ExcelJS.Workbook, datos: AnalisisExport, subtitulo: st
 
   label('Notas');
   const notas = [
-    'Gasto valorizado = unidades consumidas × precio por unidad actual del catálogo.',
+    'Consumo valorizado = unidades consumidas × precio por unidad actual del catálogo.',
+    'Compra valorizada = unidades recibidas × el mismo precio por unidad; es el total del área y no se filtra por servicio, tipo tumoral, ámbito ni medicamento.',
     'Cajas equivalentes = unidades / unidades por caja.',
     'HDD: medicamentos IV administrados en Hospital de Día (preparaciones). FARONC: medicamentos orales dispensados en la Consulta de Farmacia (dispensaciones).',
     datos.comprasRegistroDesde
@@ -440,7 +449,7 @@ export async function GET(req: NextRequest) {
       { header: 'Compras (cajas)', key: 'compCajas', width: 14, fmt: FMT.dec },
       { header: 'Compras − consumo (cajas)', key: 'difCajas', width: 16, fmt: '+#,##0.0;-#,##0.0;0.0' },
       { header: 'Consumo valorizado', key: 'consGasto', width: 17, fmt: FMT.eur },
-      { header: 'Compras valorizadas', key: 'compGasto', width: 17, fmt: FMT.eur },
+      { header: 'Compra valorizada', key: 'compGasto', width: 17, fmt: FMT.eur },
       { header: 'Compras − consumo (€)', key: 'difGasto', width: 17, fmt: '+#,##0.00 "€";-#,##0.00 "€";0.00 "€"' },
       { header: 'Pedidos recibidos', key: 'pedidos', width: 12, fmt: FMT.int },
     ],

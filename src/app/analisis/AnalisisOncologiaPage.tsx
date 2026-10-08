@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -25,6 +25,7 @@ import {
 } from '@/lib/diagnostico-grupos';
 import type {
   AnalisisDatos,
+  ComprasArea,
   DiagnosticoDetalle,
   GastoPorVia,
   GrupoCard,
@@ -111,6 +112,37 @@ export function fmtDate(iso: string): string {
   if (!iso) return '—';
   const [y, m, d] = iso.split('-');
   return `${d}/${m}/${y}`;
+}
+
+export function mesesEntre(desde: string, hasta: string): number {
+  const a = new Date(`${desde}T12:00:00`);
+  const b = new Date(`${hasta}T12:00:00`);
+  return Math.max(1, (b.getTime() - a.getTime()) / (86400000 * 30.4375));
+}
+
+/** Inicio de las compras contadas en el período; null si el período acaba antes del registro de compras. */
+export function inicioCompras(desde: string, hasta: string, registroDesde: string | null | undefined): string | null {
+  const inicio = registroDesde && registroDesde > desde ? registroDesde : desde;
+  return inicio > hasta ? null : inicio;
+}
+
+export function hayFiltrosAlcance(scope: AnalisisDatos['scope']): boolean {
+  return Boolean(scope.servicio || scope.grupo || scope.via || scope.cn);
+}
+
+export function compraValorizadaTexto(compras: ComprasArea | null): string {
+  if (!compras) return '—';
+  return compras.desdeEfectivo ? fmtEur(compras.totalGasto) : 'Sin registro';
+}
+
+export function compraValorizadaNota(compras: ComprasArea | null, desde: string, filtrada: boolean): string | undefined {
+  if (!compras) return 'No disponible';
+  const notas: string[] = [];
+  if (compras.registroDesde && (!compras.desdeEfectivo || compras.registroDesde > desde)) {
+    notas.push(`Compras registradas desde ${fmtDate(compras.registroDesde)}`);
+  }
+  if (filtrada) notas.push('Total del área, sin filtros');
+  return notas.length ? notas.join(' · ') : undefined;
 }
 
 const SERIES_COLORS = {
@@ -246,7 +278,7 @@ function KpiCard({
 }: {
   label: string;
   value: string;
-  sub?: string;
+  sub?: ReactNode;
   tone?: KpiTone;
 }) {
   const toneClasses = KPI_TONES[tone];
@@ -254,7 +286,7 @@ function KpiCard({
     <div className={`rounded-xl border px-5 py-4 shadow-sm ${toneClasses}`}>
       <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">{label}</p>
       <p className="mt-1 text-2xl font-bold tabular-nums">{value}</p>
-      {sub && <p className="mt-0.5 text-xs text-slate-500 leading-tight">{sub}</p>}
+      {sub && <div className="mt-0.5 text-xs text-slate-500 leading-tight">{sub}</div>}
     </div>
   );
 }
@@ -489,7 +521,7 @@ export function TemporalChart({
             stroke={SERIES_COLORS.preparaciones}
             strokeWidth={2}
             dot={false}
-            isAnimationActive={animar}
+            isAnimationActive={false}
           />
           {showMediaMovil && (
             <Line
@@ -501,7 +533,7 @@ export function TemporalChart({
               strokeDasharray="6 3"
               dot={false}
               connectNulls={false}
-              isAnimationActive={animar}
+              isAnimationActive={false}
             />
           )}
           {showGrupoBreakdown ? (
@@ -522,7 +554,7 @@ export function TemporalChart({
             <Bar
               yAxisId="right"
               dataKey="gasto"
-              name="Gasto valorizado"
+              name="Consumo valorizado"
               fill={SERIES_COLORS.gastoTemporal}
               fillOpacity={0.72}
               radius={[4, 4, 0, 0]}
@@ -542,7 +574,7 @@ export function TemporalChart({
         {!showGrupoBreakdown && (
           <span className="flex items-center gap-1">
             <span className="h-2 w-2 rounded-sm flex-shrink-0" style={{ backgroundColor: SERIES_COLORS.gastoTemporal }} />
-            Gasto valorizado
+            Consumo valorizado
           </span>
         )}
         <span className="flex items-center gap-1">
@@ -608,10 +640,12 @@ export function AmbitoTemporalChart({
   data,
   via,
   anchoFijo,
+  onSelectVia,
 }: {
   data: TemporalPoint[];
   via: Via | null;
   anchoFijo?: number;
+  onSelectVia?: (via: Via) => void;
 }) {
   const animar = anchoFijo == null;
   const vias: Via[] = via ? [via] : ['IV', 'ORAL'];
@@ -689,6 +723,8 @@ export function AmbitoTemporalChart({
               fill={VIA_META[v].color}
               radius={[3, 3, 0, 0]}
               isAnimationActive={animar}
+              cursor={onSelectVia ? 'pointer' : undefined}
+              onClick={onSelectVia ? () => onSelectVia(v) : undefined}
             />
           ))}
           {vias.map((v) => (
@@ -700,7 +736,7 @@ export function AmbitoTemporalChart({
               stroke={VIA_META[v].linea}
               strokeWidth={2}
               dot={{ r: 2.5, fill: VIA_META[v].linea }}
-              isAnimationActive={animar}
+              isAnimationActive={false}
             />
           ))}
         </ComposedChart>
@@ -718,6 +754,11 @@ export function AmbitoTemporalChart({
             {VIA_META[v].actividad.charAt(0).toUpperCase() + VIA_META[v].actividad.slice(1)} {VIA_META[v].label}
           </span>
         ))}
+        {onSelectVia && (
+          <span className="ml-auto text-slate-400">
+            {via ? 'Haz clic en una barra para volver a ver los dos ámbitos' : 'Haz clic en una barra para filtrar por ámbito'}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -1153,7 +1194,7 @@ function GastoAnualRefChart({
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold text-slate-700">Referencia anual del gasto valorizado por servicio</h3>
+          <h3 className="text-sm font-semibold text-slate-700">Referencia anual del consumo valorizado por servicio</h3>
           <p className="mt-1 text-xs text-slate-400">
             Haz clic en un año para filtrar el análisis · pasa el cursor para ver el desglose.
             {anioSeleccionado && (
@@ -1545,18 +1586,17 @@ function MedicamentoDetallePanel({
   showWeeklyByDefault,
   desde,
   hasta,
+  comprasRegistroDesde,
 }: {
   detalle: MedicamentoDetalle;
   showWeeklyByDefault: boolean;
   desde: string;
   hasta: string;
+  comprasRegistroDesde: string | null;
 }) {
-  const meses = useMemo(() => {
-    const a = new Date(`${desde}T12:00:00`);
-    const b = new Date(`${hasta}T12:00:00`);
-    const raw = (b.getTime() - a.getTime()) / (86400000 * 30.4375);
-    return Math.max(1, raw);
-  }, [desde, hasta]);
+  const meses = mesesEntre(desde, hasta);
+  const desdeCompras = inicioCompras(desde, hasta, comprasRegistroDesde);
+  const mesesCompras = desdeCompras ? mesesEntre(desdeCompras, hasta) : null;
   const [modo, setModo] = useState<'mensual' | 'semanal'>(showWeeklyByDefault ? 'semanal' : 'mensual');
 
   useEffect(() => {
@@ -1592,18 +1632,27 @@ function MedicamentoDetallePanel({
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <KpiCard label="Consumo valorizado" value={fmtEur(detalle.consumo.totalGasto)} tone="rose" />
           <KpiCard
-            label="Consumo medio mensual (nº cajas)"
-            value={fmtQty(detalle.consumo.totalViales / meses, 1)}
-            sub={`Total período: ${fmtQty(detalle.consumo.totalViales)} cajas · ${fmtNum(detalle.consumo.totalUnidades, 0)} uds`}
+            label="Consumo medio mensual"
+            value={fmtEur(detalle.consumo.totalGasto / meses)}
+            sub={`Media ${fmtQty(detalle.consumo.totalViales / meses, 1)} cajas/mes · Total ${fmtQty(detalle.consumo.totalViales)} cajas`}
             tone="teal"
           />
           <KpiCard
-            label="Compras media mensual (nº cajas)"
-            value={fmtQty(detalle.compras.totalViales / meses, 1)}
-            sub={`Total período: ${fmtQty(detalle.compras.totalViales)} cajas · ${fmtNum(detalle.compras.totalUnidades, 0)} uds`}
+            label="Compra media mensual"
+            value={mesesCompras ? fmtEur(detalle.compras.totalGasto / mesesCompras) : 'Sin registro'}
+            sub={mesesCompras && desdeCompras ? (
+              <>
+                <p>Media {fmtQty(detalle.compras.totalViales / mesesCompras, 1)} cajas/mes · Total {fmtQty(detalle.compras.totalViales)} cajas</p>
+                {desdeCompras > desde && (
+                  <p className="mt-0.5 text-slate-400">
+                    Media sobre {fmtNum(mesesCompras, 1)} meses con registro (desde {fmtDate(desdeCompras)})
+                  </p>
+                )}
+              </>
+            ) : comprasRegistroDesde ? `Compras registradas desde ${fmtDate(comprasRegistroDesde)}` : undefined}
             tone="blue"
           />
-          <KpiCard label="Compras valorizadas" value={fmtEur(detalle.compras.totalGasto)} tone="violet" />
+          <KpiCard label="Compra valorizada" value={fmtEur(detalle.compras.totalGasto)} tone="violet" />
         </div>
 
         <div className="flex items-center gap-2">
@@ -1657,13 +1706,14 @@ function MedicamentoDetallePanel({
                   stroke={SERIES_COLORS.preparaciones}
                   strokeWidth={2}
                   dot={false}
+                  isAnimationActive={false}
                 />
               </BarChart>
             </ResponsiveContainer>
           </div>
 
           <div className="rounded-xl border border-slate-200 p-4">
-            <h4 className="text-sm font-semibold text-slate-700 mb-3">Compras valorizadas vs consumo valorizado</h4>
+            <h4 className="text-sm font-semibold text-slate-700 mb-3">Compra valorizada vs consumo valorizado</h4>
             <ResponsiveContainer width="100%" height={260}>
               <BarChart data={data} margin={{ top: 10, right: 16, left: 0, bottom: 24 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
@@ -1678,7 +1728,7 @@ function MedicamentoDetallePanel({
                 <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} width={72} tickFormatter={(v) => fmtEurShort(Number(v))} />
                 <Tooltip content={<TemporalTooltip />} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Bar dataKey="comprasGasto" name="Compras valorizadas" fill={SERIES_COLORS.comprasGasto} minPointSize={3} radius={[4, 4, 0, 0]} />
+                <Bar dataKey="comprasGasto" name="Compra valorizada" fill={SERIES_COLORS.comprasGasto} minPointSize={3} radius={[4, 4, 0, 0]} />
                 <Bar dataKey="consumoGasto" name="Consumo valorizado" fill={SERIES_COLORS.gasto} minPointSize={3} radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
@@ -1708,32 +1758,34 @@ function MedicamentoDetallePanel({
             }))}
           />
 
-          <div className="rounded-xl border border-slate-200 overflow-hidden">
-            <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
-              <h4 className="text-sm font-semibold text-slate-700">Diagnósticos / indicaciones</h4>
-            </div>
-            <div className="max-h-[280px] overflow-auto">
-              <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-slate-50/95">
-                  <tr className="text-[10px] uppercase tracking-wide text-slate-400">
-                    <th className="px-3 py-2 text-left">Diagnóstico</th>
-                    <th className="px-3 py-2 text-right">Gasto</th>
-                    <th className="px-3 py-2 text-right">Cajas</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {detalle.topDiagnosticos.slice(0, 12).map((row, idx) => (
-                    <tr key={`${row.diagnostico}-${row.indicacion}-${idx}`}>
-                      <td className="px-3 py-2.5">
-                        <p className="font-medium text-slate-700">{row.diagnostico}</p>
-                        <p className="text-[10px] text-slate-500">{row.indicacion}</p>
-                      </td>
-                      <td className="px-3 py-2.5 text-right font-semibold tabular-nums">{fmtEur(row.gasto)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums text-slate-600">{fmtQty(row.viales)}</td>
+          <div className="relative h-[320px] xl:h-auto">
+            <div className="absolute inset-0 flex flex-col rounded-xl border border-slate-200 overflow-hidden">
+              <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
+                <h4 className="text-sm font-semibold text-slate-700">Diagnósticos / indicaciones</h4>
+              </div>
+              <div className="flex-1 min-h-0 overflow-auto">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-slate-50/95">
+                    <tr className="text-[10px] uppercase tracking-wide text-slate-400">
+                      <th className="px-3 py-2 text-left">Diagnóstico</th>
+                      <th className="px-3 py-2 text-right">Gasto</th>
+                      <th className="px-3 py-2 text-right">Cajas</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {detalle.topDiagnosticos.map((row, idx) => (
+                      <tr key={`${row.diagnostico}-${row.indicacion}-${idx}`}>
+                        <td className="px-3 py-2.5">
+                          <p className="font-medium text-slate-700">{row.diagnostico}</p>
+                          <p className="text-[10px] text-slate-500">{row.indicacion}</p>
+                        </td>
+                        <td className="px-3 py-2.5 text-right font-semibold tabular-nums">{fmtEur(row.gasto)}</td>
+                        <td className="px-3 py-2.5 text-right tabular-nums text-slate-600">{fmtQty(row.viales)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>
@@ -2266,9 +2318,14 @@ export default function AnalisisOncologiaPage() {
       {datos && (
         <>
           <div className="grid grid-cols-2 sm:grid-cols-2 xl:grid-cols-4 gap-3">
-            <KpiCard label="Gasto valorizado" value={fmtEur(datos.kpis.totalGasto)} tone="rose" />
-            <KpiCard label="Consumo cajas eq." value={fmtQty(datos.kpis.totalViales)} tone="teal" />
-            <KpiCard label="Servicios activos" value={String(datos.kpis.serviciosActivos)} tone="violet" />
+            <KpiCard label="Consumo valorizado" value={fmtEur(datos.kpis.totalGasto)} tone="rose" />
+            <KpiCard
+              label="Compra valorizada"
+              value={compraValorizadaTexto(datos.compras)}
+              sub={compraValorizadaNota(datos.compras, datos.periodo.desde, hayFiltrosAlcance(datos.scope))}
+              tone="violet"
+            />
+            <KpiCard label="Servicios activos" value={String(datos.kpis.serviciosActivos)} tone="teal" />
             <KpiCard label="Medicamentos" value={String(datos.kpis.medicamentosDistintos)} tone="slate" />
           </div>
 
@@ -2399,7 +2456,7 @@ export default function AnalisisOncologiaPage() {
             )}
           </div>
 
-          <AmbitoTemporalChart data={datos.temporalHistorico} via={viaSel} />
+          <AmbitoTemporalChart data={datos.temporalHistorico} via={viaSel} onSelectVia={handleSelectVia} />
 
           {viaSel !== 'ORAL' && <TopProtocolosTable items={datos.topProtocolos} />}
 
@@ -2431,7 +2488,13 @@ export default function AnalisisOncologiaPage() {
               />
             </div>
             {datos.medicamentoDetalle ? (
-              <MedicamentoDetallePanel detalle={datos.medicamentoDetalle} showWeeklyByDefault={showWeekly} desde={desde} hasta={hasta} />
+              <MedicamentoDetallePanel
+                detalle={datos.medicamentoDetalle}
+                showWeeklyByDefault={showWeekly}
+                desde={desde}
+                hasta={hasta}
+                comprasRegistroDesde={datos.compras?.registroDesde ?? null}
+              />
             ) : (
               <div className={`${ALTO_FICHA_XL} rounded-xl border border-slate-200 bg-slate-50 px-6 py-12 text-center text-sm text-slate-500 flex items-center justify-center`}>
                 Selecciona un medicamento para abrir su ficha de análisis.

@@ -9,11 +9,16 @@ import {
   ViaSplitBar,
   VIA_META,
   YoyBadge,
+  compraValorizadaNota,
+  compraValorizadaTexto,
   fmtDate,
   fmtEur,
   fmtQty,
   fmtVariacion,
   getServiceColor,
+  hayFiltrosAlcance,
+  inicioCompras,
+  mesesEntre,
   type NivelInforme,
 } from '../AnalisisOncologiaPage';
 
@@ -64,9 +69,16 @@ function construirResumen(datos: AnalisisDatos): string[] {
 
   frases.push(
     kpis.variacionYoy === null
-      ? `El gasto valorizado del período es de ${fmtEur(kpis.totalGasto)}, sin base comparable en el período anterior.`
-      : `El gasto valorizado del período es de ${fmtEur(kpis.totalGasto)}, un ${fmtVarTexto(kpis.variacionYoy)} frente al período anterior.`,
+      ? `El consumo valorizado del período es de ${fmtEur(kpis.totalGasto)}, sin base comparable en el período anterior.`
+      : `El consumo valorizado del período es de ${fmtEur(kpis.totalGasto)}, un ${fmtVarTexto(kpis.variacionYoy)} frente al período anterior.`,
   );
+  if (datos.compras?.desdeEfectivo) {
+    frases.push(
+      `La compra valorizada del área${hayFiltrosAlcance(scope) ? ' completa, sin aplicar los filtros,' : ''} es de ${fmtEur(datos.compras.totalGasto)}${
+        datos.compras.desdeEfectivo > datos.periodo.desde ? ` (compras registradas desde el ${fmtDate(datos.compras.desdeEfectivo)})` : ''
+      }.`,
+    );
+  }
 
   const servicios = [...datos.servicios].sort((a, b) => b.totalGasto - a.totalGasto);
   const servicioSel = scope.servicio ? servicios.find((s) => s.servicio === scope.servicio) : undefined;
@@ -146,12 +158,12 @@ function Seccion({
   );
 }
 
-function Kpi({ label, value, sub, pct }: { label: string; value: string; sub?: string; pct?: number | null }) {
+function Kpi({ label, value, sub, pct }: { label: string; value: string; sub?: ReactNode; pct?: number | null }) {
   return (
     <div className="break-inside-avoid rounded-lg border border-slate-200 px-3 py-2">
       <p className="text-[9px] font-semibold uppercase tracking-wider text-slate-500">{label}</p>
       <p className="mt-0.5 text-[17px] font-bold tabular-nums text-slate-900">{value}</p>
-      <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-slate-500">
+      <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] leading-tight text-slate-500">
         {pct !== undefined && <YoyBadge pct={pct} />}
         {sub && <span>{sub}</span>}
       </div>
@@ -410,8 +422,21 @@ function OutliersTabla({ datos }: { datos: AnalisisDatos }) {
   );
 }
 
-function FichaMedicamento({ med }: { med: MedicamentoDetalle }) {
+function FichaMedicamento({
+  med,
+  desde,
+  hasta,
+  comprasRegistroDesde,
+}: {
+  med: MedicamentoDetalle;
+  desde: string;
+  hasta: string;
+  comprasRegistroDesde: string | null;
+}) {
   const meses = med.temporalMensual.filter((p) => p.consumoCajas > 0 || p.comprasCajas > 0);
+  const nMeses = mesesEntre(desde, hasta);
+  const desdeCompras = inicioCompras(desde, hasta, comprasRegistroDesde);
+  const nMesesCompras = desdeCompras ? mesesEntre(desdeCompras, hasta) : null;
   return (
     <div className="space-y-3">
       <div className="break-inside-avoid space-y-3">
@@ -423,9 +448,26 @@ function FichaMedicamento({ med }: { med: MedicamentoDetalle }) {
         </div>
         <div className="grid grid-cols-4 gap-2">
           <Kpi label="Consumo valorizado" value={fmtEur(med.consumo.totalGasto)} pct={med.consumo.variacionYoy} />
-          <Kpi label="Consumo cajas eq." value={fmtQty(med.consumo.totalViales)} sub={`${fmtQty(med.consumo.totalPreparaciones, 0)} prep./disp.`} />
-          <Kpi label="Compras recibidas" value={fmtEur(med.compras.totalGasto)} sub={`${med.compras.nPedidosRecibidos} pedidos`} />
-          <Kpi label="Compras cajas" value={fmtQty(med.compras.totalViales)} sub={`${fmtQty(med.compras.totalUnidades, 0)} uds`} />
+          <Kpi
+            label="Consumo medio mensual"
+            value={fmtEur(med.consumo.totalGasto / nMeses)}
+            sub={`Media ${fmtQty(med.consumo.totalViales / nMeses, 1)} cajas/mes · Total ${fmtQty(med.consumo.totalViales)} cajas`}
+          />
+          <Kpi
+            label="Compra media mensual"
+            value={nMesesCompras ? fmtEur(med.compras.totalGasto / nMesesCompras) : 'Sin registro'}
+            sub={nMesesCompras && desdeCompras ? (
+              <>
+                Media {fmtQty(med.compras.totalViales / nMesesCompras, 1)} cajas/mes · Total {fmtQty(med.compras.totalViales)} cajas
+                {desdeCompras > desde && (
+                  <span className="block text-slate-400">
+                    Sobre {fmtQty(nMesesCompras, 1)} meses con registro (desde {fmtDate(desdeCompras)})
+                  </span>
+                )}
+              </>
+            ) : undefined}
+          />
+          <Kpi label="Compra valorizada" value={fmtEur(med.compras.totalGasto)} sub={`${med.compras.nPedidosRecibidos} pedidos`} />
         </div>
       </div>
       {meses.length > 0 && (
@@ -453,7 +495,8 @@ function FichaMedicamento({ med }: { med: MedicamentoDetalle }) {
       )}
       <p className="text-[9px] text-slate-500">
         Las compras corresponden al área completa (no se filtran por servicio, tipo tumoral ni ámbito) y solo existen
-        registros desde el {fmtDate(COMPRAS_REGISTRO_DESDE)}: los meses anteriores aparecen sin compras.
+        registros desde el {fmtDate(comprasRegistroDesde ?? COMPRAS_REGISTRO_DESDE)}: los meses anteriores aparecen sin
+        compras y la compra media mensual se calcula solo sobre los meses con registro.
       </p>
     </div>
   );
@@ -493,8 +536,12 @@ function Informe({ datos, nivel }: { datos: AnalisisDatos; nivel: NivelInforme }
 
       <Seccion titulo="Indicadores clave">
         <div className="grid grid-cols-4 gap-2">
-          <Kpi label="Gasto valorizado" value={fmtEur(datos.kpis.totalGasto)} pct={datos.kpis.variacionYoy} />
-          <Kpi label="Consumo cajas eq." value={fmtQty(datos.kpis.totalViales)} />
+          <Kpi label="Consumo valorizado" value={fmtEur(datos.kpis.totalGasto)} pct={datos.kpis.variacionYoy} />
+          <Kpi
+            label="Compra valorizada"
+            value={compraValorizadaTexto(datos.compras)}
+            sub={compraValorizadaNota(datos.compras, datos.periodo.desde, hayFiltrosAlcance(datos.scope))}
+          />
           <Kpi label="Prep. / dispensaciones" value={fmtQty(datos.kpis.totalPreparaciones, 0)} />
           <Kpi label="Medicamentos" value={String(datos.kpis.medicamentosDistintos)} sub={`${datos.kpis.serviciosActivos} servicios`} />
         </div>
@@ -608,13 +655,22 @@ function Informe({ datos, nivel }: { datos: AnalisisDatos; nivel: NivelInforme }
 
       {completo && datos.medicamentoDetalle && (
         <Seccion titulo="Ficha del medicamento: consumo y compras" partible>
-          <FichaMedicamento med={datos.medicamentoDetalle} />
+          <FichaMedicamento
+            med={datos.medicamentoDetalle}
+            desde={datos.periodo.desde}
+            hasta={datos.periodo.hasta}
+            comprasRegistroDesde={datos.compras?.registroDesde ?? COMPRAS_REGISTRO_DESDE}
+          />
         </Seccion>
       )}
 
       <Seccion titulo="Nota metodológica">
         <ul className="list-disc space-y-0.5 pl-4 text-[9px] leading-snug text-slate-500">
-          <li>Gasto valorizado: consumo registrado por el precio unitario del catálogo. Cajas equivalentes: unidades consumidas entre unidades por caja.</li>
+          <li>Consumo valorizado: consumo registrado por el precio unitario del catálogo. Cajas equivalentes: unidades consumidas entre unidades por caja.</li>
+          <li>
+            Compra valorizada: pedidos recibidos del área por el mismo precio unitario. Es el total del área (no se filtra por servicio,
+            tipo tumoral, ámbito ni medicamento) y solo hay registro desde el {fmtDate(datos.compras?.registroDesde ?? COMPRAS_REGISTRO_DESDE)}.
+          </li>
           <li>Variaciones frente al período anterior equivalente: {datos.comparativa.etiqueta}.</li>
           <li>Hospital de Día (HDD): medicamentos IV, se cuentan preparaciones. Consulta Farmacia (FARONC): medicamentos con vía oral en catálogo o terapia oral, se cuentan dispensaciones.</li>
           <li>Media móvil de 3 meses: no se calcula en ventanas que incluyen el mes en curso.</li>

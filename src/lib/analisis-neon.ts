@@ -478,6 +478,16 @@ export type AnalisisDatos = {
   outliers: OutlierItem[];
   grupoDetalle: GrupoDetalle | null;
   medicamentoDetalle: MedicamentoDetalle | null;
+  /** Compras recibidas del área: no se filtran por servicio, tipo tumoral, ámbito ni medicamento. */
+  compras: ComprasArea | null;
+};
+
+export type ComprasArea = {
+  totalGasto: number;
+  /** Primer pedido recibido registrado en Pedidos Pendientes. */
+  registroDesde: string | null;
+  /** Inicio de las compras contadas dentro del período; null si el período acaba antes del registro. */
+  desdeEfectivo: string | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -2206,9 +2216,12 @@ async function computeAnalisis(
     );
   }
 
-  const medicamentoDetalle = cnFiltro
-    ? await buildMedicamentoDetalle(area, cnFiltro, scopeRows, scopeRowsBase, desde, hasta, comparativaEtiqueta)
-    : null;
+  const [medicamentoDetalle, compras] = await Promise.all([
+    cnFiltro
+      ? buildMedicamentoDetalle(area, cnFiltro, scopeRows, scopeRowsBase, desde, hasta, comparativaEtiqueta)
+      : Promise.resolve(null),
+    computeComprasArea(classified, desde, hasta).catch(() => null),
+  ]);
 
   const datos: AnalisisDatos = {
     periodo: { desde, hasta },
@@ -2241,8 +2254,25 @@ async function computeAnalisis(
     outliers:          buildOutliers(rowsForTops, temporalReciente),
     grupoDetalle,
     medicamentoDetalle,
+    compras,
   };
   return { datos, scopeRows };
+}
+
+async function computeComprasArea(rows: ClassifiedRow[], desde: string, hasta: string): Promise<ComprasArea> {
+  const registroDesde = await loadInicioRegistroCompras();
+  const desdeEfectivo = registroDesde ? maxIsoDate(desde, registroDesde) : desde;
+  if (desdeEfectivo > hasta) return { totalGasto: 0, registroDesde, desdeEfectivo: null };
+
+  const precioPorCn6 = new Map<string, number>();
+  for (const r of rows) {
+    const cn6 = cnClavePedidos(r.cn);
+    if (cn6 && !precioPorCn6.has(cn6)) precioPorCn6.set(cn6, r.precioUnidad);
+  }
+  const compras = await loadComprasRecibidasPorCn6([...precioPorCn6.keys()], desdeEfectivo, hasta);
+  let totalGasto = 0;
+  for (const [cn6, c] of compras) totalGasto += c.unidades * (precioPorCn6.get(cn6) ?? 0);
+  return { totalGasto, registroDesde, desdeEfectivo };
 }
 
 export async function getAnalisisDatos(
