@@ -14,6 +14,8 @@ import {
   Legend,
   Cell,
   LabelList,
+  ReferenceArea,
+  ReferenceLine,
 } from 'recharts';
 import {
   GRUPO_COLORS,
@@ -24,6 +26,7 @@ import {
 import type {
   AnalisisDatos,
   DiagnosticoDetalle,
+  GastoPorVia,
   GrupoCard,
   GrupoDetalle,
   IndicacionDetalle,
@@ -32,6 +35,8 @@ import type {
   ServicioCard,
   TemporalPoint,
   TopProtocolo,
+  Via,
+  ViaCard,
 } from '@/lib/analisis-neon';
 
 type Preset = { label: string; desde: string; hasta: string };
@@ -139,6 +144,22 @@ const SERVICE_PALETTE = [
   '#9333ea',  // purple-600    — púrpura vivo
 ] as const;
 
+const VIA_META: Record<Via, { label: string; color: string; actividad: string }> = {
+  IV:   { label: 'IV',   color: '#1e3a8a', actividad: 'preparaciones' },
+  ORAL: { label: 'Oral', color: '#a16207', actividad: 'dispensaciones' },
+};
+
+function actividadLabel(via: Via | null): string {
+  return via ? VIA_META[via].actividad : 'prep./disp.';
+}
+
+const YEAR_PALETTE = ['#475569', '#0d9488', '#1d4ed8', '#a21caf', '#4d7c0f'] as const;
+
+function getYearColor(anio: number): string {
+  const n = YEAR_PALETTE.length;
+  return YEAR_PALETTE[(((anio - 2024) % n) + n) % n] ?? YEAR_PALETTE[0];
+}
+
 function hashText(value: string): number {
   let hash = 0;
   for (let i = 0; i < value.length; i += 1) {
@@ -191,6 +212,27 @@ function YoyBadge({ pct }: { pct: number | null }) {
   );
 }
 
+function ViaSplitBar({ porVia }: { porVia?: GastoPorVia }) {
+  if (!porVia) return null;
+  const total = porVia.IV + porVia.ORAL;
+  if (total <= 0) return null;
+  const pctIv = (porVia.IV / total) * 100;
+  const pctOral = 100 - pctIv;
+  return (
+    <div className="mt-2.5">
+      <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+        <div style={{ width: `${pctIv}%`, backgroundColor: VIA_META.IV.color }} />
+        <div style={{ width: `${pctOral}%`, backgroundColor: VIA_META.ORAL.color }} />
+      </div>
+      <p className="mt-1 text-[10px] tabular-nums text-slate-500">
+        <span className="font-semibold" style={{ color: VIA_META.IV.color }}>IV {pctIv.toFixed(0)}%</span>
+        {' · '}
+        <span className="font-semibold" style={{ color: VIA_META.ORAL.color }}>Oral {pctOral.toFixed(0)}%</span>
+      </p>
+    </div>
+  );
+}
+
 function KpiCard({
   label,
   value,
@@ -238,10 +280,12 @@ function TemporalTooltip({
         {lunesRef && <p className="text-slate-500">Lunes: {fmtDate(lunesRef)}</p>}
         {nonGrupo.map((entry, i) => {
           if (entry.value == null || entry.value === 0) return null;
-          const isPrep = String(entry.name ?? '').toLowerCase().includes('prep');
+          const name = String(entry.name ?? '').toLowerCase();
+          const isMoney = name.includes('gasto');
+          const isPrep = name.includes('prep');
           return (
             <p key={i} style={{ color: entry.color }} className="tabular-nums mt-0.5">
-              {entry.name}: {fmtQty(Number(entry.value), isPrep ? 0 : 1)}
+              {entry.name}: {isMoney ? fmtEur(Number(entry.value)) : fmtQty(Number(entry.value), isPrep ? 0 : 1)}
             </p>
           );
         })}
@@ -299,11 +343,13 @@ function TemporalChart({
   title,
   emptyHint,
   showGrupoBreakdown = false,
+  showMediaMovil = false,
 }: {
   data: TemporalPoint[];
   title: string;
   emptyHint: string;
   showGrupoBreakdown?: boolean;
+  showMediaMovil?: boolean;
 }) {
   // Grupos con gasto > 0 en el período (para no renderizar barras vacías)
   const gruposPresentes = useMemo(() => {
@@ -319,15 +365,36 @@ function TemporalChart({
 
   // Aplanar gastoPorGrupo al nivel del objeto para que Recharts lo lea directamente
   const chartData = useMemo(() => {
-    if (!showGrupoBreakdown) return data;
-    return data.map((pt) => {
+    const now = new Date();
+    // El mes en curso está incompleto: no entra en la media para no simular una caída.
+    const isParcial = (pt: TemporalPoint) =>
+      pt.semana == null && pt.anio === now.getFullYear() && pt.mes === now.getMonth() + 1;
+    return data.map((pt, idx) => {
       const flat: Record<string, unknown> = { ...pt };
-      for (const g of gruposPresentes) {
-        flat[`__grupo__${g}`] = pt.gastoPorGrupo?.[g] ?? 0;
+      if (showGrupoBreakdown) {
+        for (const g of gruposPresentes) {
+          flat[`__grupo__${g}`] = pt.gastoPorGrupo?.[g] ?? 0;
+        }
+      }
+      if (showMediaMovil) {
+        const ventana = idx >= 2 ? data.slice(idx - 2, idx + 1) : [];
+        flat.__mm3 = ventana.length === 3 && !ventana.some(isParcial)
+          ? ventana.reduce((s, p) => s + p.gasto, 0) / 3
+          : null;
       }
       return flat;
     });
-  }, [data, showGrupoBreakdown, gruposPresentes]);
+  }, [data, showGrupoBreakdown, gruposPresentes, showMediaMovil]);
+
+  const tramosAnio = useMemo(() => {
+    const tramos: Array<{ anio: number; x1: string; x2: string }> = [];
+    for (const pt of data) {
+      const last = tramos.at(-1);
+      if (last && last.anio === pt.anio) last.x2 = pt.label;
+      else tramos.push({ anio: pt.anio, x1: pt.label, x2: pt.label });
+    }
+    return tramos;
+  }, [data]);
 
   if (!data.length) {
     return (
@@ -366,6 +433,28 @@ function TemporalChart({
             width={72}
           />
           <Tooltip content={<TemporalTooltip showGrupoBreakdown={showGrupoBreakdown} />} />
+          {tramosAnio.length > 1 && tramosAnio.map((t) => (
+            <ReferenceArea
+              key={`anio-${t.anio}`}
+              yAxisId="left"
+              x1={t.x1}
+              x2={t.x2}
+              fill={getYearColor(t.anio)}
+              fillOpacity={0.08}
+              strokeOpacity={0}
+              label={{ value: String(t.anio), position: 'insideTop', fontSize: 10, fontWeight: 700, fill: getYearColor(t.anio) }}
+            />
+          ))}
+          {tramosAnio.slice(1).map((t) => (
+            <ReferenceLine
+              key={`sep-${t.anio}`}
+              yAxisId="left"
+              x={t.x1}
+              position="start"
+              stroke="#64748b"
+              strokeDasharray="4 3"
+            />
+          ))}
           <Bar
             yAxisId="left"
             dataKey="viales"
@@ -374,7 +463,11 @@ function TemporalChart({
             fillOpacity={0.9}
             minPointSize={3}
             radius={[4, 4, 0, 0]}
-          />
+          >
+            {data.map((pt, i) => (
+              <Cell key={`${pt.label}-${i}`} fill={getYearColor(pt.anio)} />
+            ))}
+          </Bar>
           <Line
             yAxisId="left"
             dataKey="preparaciones"
@@ -383,6 +476,18 @@ function TemporalChart({
             strokeWidth={2}
             dot={false}
           />
+          {showMediaMovil && (
+            <Line
+              yAxisId="right"
+              dataKey="__mm3"
+              name="Media móvil 3 meses (gasto)"
+              stroke={SERIES_COLORS.surface}
+              strokeWidth={2}
+              strokeDasharray="6 3"
+              dot={false}
+              connectNulls={false}
+            />
+          )}
           {showGrupoBreakdown ? (
             gruposPresentes.map((g, idx) => (
               <Bar
@@ -408,8 +513,33 @@ function TemporalChart({
           )}
         </ComposedChart>
       </ResponsiveContainer>
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-slate-600">
+        <span className="font-semibold uppercase tracking-wide text-slate-400">Consumo por año</span>
+        {tramosAnio.map((t) => (
+          <span key={t.anio} className="flex items-center gap-1">
+            <span className="h-2 w-2 rounded-sm flex-shrink-0" style={{ backgroundColor: getYearColor(t.anio) }} />
+            {t.anio}
+          </span>
+        ))}
+        {!showGrupoBreakdown && (
+          <span className="flex items-center gap-1">
+            <span className="h-2 w-2 rounded-sm flex-shrink-0" style={{ backgroundColor: SERIES_COLORS.gastoTemporal }} />
+            Gasto valorizado
+          </span>
+        )}
+        <span className="flex items-center gap-1">
+          <span className="h-0.5 w-3 flex-shrink-0" style={{ backgroundColor: SERIES_COLORS.preparaciones }} />
+          Preparaciones
+        </span>
+        {showMediaMovil && (
+          <span className="flex items-center gap-1">
+            <span className="w-3 flex-shrink-0 border-t-2 border-dashed" style={{ borderColor: SERIES_COLORS.surface }} />
+            Media móvil 3 meses del gasto
+          </span>
+        )}
+      </div>
       {showGrupoBreakdown && gruposPresentes.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1">
+        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
           {gruposPresentes.map((g) => (
             <span key={g} className="flex items-center gap-1 text-[10px] text-slate-600">
               <span className="h-2 w-2 rounded-sm flex-shrink-0" style={{ backgroundColor: GRUPO_COLORS[g].chart }} />
@@ -427,11 +557,13 @@ function ServicioCardUI({
   selected,
   onClick,
   gastoAnualServicioReal,
+  mostrarVia = true,
 }: {
   item: ServicioCard;
   selected: boolean;
   onClick: () => void;
   gastoAnualServicioReal: import('@/lib/analisis-neon').GastoAnualServicioReal[];
+  mostrarVia?: boolean;
 }) {
   const color = getServiceColor(item.servicioKey);
 
@@ -487,6 +619,7 @@ function ServicioCardUI({
           Predominio: {item.gruposDominantes.slice(0, 2).map((g) => `${g.label} ${g.pctServicio.toFixed(0)}%`).join(' · ')}
         </p>
       )}
+      {mostrarVia && <ViaSplitBar porVia={item.gastoPorVia} />}
       {anioRows.length > 1 && (
         <div className="mt-3 border-t border-white/60 pt-2.5 space-y-2.5">
           {anioRows.map((r) => (
@@ -512,14 +645,91 @@ function ServicioCardUI({
   );
 }
 
-function GrupoCardUI({
+function ServicioMiniCard({
+  item,
+  onClick,
+}: {
+  item: ServicioCard;
+  onClick: () => void;
+}) {
+  const color = getServiceColor(item.servicioKey);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Cambiar a este servicio"
+      className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white/70 px-3 py-1.5 text-left opacity-70 transition hover:opacity-100 hover:shadow-sm"
+    >
+      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+      <span className="text-xs font-semibold text-slate-700">{item.servicio}</span>
+      <span className="text-[11px] tabular-nums text-slate-500">
+        {fmtEurShort(item.totalGasto)} · {item.pctGasto.toFixed(1)}%
+      </span>
+    </button>
+  );
+}
+
+function ViaCardUI({
   item,
   selected,
   onClick,
 }: {
+  item: ViaCard;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  const meta = VIA_META[item.via];
+  const vacia = item.totalGasto <= 0 && item.medicamentosDistintos === 0;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={vacia}
+      className="w-full rounded-xl border p-4 text-left shadow-sm transition-colors hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
+      style={{
+        borderColor: selected ? hexToRgba(meta.color, 0.55) : '#e2e8f0',
+        background: `linear-gradient(135deg, ${hexToRgba(meta.color, selected ? 0.16 : 0.07)}, rgba(255,255,255,0.98))`,
+        boxShadow: selected ? `0 0 0 2px ${hexToRgba(meta.color, 0.2)}` : undefined,
+      }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: meta.color }} />
+          <p className="text-sm font-bold leading-tight" style={{ color: meta.color }}>
+            Medicamentos {meta.label}
+          </p>
+        </div>
+        <YoyBadge pct={item.variacionYoy} />
+      </div>
+      <p className="mt-2 text-xl font-bold tabular-nums text-slate-900">{fmtEur(item.totalGasto)}</p>
+      <p className="mt-1 text-xs text-slate-500">
+        {fmtQty(item.totalViales)} cajas eq. · {fmtNum(item.totalPreparaciones, 0)} {meta.actividad}
+      </p>
+      <p className="mt-0.5 text-xs text-slate-500">
+        {item.medicamentosDistintos} medicamentos
+        {item.via === 'IV' && ` · ${item.protocolosActivos} protocolos`}
+      </p>
+      <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+        <div
+          className="h-full rounded-full"
+          style={{ width: `${Math.min(item.pctGasto, 100)}%`, backgroundColor: meta.color }}
+        />
+      </div>
+      <p className="mt-1 text-[11px] text-slate-400">{item.pctGasto.toFixed(1)}% del alcance actual</p>
+    </button>
+  );
+}
+
+function GrupoCardUI({
+  item,
+  selected,
+  onClick,
+  via,
+}: {
   item: GrupoCard;
   selected: boolean;
   onClick: () => void;
+  via: Via | null;
 }) {
   const c = GRUPO_COLORS[item.grupo];
   return (
@@ -538,7 +748,7 @@ function GrupoCardUI({
       </div>
       <p className="mt-2 text-xl font-bold text-slate-900 tabular-nums">{fmtEur(item.totalGasto)}</p>
       <p className="mt-1 text-xs text-slate-500">
-        {fmtQty(item.totalViales)} cajas eq. · {fmtNum(item.totalPreparaciones, 0)} preparaciones
+        {fmtQty(item.totalViales)} cajas eq. · {fmtNum(item.totalPreparaciones, 0)} {actividadLabel(via)}
       </p>
       <div className="mt-3 h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
         <div
@@ -547,6 +757,7 @@ function GrupoCardUI({
         />
       </div>
       <p className="mt-1 text-[11px] text-slate-400">{item.pctGasto.toFixed(1)}% del alcance actual</p>
+      {!via && <ViaSplitBar porVia={item.gastoPorVia} />}
     </button>
   );
 }
@@ -657,10 +868,14 @@ function GastoAnualRefChart({
   gastoAnualServicioReal,
   onClickAnio,
   anioSeleccionado,
+  servicioSelKey,
+  onClickServicio,
 }: {
   gastoAnualServicioReal: import('@/lib/analisis-neon').GastoAnualServicioReal[];
   onClickAnio: (anio: number) => void;
   anioSeleccionado: number | null;
+  servicioSelKey: string | null;
+  onClickServicio: (servicioKey: string) => void;
 }) {
   const OTROS_KEY   = '__otros__';
   const OTROS_COLOR = '#94a3b8';
@@ -776,15 +991,36 @@ function GastoAnualRefChart({
           </p>
         </div>
         <div className="flex flex-wrap gap-x-4 gap-y-1">
-          {serviciosMostrados.map(({ key, label }) => (
-            <span key={key} className="flex items-center gap-1 text-[11px] text-slate-600">
+          {serviciosMostrados.map(({ key, label }) => {
+            const atenuado = servicioSelKey != null && key !== servicioSelKey;
+            const swatch = (
               <span
                 className="inline-block h-2.5 w-2.5 rounded-sm flex-shrink-0"
                 style={{ backgroundColor: key === OTROS_KEY ? OTROS_COLOR : getServiceColor(key) }}
               />
-              {label}
-            </span>
-          ))}
+            );
+            if (key === OTROS_KEY) {
+              return (
+                <span key={key} className={`flex items-center gap-1 text-[11px] text-slate-600 ${atenuado ? 'opacity-40' : ''}`}>
+                  {swatch}
+                  {label}
+                </span>
+              );
+            }
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => onClickServicio(key)}
+                className={`flex items-center gap-1 text-[11px] hover:underline ${
+                  servicioSelKey === key ? 'font-bold text-slate-900' : 'text-slate-600'
+                } ${atenuado ? 'opacity-40' : ''}`}
+              >
+                {swatch}
+                {label}
+              </button>
+            );
+          })}
         </div>
       </div>
       <ResponsiveContainer width="100%" height={240}>
@@ -810,13 +1046,17 @@ function GastoAnualRefChart({
                 radius={isLast ? [5, 5, 0, 0] : [0, 0, 0, 0]}
                 onClick={handleBarClick}
               >
-                {chartData.map((d) => (
-                  <Cell
-                    key={String(d.anio)}
-                    fill={fillColor}
-                    opacity={anioSeleccionado && Number(d.anioNum) !== anioSeleccionado ? 0.28 : 0.88}
-                  />
-                ))}
+                {chartData.map((d) => {
+                  const fueraAnio = anioSeleccionado != null && Number(d.anioNum) !== anioSeleccionado;
+                  const fueraServicio = servicioSelKey != null && key !== servicioSelKey;
+                  return (
+                    <Cell
+                      key={String(d.anio)}
+                      fill={fillColor}
+                      opacity={fueraServicio ? 0.15 : fueraAnio ? 0.28 : 0.88}
+                    />
+                  );
+                })}
                 {/* Etiqueta del total encima de la barra (solo en el último segmento) */}
                 {key === lastServicioKey && (
                   <LabelList
@@ -992,17 +1232,24 @@ function GrupoDetallePanel({
   detalle,
   showWeekly,
   onSelectMed,
+  via,
 }: {
   detalle: GrupoDetalle;
   showWeekly: boolean;
   onSelectMed: (cn: string) => void;
+  via: Via | null;
 }) {
+  const actividad = actividadLabel(via);
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <KpiCard label="Gasto" value={fmtEur(detalle.kpis.totalGasto)} tone="rose" />
         <KpiCard label="Cajas eq." value={fmtQty(detalle.kpis.totalViales)} tone="teal" />
-        <KpiCard label="Preparaciones" value={fmtNum(detalle.kpis.totalPreparaciones, 0)} tone="amber" />
+        <KpiCard
+          label={actividad.charAt(0).toUpperCase() + actividad.slice(1)}
+          value={fmtNum(detalle.kpis.totalPreparaciones, 0)}
+          tone="amber"
+        />
         <KpiCard label="Medicamentos" value={String(detalle.kpis.medicamentosDistintos)} tone="violet" />
       </div>
 
@@ -1011,6 +1258,7 @@ function GrupoDetallePanel({
           data={detalle.temporalHistorico}
           title="Evolución mensual del grupo"
           emptyHint="Sin actividad mensual en el período."
+          showMediaMovil
         />
         {showWeekly && (
           <TemporalChart
@@ -1021,7 +1269,7 @@ function GrupoDetallePanel({
         )}
       </div>
 
-      <TopProtocolosTable items={detalle.topProtocolos} />
+      {via !== 'ORAL' && <TopProtocolosTable items={detalle.topProtocolos} />}
 
       <div>
         <h3 className="text-sm font-semibold text-slate-700 mb-1">Diagnósticos e indicaciones</h3>
@@ -1085,7 +1333,15 @@ function MedicamentoListTable({
                 }`}
               >
                 <td className="px-3 py-2.5">
-                  <p className="font-semibold text-slate-800">{item.principioActivo || item.nombre}</p>
+                  <p className="font-semibold text-slate-800">
+                    {item.principioActivo || item.nombre}
+                    <span
+                      className="ml-1.5 rounded px-1 py-px align-middle text-[9px] font-bold text-white"
+                      style={{ backgroundColor: VIA_META[item.via].color }}
+                    >
+                      {VIA_META[item.via].label}
+                    </span>
+                  </p>
                   <p className="text-[10px] text-slate-500">
                     CN {item.cn} · {item.nombre}
                   </p>
@@ -1311,32 +1567,213 @@ function MedicamentoDetallePanel({
   );
 }
 
+type RangoFechas = { desde: string; hasta: string; activePreset: string };
+
+type NavState = RangoFechas & {
+  anio: number | null;
+  /** Rango activo antes de seleccionar un año, para restaurarlo al quitarlo. */
+  rangoPrevio: RangoFechas | null;
+  servicio: string | null;
+  grupo: DiagnosticoGrupo | null;
+  via: Via | null;
+  cn: string;
+};
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_HISTORIAL = 30;
+
+function servicioKeyCliente(label: string): string {
+  return label.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function initialNav(presets: Preset[]): NavState {
+  const base: NavState = {
+    desde: presets[2]?.desde ?? defaultDesde(),
+    hasta: presets[2]?.hasta ?? defaultHasta(),
+    activePreset: presets[2]?.label ?? '12 meses',
+    anio: null,
+    rangoPrevio: null,
+    servicio: null,
+    grupo: null,
+    via: null,
+    cn: '',
+  };
+  if (typeof window === 'undefined') return base;
+
+  const q = new URLSearchParams(window.location.search);
+  const nav: NavState = { ...base };
+  const desde = q.get('desde');
+  const hasta = q.get('hasta');
+  if (desde && hasta && ISO_DATE_RE.test(desde) && ISO_DATE_RE.test(hasta)) {
+    nav.desde = desde;
+    nav.hasta = hasta;
+    nav.activePreset = presets.find((p) => p.desde === desde && p.hasta === hasta)?.label ?? '';
+  }
+  const anio = Number(q.get('anio'));
+  if (Number.isInteger(anio) && anio >= 2000 && anio <= 2100) {
+    nav.anio = anio;
+    nav.rangoPrevio = { desde: base.desde, hasta: base.hasta, activePreset: base.activePreset };
+    nav.desde = `${anio}-01-01`;
+    nav.hasta = `${anio}-12-31`;
+    nav.activePreset = '';
+  }
+  const grupo = q.get('grupo');
+  const via = q.get('via');
+  nav.servicio = q.get('servicio') || null;
+  nav.grupo = grupo && grupo in GRUPO_LABELS ? (grupo as DiagnosticoGrupo) : null;
+  nav.via = via === 'IV' || via === 'ORAL' ? via : null;
+  nav.cn = q.get('cn') ?? '';
+  return nav;
+}
+
+function navToParams(nav: NavState): URLSearchParams {
+  const params = new URLSearchParams({ desde: nav.desde, hasta: nav.hasta });
+  if (nav.anio) params.set('anio', String(nav.anio));
+  if (nav.servicio) params.set('servicio', nav.servicio);
+  if (nav.grupo) params.set('grupo', nav.grupo);
+  if (nav.via) params.set('via', nav.via);
+  if (nav.cn) params.set('cn', nav.cn);
+  return params;
+}
+
+function apiParams(nav: NavState, { incluirCn = true } = {}): URLSearchParams {
+  const params = navToParams(nav);
+  params.delete('anio');
+  if (!incluirCn) params.delete('cn');
+  params.set('comparativa', 'periodo-anterior');
+  return params;
+}
+
+type FiltroChip = { key: string; label: string; color: string; onRemove: () => void };
+
+function FiltrosActivosBar({
+  chips,
+  periodoLabel,
+  puedeDeshacer,
+  loading,
+  onDeshacer,
+  onLimpiar,
+}: {
+  chips: FiltroChip[];
+  periodoLabel: string;
+  puedeDeshacer: boolean;
+  loading: boolean;
+  onDeshacer: () => void;
+  onLimpiar: () => void;
+}) {
+  return (
+    <div className="sticky top-16 z-40 -mx-1 rounded-xl border border-slate-200 bg-white/95 px-3 py-2 shadow-sm backdrop-blur">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Filtros</span>
+        <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-600">
+          {periodoLabel}
+        </span>
+        {chips.length === 0 && (
+          <span className="text-[11px] text-slate-400">Vista global del área · haz clic en tarjetas o gráficas para filtrar</span>
+        )}
+        {chips.map((chip) => (
+          <span
+            key={chip.key}
+            className="flex items-center gap-1.5 rounded-full border bg-white py-0.5 pl-2.5 pr-1 text-[11px] font-semibold text-slate-700"
+            style={{ borderColor: hexToRgba(chip.color, 0.5), backgroundColor: hexToRgba(chip.color, 0.08) }}
+          >
+            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: chip.color }} />
+            {chip.label}
+            <button
+              type="button"
+              onClick={chip.onRemove}
+              aria-label={`Quitar filtro ${chip.label}`}
+              className="flex h-4 w-4 items-center justify-center rounded-full text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+            >
+              ✕
+            </button>
+          </span>
+        ))}
+        <div className="ml-auto flex items-center gap-2">
+          {loading && <span className="text-[11px] font-medium text-sky-700">Actualizando…</span>}
+          <button
+            type="button"
+            onClick={onDeshacer}
+            disabled={!puedeDeshacer}
+            title="Deshacer el último cambio (Esc)"
+            className="rounded-lg border border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            ↶ Deshacer
+          </button>
+          {chips.length > 0 && (
+            <button
+              type="button"
+              onClick={onLimpiar}
+              className="rounded-lg border border-teal-200 bg-teal-50 px-2.5 py-1 text-[11px] font-semibold text-teal-700 hover:bg-teal-100"
+            >
+              Limpiar todo
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AnalisisOncologiaPage() {
   const presets = useMemo(() => buildPresets(), []);
-  const [desde, setDesde] = useState(presets[2]?.desde ?? defaultDesde());
-  const [hasta, setHasta] = useState(presets[2]?.hasta ?? defaultHasta());
-  const [activePreset, setActivePreset] = useState(presets[2]?.label ?? '12 meses');
-  const [servicioSel, setServicioSel] = useState<string | null>(null);
-  const [grupoSel, setGrupoSel] = useState<DiagnosticoGrupo | null>(null);
-  const [cnSel, setCnSel] = useState('');
+  const [nav, setNav] = useState<NavState>(() => initialNav(presets));
+  const [historial, setHistorial] = useState<NavState[]>([]);
+  const [soloSeleccionado, setSoloSeleccionado] = useState(false);
   const [medQuery, setMedQuery] = useState('');
   const [datos, setDatos] = useState<AnalisisDatos | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [anioSeleccionado, setAnioSeleccionado] = useState<number | null>(null);
+
+  const {
+    desde,
+    hasta,
+    activePreset,
+    anio: anioSeleccionado,
+    servicio: servicioSel,
+    grupo: grupoSel,
+    via: viaSel,
+    cn: cnSel,
+  } = nav;
 
   const showWeekly = useMemo(() => daysBetween(desde, hasta) <= 186, [desde, hasta]);
+
+  function updateNav(patch: Partial<NavState>) {
+    setHistorial((h) => [...h.slice(-(MAX_HISTORIAL - 1)), nav]);
+    setNav((prev) => ({ ...prev, ...patch }));
+  }
+
+  function deshacer() {
+    const prev = historial.at(-1);
+    if (!prev) return;
+    setHistorial(historial.slice(0, -1));
+    setNav(prev);
+  }
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return;
+      const target = e.target as HTMLElement | null;
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+      deshacer();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
+  useEffect(() => {
+    const qs = navToParams(nav).toString();
+    window.history.replaceState(window.history.state, '', `${window.location.pathname}?${qs}`);
+  }, [nav]);
+
+  const apiQuery = useMemo(() => apiParams(nav).toString(), [nav]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    const params = new URLSearchParams({ desde, hasta, comparativa: 'periodo-anterior' });
-    if (servicioSel) params.set('servicio', servicioSel);
-    if (grupoSel) params.set('grupo', grupoSel);
-    if (cnSel) params.set('cn', cnSel);
 
-    fetch(`/api/analisis/datos?${params}`)
+    fetch(`/api/analisis/datos?${apiQuery}`)
       .then((res) => res.ok ? res.json() : res.json().then((payload) => Promise.reject(payload?.error ?? 'Error al cargar análisis')))
       .then((payload: AnalisisDatos) => {
         if (!cancelled) setDatos(payload);
@@ -1354,12 +1791,12 @@ export default function AnalisisOncologiaPage() {
     return () => {
       cancelled = true;
     };
-  }, [desde, hasta, servicioSel, grupoSel, cnSel]);
+  }, [apiQuery]);
 
   useEffect(() => {
     if (!datos || !cnSel) return;
     if (!datos.medicamentos.some((med) => med.cn === cnSel)) {
-      setCnSel('');
+      setNav((prev) => ({ ...prev, cn: '' }));
     }
   }, [datos, cnSel]);
 
@@ -1375,48 +1812,139 @@ export default function AnalisisOncologiaPage() {
   }, [datos, medQuery]);
 
   function applyPreset(preset: Preset) {
-    setDesde(preset.desde);
-    setHasta(preset.hasta);
-    setActivePreset(preset.label);
-    setAnioSeleccionado(null);
+    updateNav({
+      desde: preset.desde,
+      hasta: preset.hasta,
+      activePreset: preset.label,
+      anio: null,
+      rangoPrevio: null,
+    });
+  }
+
+  function setFecha(campo: 'desde' | 'hasta', value: string) {
+    updateNav({ [campo]: value, activePreset: '', anio: null, rangoPrevio: null });
+  }
+
+  function rangoTrasQuitarAnio(): RangoFechas {
+    if (nav.rangoPrevio) return nav.rangoPrevio;
+    const todo = presets.find((p) => p.label === PRESET_TODO_PERIODO);
+    return {
+      desde: todo?.desde ?? DESDE_TODO_PERIODO,
+      hasta: todo?.hasta ?? defaultHasta(),
+      activePreset: PRESET_TODO_PERIODO,
+    };
+  }
+
+  function quitarAnio() {
+    updateNav({ anio: null, rangoPrevio: null, ...rangoTrasQuitarAnio() });
   }
 
   function handleClickAnio(anio: number) {
     if (anioSeleccionado === anio) {
-      setAnioSeleccionado(null);
-      const preset = presets.find((p) => p.label === PRESET_TODO_PERIODO);
-      if (preset) { setDesde(preset.desde); setHasta(preset.hasta); }
-      setActivePreset(PRESET_TODO_PERIODO);
-    } else {
-      setAnioSeleccionado(anio);
-      setDesde(`${anio}-01-01`);
-      setHasta(`${anio}-12-31`);
-      setActivePreset('');
+      quitarAnio();
+      return;
     }
+    updateNav({
+      anio,
+      desde: `${anio}-01-01`,
+      hasta: `${anio}-12-31`,
+      activePreset: '',
+      rangoPrevio: anioSeleccionado ? nav.rangoPrevio : { desde, hasta, activePreset },
+    });
   }
 
   function handleSelectServicio(servicio: string | null) {
-    setServicioSel(servicio);
-    setGrupoSel(null);
+    updateNav({ servicio: servicio && servicio === servicioSel ? null : servicio });
+  }
+
+  function handleSelectServicioKey(key: string) {
+    const label =
+      datos?.servicios.find((s) => s.servicioKey === key)?.servicio ??
+      datos?.gastoAnualServicioReal.find((s) => s.servicioKey === key)?.servicio ??
+      null;
+    if (label) handleSelectServicio(label);
   }
 
   function handleSelectGrupo(grupo: DiagnosticoGrupo) {
-    setGrupoSel((prev) => (prev === grupo ? null : grupo));
+    updateNav({ grupo: grupoSel === grupo ? null : grupo });
   }
 
+  function handleSelectVia(via: Via) {
+    updateNav({ via: viaSel === via ? null : via });
+  }
+
+  function handleSelectCn(cn: string) {
+    updateNav({ cn });
+  }
+
+  function limpiarFiltros() {
+    updateNav({
+      servicio: null,
+      grupo: null,
+      via: null,
+      cn: '',
+      ...(anioSeleccionado ? { anio: null, rangoPrevio: null, ...rangoTrasQuitarAnio() } : {}),
+    });
+  }
+
+  const servicioSelKey = servicioSel
+    ? datos?.servicios.find((s) => s.servicio === servicioSel)?.servicioKey ?? servicioKeyCliente(servicioSel)
+    : null;
+
+  const medSel = cnSel ? datos?.medicamentos.find((m) => m.cn === cnSel) : undefined;
+
+  const chips: FiltroChip[] = [];
+  if (anioSeleccionado) {
+    chips.push({ key: 'anio', label: `Año ${anioSeleccionado}`, color: getYearColor(anioSeleccionado), onRemove: quitarAnio });
+  }
+  if (servicioSel) {
+    chips.push({
+      key: 'servicio',
+      label: servicioSel,
+      color: getServiceColor(servicioSelKey ?? servicioSel),
+      onRemove: () => updateNav({ servicio: null }),
+    });
+  }
+  if (grupoSel) {
+    chips.push({
+      key: 'grupo',
+      label: GRUPO_LABELS[grupoSel],
+      color: GRUPO_COLORS[grupoSel].chart,
+      onRemove: () => updateNav({ grupo: null }),
+    });
+  }
+  if (viaSel) {
+    chips.push({
+      key: 'via',
+      label: `Vía ${VIA_META[viaSel].label}`,
+      color: VIA_META[viaSel].color,
+      onRemove: () => updateNav({ via: null }),
+    });
+  }
+  if (cnSel) {
+    chips.push({
+      key: 'cn',
+      label: medSel ? (medSel.principioActivo || medSel.nombre) : `CN ${cnSel}`,
+      color: SERIES_COLORS.consumo,
+      onRemove: () => updateNav({ cn: '' }),
+    });
+  }
+
+  const periodoLabel = anioSeleccionado
+    ? `Año ${anioSeleccionado}`
+    : activePreset || `${fmtDate(desde)} – ${fmtDate(hasta)}`;
+
+  const servicioFoco = servicioSel ? datos?.servicios.find((s) => s.servicio === servicioSel) : undefined;
+  const serviciosResto = servicioFoco
+    ? (datos?.servicios ?? []).filter((s) => s.servicioKey !== servicioFoco.servicioKey)
+    : [];
+
   function handleExportar() {
-    const params = new URLSearchParams({ desde, hasta, comparativa: 'periodo-anterior' });
-    if (servicioSel) params.set('servicio', servicioSel);
-    if (grupoSel) params.set('grupo', grupoSel);
-    window.open(`/api/analisis/exportar?${params}`, '_blank');
+    window.open(`/api/analisis/exportar?${apiParams(nav, { incluirCn: false })}`, '_blank');
   }
 
   function handleExportarPdf() {
-    const params = new URLSearchParams({ desde, hasta, comparativa: 'periodo-anterior' });
-    if (servicioSel) params.set('servicio', servicioSel);
-    if (grupoSel) params.set('grupo', grupoSel);
-    if (cnSel) params.set('cn', cnSel);
-    window.open(`/api/analisis/informe/pdf?${params}`, '_blank');
+    window.open(`/api/analisis/informe/pdf?${apiParams(nav)}`, '_blank');
   }
 
   return (
@@ -1477,20 +2005,14 @@ export default function AnalisisOncologiaPage() {
               <input
                 type="date"
                 value={desde}
-                onChange={(e) => {
-                  setDesde(e.target.value);
-                  setActivePreset('');
-                }}
+                onChange={(e) => setFecha('desde', e.target.value)}
                 className="rounded-lg border border-slate-200 px-2 py-1 text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-400"
               />
               <span>—</span>
               <input
                 type="date"
                 value={hasta}
-                onChange={(e) => {
-                  setHasta(e.target.value);
-                  setActivePreset('');
-                }}
+                onChange={(e) => setFecha('hasta', e.target.value)}
                 className="rounded-lg border border-slate-200 px-2 py-1 text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-400"
               />
             </div>
@@ -1501,6 +2023,15 @@ export default function AnalisisOncologiaPage() {
         </div>
       </div>
 
+      <FiltrosActivosBar
+        chips={chips}
+        periodoLabel={periodoLabel}
+        puedeDeshacer={historial.length > 0}
+        loading={loading && !!datos}
+        onDeshacer={deshacer}
+        onLimpiar={limpiarFiltros}
+      />
+
       {error && (
         <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
       )}
@@ -1509,14 +2040,6 @@ export default function AnalisisOncologiaPage() {
         <div className="flex items-center justify-center py-16">
           <div className="h-8 w-8 animate-spin rounded-full border-4 border-teal-600 border-t-transparent" />
           <span className="ml-3 text-sm text-slate-500">Cargando análisis…</span>
-        </div>
-      )}
-
-      {loading && datos && (
-        <div className="sticky top-3 z-10 flex justify-center">
-          <div className="rounded-full border border-sky-200 bg-white/95 px-3 py-1 text-xs font-medium text-sky-700 shadow-sm backdrop-blur">
-            Actualizando análisis…
-          </div>
         </div>
       )}
 
@@ -1533,54 +2056,78 @@ export default function AnalisisOncologiaPage() {
             gastoAnualServicioReal={datos.gastoAnualServicioReal}
             onClickAnio={handleClickAnio}
             anioSeleccionado={anioSeleccionado}
+            servicioSelKey={servicioSelKey}
+            onClickServicio={handleSelectServicioKey}
           />
 
           <div className="space-y-3">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-sm font-semibold text-slate-700">Servicios reales</h2>
-                <p className="text-xs text-slate-400">Filtra por el servicio clínico real que consta en consumo.</p>
+                <p className="text-xs text-slate-400">
+                  {servicioFoco
+                    ? 'Servicio destacado · haz clic en otro para cambiar o en el mismo para volver a todos.'
+                    : 'Filtra por el servicio clínico real que consta en consumo.'}
+                </p>
               </div>
-              {servicioSel && (
-                <button
-                  type="button"
-                  onClick={() => handleSelectServicio(null)}
-                  className="text-xs font-medium text-teal-700 hover:underline"
-                >
-                  Quitar filtro de servicio
-                </button>
+              {servicioFoco && serviciosResto.length > 0 && (
+                <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={soloSeleccionado}
+                    onChange={(e) => setSoloSeleccionado(e.target.checked)}
+                    className="h-3.5 w-3.5 accent-teal-600"
+                  />
+                  Mostrar solo el seleccionado
+                </label>
               )}
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-              {datos.servicios.map((item) => (
+            {servicioFoco ? (
+              <div className="space-y-3">
                 <ServicioCardUI
-                  key={item.servicioKey}
-                  item={item}
-                  selected={servicioSel === item.servicio}
-                  onClick={() => handleSelectServicio(servicioSel === item.servicio ? null : item.servicio)}
+                  item={servicioFoco}
+                  selected
+                  onClick={() => handleSelectServicio(null)}
                   gastoAnualServicioReal={datos.gastoAnualServicioReal}
+                  mostrarVia={!viaSel}
                 />
-              ))}
-            </div>
+                {!soloSeleccionado && serviciosResto.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {serviciosResto.map((item) => (
+                      <ServicioMiniCard
+                        key={item.servicioKey}
+                        item={item}
+                        onClick={() => handleSelectServicio(item.servicio)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                {datos.servicios.map((item) => (
+                  <ServicioCardUI
+                    key={item.servicioKey}
+                    item={item}
+                    selected={false}
+                    onClick={() => handleSelectServicio(item.servicio)}
+                    gastoAnualServicioReal={datos.gastoAnualServicioReal}
+                    mostrarVia={!viaSel}
+                  />
+                ))}
+                {datos.servicios.length === 0 && (
+                  <p className="text-xs text-slate-400">Ningún servicio con consumo para los filtros actuales.</p>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-sm font-semibold text-slate-700">Tipos tumorales</h2>
-                <p className="text-xs text-slate-400">
-                  Mantiene la clasificación tumoral actual, pero sobre el filtro de servicio real seleccionado.
-                </p>
-              </div>
-              {grupoSel && (
-                <button
-                  type="button"
-                  onClick={() => setGrupoSel(null)}
-                  className="text-xs font-medium text-teal-700 hover:underline"
-                >
-                  Quitar filtro de grupo
-                </button>
-              )}
+            <div>
+              <h2 className="text-sm font-semibold text-slate-700">Tipos tumorales</h2>
+              <p className="text-xs text-slate-400">
+                Clasificación tumoral sobre el servicio y la vía seleccionados. La barra inferior muestra el reparto del gasto IV / Oral.
+              </p>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
               {datos.grupos.map((item) => (
@@ -1589,6 +2136,26 @@ export default function AnalisisOncologiaPage() {
                   item={item}
                   selected={grupoSel === item.grupo}
                   onClick={() => handleSelectGrupo(item.grupo)}
+                  via={viaSel}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-700">Medicamentos IV y orales</h2>
+              <p className="text-xs text-slate-400">
+                Sobre el servicio y el tipo tumoral seleccionados. Haz clic para analizar solo una vía.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {datos.vias.map((item) => (
+                <ViaCardUI
+                  key={item.via}
+                  item={item}
+                  selected={viaSel === item.via}
+                  onClick={() => handleSelectVia(item.via)}
                 />
               ))}
             </div>
@@ -1600,6 +2167,7 @@ export default function AnalisisOncologiaPage() {
               title="Evolución mensual del alcance actual"
               emptyHint="Sin consumo mensual para el rango seleccionado."
               showGrupoBreakdown
+              showMediaMovil
             />
             {showWeekly && (
               <TemporalChart
@@ -1610,7 +2178,7 @@ export default function AnalisisOncologiaPage() {
             )}
           </div>
 
-          <TopProtocolosTable items={datos.topProtocolos} />
+          {viaSel !== 'ORAL' && <TopProtocolosTable items={datos.topProtocolos} />}
 
           {grupoSel && datos.grupoDetalle && (
             <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-5">
@@ -1620,7 +2188,12 @@ export default function AnalisisOncologiaPage() {
                 </span>
                 <h2 className="text-base font-bold text-slate-800">Detalle asistencial y económico del grupo</h2>
               </div>
-              <GrupoDetallePanel detalle={datos.grupoDetalle} showWeekly={showWeekly} onSelectMed={setCnSel} />
+              <GrupoDetallePanel
+                detalle={datos.grupoDetalle}
+                showWeekly={showWeekly}
+                onSelectMed={handleSelectCn}
+                via={viaSel}
+              />
             </div>
           )}
 
@@ -1630,7 +2203,7 @@ export default function AnalisisOncologiaPage() {
               selectedCn={cnSel}
               query={medQuery}
               onQueryChange={setMedQuery}
-              onSelect={setCnSel}
+              onSelect={handleSelectCn}
             />
             {datos.medicamentoDetalle ? (
               <MedicamentoDetallePanel detalle={datos.medicamentoDetalle} showWeeklyByDefault={showWeekly} desde={desde} hasta={hasta} />

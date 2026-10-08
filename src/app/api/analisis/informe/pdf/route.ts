@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
-import { getAnalisisDatos, parseModoComparativa } from '@/lib/analisis-neon';
+import { getAnalisisDatos, parseModoComparativa, parseVia, VIA_LABELS } from '@/lib/analisis-neon';
 import {
   buildInformeAnalisisPdf,
   buildInformePdfFilename,
@@ -47,6 +47,7 @@ export async function GET(req: NextRequest) {
   const grupoRaw = searchParams.get('grupo')?.trim() || null;
   const cn = searchParams.get('cn')?.trim() || null;
   const grupo = grupoRaw && grupoRaw in GRUPO_LABELS ? (grupoRaw as DiagnosticoGrupo) : null;
+  const via = parseVia(searchParams.get('via'));
   const comparativa = parseModoComparativa(searchParams.get('comparativa'));
 
   const datos = await getAnalisisDatos(
@@ -57,11 +58,13 @@ export async function GET(req: NextRequest) {
     servicio,
     comparativa,
     cn,
+    via,
   );
 
   const subtitulo = [
     servicio ? `Servicio: ${servicio}` : null,
     grupo ? `Grupo tumoral: ${GRUPO_LABELS[grupo]}` : null,
+    via ? `Via: ${VIA_LABELS[via]}` : null,
     cn ? `CN: ${cn}` : null,
   ].filter(Boolean).join(' · ') || 'Vista global del area';
 
@@ -75,6 +78,7 @@ export async function GET(req: NextRequest) {
       session.area,
       servicio ? slugify(servicio) : 'global',
       grupo ? slugify(GRUPO_LABELS[grupo]) : null,
+      via ? slugify(VIA_LABELS[via]) : null,
       cn ? `cn-${slugify(cn)}` : null,
     ].filter(Boolean).join('-'),
     desde,

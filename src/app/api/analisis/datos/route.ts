@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiSession } from '@/lib/api-auth';
-import { getAnalisisDatos, parseModoComparativa } from '@/lib/analisis-neon';
+import { getAnalisisDatos, parseModoComparativa, parseVia } from '@/lib/analisis-neon';
 
 export const runtime = 'nodejs';
 
@@ -33,10 +33,11 @@ export async function GET(req: NextRequest) {
   const grupo    = searchParams.get('grupo')    || null;
   const servicio = searchParams.get('servicio') || null;
   const cn       = searchParams.get('cn')       || null;
+  const via      = parseVia(searchParams.get('via'));
   const comparativa = parseModoComparativa(searchParams.get('comparativa'));
 
   try {
-    const datos = await getAnalisisDatos(session.area, desde, hasta, grupo, servicio, comparativa, cn);
+    const datos = await getAnalisisDatos(session.area, desde, hasta, grupo, servicio, comparativa, cn, via);
     return NextResponse.json(datos);
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Error inesperado';

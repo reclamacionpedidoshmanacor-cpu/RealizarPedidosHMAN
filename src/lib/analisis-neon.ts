@@ -132,6 +132,30 @@ function isoToYM(iso: string): { y: number; m: number } {
 // Tipos públicos
 // ---------------------------------------------------------------------------
 
+export type Via = 'IV' | 'ORAL';
+
+export const VIA_LABELS: Record<Via, string> = { IV: 'IV', ORAL: 'Oral' };
+
+export function parseVia(raw: string | null | undefined): Via | null {
+  const v = String(raw ?? '').trim().toUpperCase();
+  return v === 'IV' || v === 'ORAL' ? v : null;
+}
+
+export type GastoPorVia = Record<Via, number>;
+
+export type ViaCard = {
+  via: Via;
+  label: string;
+  totalGasto: number;
+  /** IV: preparaciones · Oral: dispensaciones (líneas de consumo). */
+  totalPreparaciones: number;
+  totalViales: number;
+  medicamentosDistintos: number;
+  protocolosActivos: number;
+  pctGasto: number;
+  variacionYoy: number | null;
+};
+
 export type GastoAnual = {
   anio: number;
   gasto: number;
@@ -187,6 +211,7 @@ export type GrupoCard = {
   pctGasto: number;
   variacionYoy: number | null;
   gastoPorAnio: { anio: number; gasto: number }[];
+  gastoPorVia: GastoPorVia;
 };
 
 export type TemporalPoint = {
@@ -362,6 +387,7 @@ export type ServicioCard = {
   variacionYoy: number | null;
   gruposDominantes: Array<{ grupo: DiagnosticoGrupo; label: string; pctServicio: number }>;
   gastoPorAnio: Array<{ anio: number; gasto: number; viales: number }>;
+  gastoPorVia: GastoPorVia;
 };
 
 export type MedicamentoListItem = {
@@ -369,6 +395,7 @@ export type MedicamentoListItem = {
   principioActivo: string;
   nombre: string;
   grupo: DiagnosticoGrupo;
+  via: Via;
   totalGasto: number;
   totalViales: number;
   totalUnidades: number;
@@ -423,7 +450,7 @@ export type MedicamentoDetalle = {
 
 export type AnalisisDatos = {
   periodo: { desde: string; hasta: string };
-  scope: { servicio: string | null; grupo: string | null; cn: string | null };
+  scope: { servicio: string | null; grupo: string | null; via: Via | null; cn: string | null };
   comparativa: ComparativaInfo;
   yoyEtiqueta: string;
   kpis: KpisAnalisis;
@@ -432,6 +459,7 @@ export type AnalisisDatos = {
   gastoAnualServicioReal: GastoAnualServicioReal[];
   servicios: ServicioCard[];
   grupos: GrupoCard[];
+  vias: ViaCard[];
   medicamentos: MedicamentoListItem[];
   topProtocolos: TopProtocolo[];
   topMedicamentos: TopMed[];
@@ -468,6 +496,7 @@ type ClassifiedRow = {
   preparaciones: number;
   gasto: number;
   grupo: DiagnosticoGrupo;
+  via: Via;
 };
 
 // ---------------------------------------------------------------------------
@@ -505,7 +534,11 @@ async function getAnalisisRaw(
       SUM(cr.num_pacientes)::int                                              AS pacientes,
       COUNT(*)::int                                                           AS preparaciones,
       SUM(cr.viales_dispensados * COALESCE(m.precio_unidad, 0))::float       AS gasto,
-      MIN(cr.fecha)::text                                                     AS fecha_min
+      MIN(cr.fecha)::text                                                     AS fecha_min,
+      BOOL_OR(
+        upper(COALESCE(m.via, '')) = 'ORAL'
+        OR lower(COALESCE(cr.tipo_terapia, '')) LIKE 'oral%'
+      )                                                                       AS es_oral
     FROM consumo_registros cr
     JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
     JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
@@ -521,7 +554,7 @@ async function getAnalisisRaw(
     cn: string; principio_activo: string; nombre: string;
     unidades_por_caja: number; precio_unidad: number; unidades: number; viales: number;
     pacientes: number; preparaciones: number; gasto: number;
-    fecha_min: string;
+    fecha_min: string; es_oral: boolean | null;
   }>;
 
   return rows.map(r => ({
@@ -538,6 +571,7 @@ async function getAnalisisRaw(
     viales: Number(r.viales), pacientes: num(r.pacientes),
     preparaciones: num(r.preparaciones), gasto: Number(r.gasto),
     grupo: classifyDiagnostico(r.diagnostico),
+    via: r.es_oral ? 'ORAL' : 'IV',
   }));
 }
 
@@ -878,11 +912,56 @@ function filterScopeRows(
   rows: ClassifiedRow[],
   grupoFiltro: string | null | undefined,
   servicioFiltro: string | null | undefined,
+  viaFiltro?: Via | null,
 ): ClassifiedRow[] {
+  const svcKey = servicioFiltro ? servicioKey(servicioFiltro) : null;
   return rows.filter((r) => {
     if (grupoFiltro && r.grupo !== grupoFiltro) return false;
-    if (servicioFiltro && r.servicioKey !== servicioKey(servicioFiltro)) return false;
+    if (svcKey && r.servicioKey !== svcKey) return false;
+    if (viaFiltro && r.via !== viaFiltro) return false;
     return true;
+  });
+}
+
+function emptyGastoPorVia(): GastoPorVia {
+  return { IV: 0, ORAL: 0 };
+}
+
+function buildViaCards(
+  currentRows: ClassifiedRow[],
+  baseRows: ClassifiedRow[],
+): ViaCard[] {
+  type VAcc = { gasto: number; prep: number; viales: number; cns: Set<string>; prots: Set<string> };
+  const cur = new Map<Via, VAcc>();
+  const prev = emptyGastoPorVia();
+  for (const r of currentRows) {
+    let acc = cur.get(r.via);
+    if (!acc) {
+      acc = { gasto: 0, prep: 0, viales: 0, cns: new Set(), prots: new Set() };
+      cur.set(r.via, acc);
+    }
+    acc.gasto += r.gasto;
+    acc.prep += r.preparaciones;
+    acc.viales += r.viales;
+    acc.cns.add(r.cn);
+    if (r.protocolo) acc.prots.add(r.protocolo);
+  }
+  for (const r of baseRows) prev[r.via] += r.gasto;
+
+  const total = currentRows.reduce((s, r) => s + r.gasto, 0);
+  return (['IV', 'ORAL'] as const).map((via) => {
+    const acc = cur.get(via);
+    return {
+      via,
+      label: VIA_LABELS[via],
+      totalGasto: acc?.gasto ?? 0,
+      totalPreparaciones: acc?.prep ?? 0,
+      totalViales: acc?.viales ?? 0,
+      medicamentosDistintos: acc?.cns.size ?? 0,
+      protocolosActivos: acc?.prots.size ?? 0,
+      pctGasto: total > 0 ? ((acc?.gasto ?? 0) / total) * 100 : 0,
+      variacionYoy: computeYoy(acc?.gasto ?? 0, prev[via]),
+    };
   });
 }
 
@@ -1500,16 +1579,17 @@ function buildGrupoCards(
   baseRows: ClassifiedRow[],
   totalGastoGlobal: number,
 ): GrupoCard[] {
-  type GAcc = { gasto: number; prep: number; viales: number; unidades: number; cns: Set<string>; prots: Set<string>; yearMap: Map<number, number> };
+  type GAcc = { gasto: number; prep: number; viales: number; unidades: number; cns: Set<string>; prots: Set<string>; yearMap: Map<number, number>; porVia: GastoPorVia };
   const curAgg = new Map<DiagnosticoGrupo, GAcc>();
   const baseAgg = new Map<DiagnosticoGrupo, number>();
 
   for (const r of currentRows) {
     let g = curAgg.get(r.grupo);
     if (!g) {
-      g = { gasto: 0, prep: 0, viales: 0, unidades: 0, cns: new Set(), prots: new Set(), yearMap: new Map() };
+      g = { gasto: 0, prep: 0, viales: 0, unidades: 0, cns: new Set(), prots: new Set(), yearMap: new Map(), porVia: emptyGastoPorVia() };
       curAgg.set(r.grupo, g);
     }
+    g.porVia[r.via] += r.gasto;
     g.gasto += r.gasto;
     g.prep += r.preparaciones;
     g.viales += r.viales;
@@ -1542,6 +1622,7 @@ function buildGrupoCards(
         gastoPorAnio: [...d.yearMap.entries()]
           .sort(([a], [b]) => a - b)
           .map(([anio, gasto]) => ({ anio, gasto })),
+        gastoPorVia: d.porVia,
       };
     });
 }
@@ -1560,6 +1641,7 @@ function buildServiceCards(
     unidades: number;
     grupos: Map<DiagnosticoGrupo, number>;
     porAnio: Map<number, { gasto: number; viales: number }>;
+    porVia: GastoPorVia;
   };
   const cur = new Map<string, SAcc>();
   const prev = new Map<string, number>();
@@ -1576,9 +1658,11 @@ function buildServiceCards(
         unidades: 0,
         grupos: new Map(),
         porAnio: new Map(),
+        porVia: emptyGastoPorVia(),
       };
       cur.set(r.servicioKey, acc);
     }
+    acc.porVia[r.via] += r.gasto;
     acc.gasto += r.gasto;
     acc.prep += r.preparaciones;
     acc.viales += r.viales;
@@ -1620,6 +1704,7 @@ function buildServiceCards(
         variacionYoy: computeYoy(acc.gasto, prev.get(acc.key) ?? 0),
         gruposDominantes,
         gastoPorAnio,
+        gastoPorVia: acc.porVia,
       };
     });
 }
@@ -1642,6 +1727,7 @@ function buildMedicamentoList(
         principioActivo: r.principio_activo,
         nombre: r.nombre,
         grupo: r.grupo,
+        via: r.via,
         totalGasto: r.gasto,
         totalViales: r.viales,
         totalUnidades: r.unidades,
@@ -2035,6 +2121,7 @@ export async function getAnalisisDatos(
   servicioFiltro?: string | null,
   modoComparativa: ModoComparativa = 'yoy',
   cnFiltro?: string | null,
+  viaFiltro?: Via | null,
 ): Promise<AnalisisDatos> {
   void modoComparativa;
   const modo: ModoComparativa = 'periodo-anterior';
@@ -2049,16 +2136,29 @@ export async function getAnalisisDatos(
     getGastoAnualPorServicioReal(area),
   ]);
 
-  const areaTotalGasto = classified.reduce((s, r) => s + r.gasto, 0);
-  const servicios = buildServiceCards(classified, classifiedBase, areaTotalGasto);
+  const via = viaFiltro ?? null;
 
-  const rowsForGroupCards = filterScopeRows(classified, null, servicioFiltro);
-  const rowsForGroupCardsBase = filterScopeRows(classifiedBase, null, servicioFiltro);
+  // Cada bloque de tarjetas ignora su propia dimensión para poder cambiar de selección.
+  const rowsForServiceCards = filterScopeRows(classified, grupoFiltro, null, via);
+  const rowsForServiceCardsBase = filterScopeRows(classifiedBase, grupoFiltro, null, via);
+  const servicios = buildServiceCards(
+    rowsForServiceCards,
+    rowsForServiceCardsBase,
+    rowsForServiceCards.reduce((s, r) => s + r.gasto, 0),
+  );
+
+  const rowsForGroupCards = filterScopeRows(classified, null, servicioFiltro, via);
+  const rowsForGroupCardsBase = filterScopeRows(classifiedBase, null, servicioFiltro, via);
   const totalGastoGrupos = rowsForGroupCards.reduce((s, r) => s + r.gasto, 0);
   const grupos = buildGrupoCards(rowsForGroupCards, rowsForGroupCardsBase, totalGastoGrupos);
 
-  const scopeRows = filterScopeRows(classified, grupoFiltro, servicioFiltro);
-  const scopeRowsBase = filterScopeRows(classifiedBase, grupoFiltro, servicioFiltro);
+  const vias = buildViaCards(
+    filterScopeRows(classified, grupoFiltro, servicioFiltro, null),
+    filterScopeRows(classifiedBase, grupoFiltro, servicioFiltro, null),
+  );
+
+  const scopeRows = filterScopeRows(classified, grupoFiltro, servicioFiltro, via);
+  const scopeRowsBase = filterScopeRows(classifiedBase, grupoFiltro, servicioFiltro, via);
   const comparativaScope = buildComparativaFromRows(scopeRows, scopeRowsBase);
   const yoyByCn = comparativaMapByCn(comparativaScope);
 
@@ -2108,6 +2208,7 @@ export async function getAnalisisDatos(
     scope: {
       servicio: servicioFiltro ? servicioLabel(servicioFiltro) : null,
       grupo: grupoFiltro ?? null,
+      via,
       cn: cnFiltro ?? null,
     },
     comparativa: {
@@ -2122,6 +2223,7 @@ export async function getAnalisisDatos(
     gastoAnualServicioReal,
     servicios,
     grupos,
+    vias,
     medicamentos,
     topProtocolos:     buildTopProtocols(rowsForTops),
     topMedicamentos:   buildTopMeds(rowsForTops, 10, yoyByCn, { desde, hasta }),
