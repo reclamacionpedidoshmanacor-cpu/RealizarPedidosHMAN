@@ -49,7 +49,7 @@ function filtrosTexto(datos: AnalisisDatos): string[] {
   const partes: string[] = [];
   if (scope.servicio) partes.push(`Servicio: ${scope.servicio}`);
   if (scope.grupo) partes.push(`Tipo tumoral: ${GRUPO_LABELS[scope.grupo as keyof typeof GRUPO_LABELS] ?? scope.grupo}`);
-  if (scope.via) partes.push(`Vía: ${VIA_META[scope.via].label}`);
+  if (scope.via) partes.push(`Ámbito: ${VIA_META[scope.via].nombre}`);
   if (scope.cn) {
     const med = datos.medicamentos.find((m) => m.cn === scope.cn);
     partes.push(`Medicamento: ${med ? med.principioActivo || med.nombre : `CN ${scope.cn}`}`);
@@ -82,10 +82,10 @@ function construirResumen(datos: AnalisisDatos): string[] {
   const iv = datos.vias.find((v) => v.via === 'IV');
   const oral = datos.vias.find((v) => v.via === 'ORAL');
   if (iv && oral && (iv.totalGasto === 0 || oral.totalGasto === 0) && iv.totalGasto + oral.totalGasto > 0) {
-    frases.push(`Todo el gasto corresponde a medicamentos ${iv.totalGasto > 0 ? 'IV' : 'orales'}.`);
+    frases.push(`Todo el gasto corresponde a ${iv.totalGasto > 0 ? 'Hospital de Día (HDD, medicamentos IV)' : 'Consulta Farmacia (FARONC, medicamentos orales)'}.`);
   } else if (iv && oral && iv.totalGasto + oral.totalGasto > 0) {
     frases.push(
-      `Por vía, el gasto IV es de ${fmtEur(iv.totalGasto)} (${fmtPct(iv.pctGasto)}, ${fmtVarTexto(iv.variacionYoy)}) y el oral de ${fmtEur(oral.totalGasto)} (${fmtPct(oral.pctGasto)}, ${fmtVarTexto(oral.variacionYoy)}).`,
+      `El gasto en Hospital de Día (HDD) es de ${fmtEur(iv.totalGasto)} (${fmtPct(iv.pctGasto)}, ${fmtVarTexto(iv.variacionYoy)}) y en Consulta Farmacia (FARONC) de ${fmtEur(oral.totalGasto)} (${fmtPct(oral.pctGasto)}, ${fmtVarTexto(oral.variacionYoy)}).`,
     );
   }
 
@@ -224,7 +224,7 @@ function GruposTabla({ datos }: { datos: AnalisisDatos }) {
           <th className={THR}>%</th>
           <th className={THR}>Variación</th>
           <th className={THR}>Medicamentos</th>
-          {mostrarVia && <th className={TH}>Reparto IV / Oral</th>}
+          {mostrarVia && <th className={TH}>Reparto HDD / FARONC</th>}
         </tr>
       }
     >
@@ -240,7 +240,7 @@ function GruposTabla({ datos }: { datos: AnalisisDatos }) {
             <td className={TDR}>{fmtPct(g.pctGasto)}</td>
             <td className={TDR}><YoyBadge pct={g.variacionYoy} /></td>
             <td className={TDR}>{g.medicamentosDistintos}</td>
-            {mostrarVia && <td className={`${TD} w-40 [&>div]:mt-0`}><ViaSplitBar porVia={g.gastoPorVia} /></td>}
+            {mostrarVia && <td className={`${TD} w-40 [&>div]:mt-0`}><ViaSplitBar porVia={g.gastoPorVia} grande /></td>}
           </tr>
         );
       })}
@@ -256,7 +256,7 @@ function MedicamentosTop({ datos }: { datos: AnalisisDatos }) {
         <tr>
           <th className={THR}>#</th>
           <th className={TH}>Medicamento</th>
-          <th className={TH}>Vía</th>
+          <th className={TH}>Ámbito</th>
           <th className={TH}>Tipo tumoral</th>
           <th className={THR}>Gasto</th>
           <th className={THR}>Cajas eq.</th>
@@ -282,10 +282,6 @@ function MedicamentosTop({ datos }: { datos: AnalisisDatos }) {
   );
 }
 
-function protocolosConNombre(datos: AnalisisDatos) {
-  return datos.topProtocolos.filter((p) => p.protocolo && p.protocolo !== '—');
-}
-
 function ProtocolosTop({ datos }: { datos: AnalisisDatos }) {
   return (
     <Tabla
@@ -299,7 +295,7 @@ function ProtocolosTop({ datos }: { datos: AnalisisDatos }) {
         </tr>
       }
     >
-      {protocolosConNombre(datos).slice(0, 10).map((p) => (
+      {datos.topProtocolos.slice(0, 10).map((p) => (
         <tr key={p.protocolo}>
           <td className={TD}>{p.protocolo}</td>
           <td className={TDR}>{fmtEur(p.totalGasto)}</td>
@@ -455,7 +451,7 @@ function FichaMedicamento({ med }: { med: MedicamentoDetalle }) {
         </Tabla>
       )}
       <p className="text-[9px] text-slate-500">
-        Las compras corresponden al área completa (no se filtran por servicio, tipo tumoral ni vía) y solo existen
+        Las compras corresponden al área completa (no se filtran por servicio, tipo tumoral ni ámbito) y solo existen
         registros desde el {fmtDate(COMPRAS_REGISTRO_DESDE)}: los meses anteriores aparecen sin compras.
       </p>
     </div>
@@ -512,7 +508,7 @@ function Informe({ datos, nivel }: { datos: AnalisisDatos; nivel: NivelInforme }
               >
                 <div className="flex items-baseline justify-between">
                   <p className="text-[10px] font-bold uppercase tracking-wide" style={{ color: VIA_META[v.via].color }}>
-                    Medicamentos {v.label}
+                    {v.label}
                   </p>
                   <YoyBadge pct={v.variacionYoy} />
                 </div>
@@ -536,13 +532,14 @@ function Informe({ datos, nivel }: { datos: AnalisisDatos; nivel: NivelInforme }
         </ul>
       </Seccion>
 
-      <Seccion titulo="Evolución mensual" subtitulo="Barras de consumo coloreadas por año; gasto apilado por tipo tumoral. El mes en curso está incompleto.">
+      <Seccion titulo="Evolutivo mensual" subtitulo="Gasto apilado por tipo tumoral; el fondo distingue cada año. El mes en curso está incompleto.">
         <TemporalChart
           data={datos.temporalHistorico}
-          title="Evolución mensual del alcance"
+          title="Evolutivo mensual"
           emptyHint="Sin consumo mensual para el rango seleccionado."
           showGrupoBreakdown
           showMediaMovil
+          mostrarCajas={false}
           anchoFijo={ANCHO_GRAFICO}
         />
       </Seccion>
@@ -560,7 +557,7 @@ function Informe({ datos, nivel }: { datos: AnalisisDatos; nivel: NivelInforme }
 
       <Seccion
         titulo="Gasto por servicio"
-        subtitulo={datos.scope.servicio ? `Destacado: ${datos.scope.servicio}. Calculado sobre el tipo tumoral y la vía seleccionados.` : undefined}
+        subtitulo={datos.scope.servicio ? `Destacado: ${datos.scope.servicio}. Calculado sobre el tipo tumoral y el ámbito seleccionados.` : undefined}
       >
         <ServiciosBarras datos={datos} />
       </Seccion>
@@ -573,8 +570,12 @@ function Informe({ datos, nivel }: { datos: AnalisisDatos; nivel: NivelInforme }
         <MedicamentosTop datos={datos} />
       </Seccion>
 
-      {via !== 'ORAL' && protocolosConNombre(datos).length > 0 && (
-        <Seccion titulo="Principales protocolos" subtitulo="Solo consumo con protocolo asignado." partible>
+      {via !== 'ORAL' && datos.topProtocolos.length > 0 && (
+        <Seccion
+          titulo="Principales protocolos"
+          subtitulo={datos.topProtocolos.some((p) => p.protocolo === '—') ? '«—»: medicamentos orales (FARONC), que no tienen protocolo asociado.' : undefined}
+          partible
+        >
           <ProtocolosTop datos={datos} />
         </Seccion>
       )}
@@ -607,7 +608,7 @@ function Informe({ datos, nivel }: { datos: AnalisisDatos; nivel: NivelInforme }
         <ul className="list-disc space-y-0.5 pl-4 text-[9px] leading-snug text-slate-500">
           <li>Gasto valorizado: consumo registrado por el precio unitario del catálogo. Cajas equivalentes: unidades consumidas entre unidades por caja.</li>
           <li>Variaciones frente al período anterior equivalente: {datos.comparativa.etiqueta}.</li>
-          <li>Vía oral: medicamentos con vía oral en catálogo o terapia oral; el resto se agrupa como IV.</li>
+          <li>Hospital de Día (HDD): medicamentos IV, se cuentan preparaciones. Consulta Farmacia (FARONC): medicamentos con vía oral en catálogo o terapia oral, se cuentan dispensaciones.</li>
           <li>Media móvil de 3 meses: no se calcula en ventanas que incluyen el mes en curso.</li>
           <li>Generado el {generado} desde HMAN-Pedidos.</li>
         </ul>

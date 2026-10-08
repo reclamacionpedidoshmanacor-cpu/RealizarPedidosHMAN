@@ -134,7 +134,12 @@ function isoToYM(iso: string): { y: number; m: number } {
 
 export type Via = 'IV' | 'ORAL';
 
-export const VIA_LABELS: Record<Via, string> = { IV: 'IV', ORAL: 'Oral' };
+/** IV se administra en Hospital de Día; la vía oral se dispensa en la Consulta de Farmacia. */
+export const VIA_LABELS: Record<Via, string> = { IV: 'HDD', ORAL: 'FARONC' };
+export const VIA_NOMBRES: Record<Via, string> = {
+  IV: 'Hospital de Día (HDD)',
+  ORAL: 'Consulta Farmacia (FARONC)',
+};
 
 export function parseVia(raw: string | null | undefined): Via | null {
   const v = String(raw ?? '').trim().toUpperCase();
@@ -954,7 +959,7 @@ function buildViaCards(
     const acc = cur.get(via);
     return {
       via,
-      label: VIA_LABELS[via],
+      label: VIA_NOMBRES[via],
       totalGasto: acc?.gasto ?? 0,
       totalPreparaciones: acc?.prep ?? 0,
       totalViales: acc?.viales ?? 0,
@@ -2462,7 +2467,7 @@ export async function getAnalisisExport(
 
   return {
     ...datos,
-    protocolosCompletos: buildTopProtocols(scopeRows.filter((r) => r.protocolo), Number.MAX_SAFE_INTEGER),
+    protocolosCompletos: buildTopProtocols(scopeRows, Number.MAX_SAFE_INTEGER),
     filas: buildFilasExport(scopeRows),
     comprasVsConsumo,
     comprasRegistroDesde,

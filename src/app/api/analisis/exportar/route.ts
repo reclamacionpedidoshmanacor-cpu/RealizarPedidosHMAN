@@ -5,6 +5,7 @@ import {
   getAnalisisExport,
   parseVia,
   VIA_LABELS,
+  VIA_NOMBRES,
   type AnalisisExport,
   type TemporalPoint,
 } from '@/lib/analisis-neon';
@@ -150,7 +151,7 @@ function describeFiltros(datos: AnalisisExport): string[] {
   const out: string[] = [];
   if (scope.servicio) out.push(`Servicio: ${scope.servicio}`);
   if (scope.grupo) out.push(`Tipo tumoral: ${GRUPO_LABELS[scope.grupo as DiagnosticoGrupo] ?? scope.grupo}`);
-  if (scope.via) out.push(`Vía: ${VIA_LABELS[scope.via]}`);
+  if (scope.via) out.push(`Ámbito: ${VIA_NOMBRES[scope.via]}`);
   if (scope.cn) {
     const med = datos.medicamentos.find((m) => m.cn === scope.cn);
     out.push(`Medicamento: ${med ? `${med.principioActivo || med.nombre} (CN ${scope.cn})` : `CN ${scope.cn}`}`);
@@ -195,15 +196,15 @@ function buildResumen(wb: ExcelJS.Workbook, datos: AnalisisExport, subtitulo: st
   kv('Variación frente al período anterior', variacionFraccion(k.variacionYoy), FMT.variacion, true);
   kv('Consumo (cajas equivalentes)', k.totalViales, FMT.dec);
   kv('Consumo (unidades)', k.totalUnidades, FMT.int);
-  kv('Preparaciones IV / dispensaciones orales', k.totalPreparaciones, FMT.int);
+  kv('Preparaciones HDD / dispensaciones FARONC', k.totalPreparaciones, FMT.int);
   kv('Medicamentos distintos', k.medicamentosDistintos, FMT.int);
   kv('Protocolos activos', k.protocolosActivos, FMT.int);
   kv('Servicios activos', k.serviciosActivos, FMT.int);
   r++;
 
-  label('Medicamentos IV y orales');
+  label('Hospital de Día (HDD) y Consulta Farmacia (FARONC)');
   const head = ws.getRow(r++);
-  ['Vía', 'Gasto', '% del alcance', 'Variación'].forEach((h, i) => {
+  ['Ámbito', 'Gasto', '% del alcance', 'Variación'].forEach((h, i) => {
     const cell = head.getCell(i + 1);
     cell.value = h;
     cell.font = { bold: true, color: { argb: 'FFFFFFFF' }, size: 10 };
@@ -226,7 +227,7 @@ function buildResumen(wb: ExcelJS.Workbook, datos: AnalisisExport, subtitulo: st
   const notas = [
     'Gasto valorizado = unidades consumidas × precio por unidad actual del catálogo.',
     'Cajas equivalentes = unidades / unidades por caja.',
-    'En vía oral, "preparaciones" corresponde a dispensaciones.',
+    'HDD: medicamentos IV administrados en Hospital de Día (preparaciones). FARONC: medicamentos orales dispensados en la Consulta de Farmacia (dispensaciones).',
     datos.comprasRegistroDesde
       ? `Compras: pedidos recibidos registrados en Pedidos Pendientes desde el ${fmtFecha(datos.comprasRegistroDesde)}; son del área y no se reparten por servicio.`
       : 'Compras: pedidos recibidos registrados en Pedidos Pendientes; son del área y no se reparten por servicio.',
@@ -279,8 +280,8 @@ export async function GET(req: NextRequest) {
       { header: 'Año', key: 'anio', width: 8 },
       { header: 'Mes', key: 'mes', width: 12 },
       { header: 'Gasto', key: 'gasto', width: 16, fmt: FMT.eur },
-      { header: 'Gasto IV', key: 'gastoIv', width: 16, fmt: FMT.eur },
-      { header: 'Gasto oral', key: 'gastoOral', width: 16, fmt: FMT.eur },
+      { header: 'Gasto HDD', key: 'gastoIv', width: 16, fmt: FMT.eur },
+      { header: 'Gasto FARONC', key: 'gastoOral', width: 16, fmt: FMT.eur },
       { header: 'Media móvil 3 meses (gasto)', key: 'mm3', width: 18, fmt: FMT.eur },
       { header: 'Cajas eq.', key: 'cajas', width: 12, fmt: FMT.dec },
       { header: 'Preparaciones / dispensaciones', key: 'prep', width: 18, fmt: FMT.int },
@@ -308,9 +309,9 @@ export async function GET(req: NextRequest) {
       { header: 'Gasto', key: 'gasto', width: 16, fmt: FMT.eur },
       { header: '% del alcance', key: 'pct', width: 12, fmt: FMT.pct },
       { header: 'Variación', key: 'var', width: 12, fmt: FMT.variacion, variacion: true },
-      { header: 'Gasto IV', key: 'iv', width: 16, fmt: FMT.eur },
-      { header: 'Gasto oral', key: 'oral', width: 16, fmt: FMT.eur },
-      { header: '% oral', key: 'pctOral', width: 10, fmt: FMT.pct },
+      { header: 'Gasto HDD', key: 'iv', width: 16, fmt: FMT.eur },
+      { header: 'Gasto FARONC', key: 'oral', width: 16, fmt: FMT.eur },
+      { header: '% FARONC', key: 'pctOral', width: 10, fmt: FMT.pct },
       { header: 'Cajas eq.', key: 'cajas', width: 12, fmt: FMT.dec },
       { header: 'Prep. / disp.', key: 'prep', width: 12, fmt: FMT.int },
     ],
@@ -339,9 +340,9 @@ export async function GET(req: NextRequest) {
       { header: 'Gasto', key: 'gasto', width: 16, fmt: FMT.eur },
       { header: '% del alcance', key: 'pct', width: 12, fmt: FMT.pct },
       { header: 'Variación', key: 'var', width: 12, fmt: FMT.variacion, variacion: true },
-      { header: 'Gasto IV', key: 'iv', width: 16, fmt: FMT.eur },
-      { header: 'Gasto oral', key: 'oral', width: 16, fmt: FMT.eur },
-      { header: '% oral', key: 'pctOral', width: 10, fmt: FMT.pct },
+      { header: 'Gasto HDD', key: 'iv', width: 16, fmt: FMT.eur },
+      { header: 'Gasto FARONC', key: 'oral', width: 16, fmt: FMT.eur },
+      { header: '% FARONC', key: 'pctOral', width: 10, fmt: FMT.pct },
       { header: 'Cajas eq.', key: 'cajas', width: 12, fmt: FMT.dec },
       { header: 'Prep. / disp.', key: 'prep', width: 12, fmt: FMT.int },
       { header: 'Medicamentos', key: 'meds', width: 13, fmt: FMT.int },
@@ -374,7 +375,7 @@ export async function GET(req: NextRequest) {
       { header: 'CN', key: 'cn', width: 10 },
       { header: 'Principio activo', key: 'pa', width: 34 },
       { header: 'Nombre comercial', key: 'nombre', width: 30 },
-      { header: 'Vía', key: 'via', width: 7 },
+      { header: 'Ámbito', key: 'via', width: 9 },
       { header: 'Tipo tumoral principal', key: 'grupo', width: 20 },
       { header: 'Gasto', key: 'gasto', width: 16, fmt: FMT.eur },
       { header: 'Variación', key: 'var', width: 12, fmt: FMT.variacion, variacion: true },
@@ -430,7 +431,7 @@ export async function GET(req: NextRequest) {
     [
       { header: 'CN', key: 'cn', width: 10 },
       { header: 'Principio activo', key: 'pa', width: 34 },
-      { header: 'Vía', key: 'via', width: 7 },
+      { header: 'Ámbito', key: 'via', width: 9 },
       { header: 'Consumo (cajas)', key: 'consCajas', width: 14, fmt: FMT.dec },
       { header: 'Compras (cajas)', key: 'compCajas', width: 14, fmt: FMT.dec },
       { header: 'Compras − consumo (cajas)', key: 'difCajas', width: 16, fmt: '+#,##0.0;-#,##0.0;0.0' },
@@ -455,7 +456,7 @@ export async function GET(req: NextRequest) {
       destacar: (row) => !!datos.scope.cn && row.cn === datos.scope.cn,
       nota: `Periodo comparado: ${fmtFecha(datos.comprasComparadasDesde)} – ${fmtFecha(hasta)} (compras registradas desde ${
         datos.comprasRegistroDesde ? fmtFecha(datos.comprasRegistroDesde) : '—'
-      }). Las compras son del área completa: no se filtran por servicio, tipo tumoral ni vía.`,
+      }). Las compras son del área completa: no se filtran por servicio, tipo tumoral ni ámbito.`,
     },
   );
 
@@ -469,7 +470,7 @@ export async function GET(req: NextRequest) {
       { header: 'Mes', key: 'mes', width: 6 },
       { header: 'Servicio', key: 'servicio', width: 28 },
       { header: 'Tipo tumoral', key: 'grupo', width: 20 },
-      { header: 'Vía', key: 'via', width: 7 },
+      { header: 'Ámbito', key: 'via', width: 9 },
       { header: 'Diagnóstico', key: 'dx', width: 32 },
       { header: 'Indicación', key: 'ind', width: 28 },
       { header: 'Protocolo', key: 'prot', width: 28 },

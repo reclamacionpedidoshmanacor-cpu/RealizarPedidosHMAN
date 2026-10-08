@@ -144,9 +144,9 @@ const SERVICE_PALETTE = [
   '#9333ea',  // purple-600    — púrpura vivo
 ] as const;
 
-export const VIA_META: Record<Via, { label: string; color: string; actividad: string }> = {
-  IV:   { label: 'IV',   color: '#1e3a8a', actividad: 'preparaciones' },
-  ORAL: { label: 'Oral', color: '#a16207', actividad: 'dispensaciones' },
+export const VIA_META: Record<Via, { label: string; nombre: string; color: string; actividad: string }> = {
+  IV:   { label: 'HDD',    nombre: 'Hospital de Día (HDD)',      color: '#1e3a8a', actividad: 'preparaciones' },
+  ORAL: { label: 'FARONC', nombre: 'Consulta Farmacia (FARONC)', color: '#0f766e', actividad: 'dispensaciones' },
 };
 
 function actividadLabel(via: Via | null): string {
@@ -217,7 +217,7 @@ export function YoyBadge({ pct }: { pct: number | null }) {
   );
 }
 
-export function ViaSplitBar({ porVia }: { porVia?: GastoPorVia }) {
+export function ViaSplitBar({ porVia, grande = false }: { porVia?: GastoPorVia; grande?: boolean }) {
   if (!porVia) return null;
   const total = porVia.IV + porVia.ORAL;
   if (total <= 0) return null;
@@ -225,14 +225,13 @@ export function ViaSplitBar({ porVia }: { porVia?: GastoPorVia }) {
   const pctOral = 100 - pctIv;
   return (
     <div className="mt-2.5">
-      <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+      <div className={`flex w-full gap-px overflow-hidden rounded-full bg-slate-100 ${grande ? 'h-3' : 'h-1.5'}`}>
         <div style={{ width: `${pctIv}%`, backgroundColor: VIA_META.IV.color }} />
         <div style={{ width: `${pctOral}%`, backgroundColor: VIA_META.ORAL.color }} />
       </div>
-      <p className="mt-1 text-[10px] tabular-nums text-slate-500">
-        <span className="font-semibold" style={{ color: VIA_META.IV.color }}>IV {pctIv.toFixed(0)}%</span>
-        {' · '}
-        <span className="font-semibold" style={{ color: VIA_META.ORAL.color }}>Oral {pctOral.toFixed(0)}%</span>
+      <p className={`mt-1 flex justify-between tabular-nums ${grande ? 'text-[11px] font-bold' : 'text-[10px] font-semibold'}`}>
+        <span style={{ color: VIA_META.IV.color }}>{VIA_META.IV.label} {pctIv.toFixed(0)}%</span>
+        <span style={{ color: VIA_META.ORAL.color }}>{VIA_META.ORAL.label} {pctOral.toFixed(0)}%</span>
       </p>
     </div>
   );
@@ -349,6 +348,7 @@ export function TemporalChart({
   emptyHint,
   showGrupoBreakdown = false,
   showMediaMovil = false,
+  mostrarCajas = true,
   anchoFijo,
 }: {
   data: TemporalPoint[];
@@ -356,6 +356,7 @@ export function TemporalChart({
   emptyHint: string;
   showGrupoBreakdown?: boolean;
   showMediaMovil?: boolean;
+  mostrarCajas?: boolean;
   /** Ancho en px sin animaciones: para impresión, donde el contenedor no debe re-medirse. */
   anchoFijo?: number;
 }) {
@@ -464,24 +465,26 @@ export function TemporalChart({
               strokeDasharray="4 3"
             />
           ))}
-          <Bar
-            yAxisId="left"
-            dataKey="viales"
-            name="Consumo (cajas eq.)"
-            fill={SERIES_COLORS.consumo}
-            fillOpacity={0.9}
-            minPointSize={3}
-            radius={[4, 4, 0, 0]}
-            isAnimationActive={animar}
-          >
-            {data.map((pt, i) => (
-              <Cell key={`${pt.label}-${i}`} fill={getYearColor(pt.anio)} />
-            ))}
-          </Bar>
+          {mostrarCajas && (
+            <Bar
+              yAxisId="left"
+              dataKey="viales"
+              name="Consumo (cajas eq.)"
+              fill={SERIES_COLORS.consumo}
+              fillOpacity={0.9}
+              minPointSize={3}
+              radius={[4, 4, 0, 0]}
+              isAnimationActive={animar}
+            >
+              {data.map((pt, i) => (
+                <Cell key={`${pt.label}-${i}`} fill={getYearColor(pt.anio)} />
+              ))}
+            </Bar>
+          )}
           <Line
             yAxisId="left"
             dataKey="preparaciones"
-            name="Preparaciones"
+            name="Preparaciones / dispensaciones"
             stroke={SERIES_COLORS.preparaciones}
             strokeWidth={2}
             dot={false}
@@ -528,7 +531,7 @@ export function TemporalChart({
         </ComposedChart>
       </ResponsiveContainer>
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-slate-600">
-        <span className="font-semibold uppercase tracking-wide text-slate-400">Consumo por año</span>
+        <span className="font-semibold uppercase tracking-wide text-slate-400">{mostrarCajas ? 'Consumo por año' : 'Año'}</span>
         {tramosAnio.map((t) => (
           <span key={t.anio} className="flex items-center gap-1">
             <span className="h-2 w-2 rounded-sm flex-shrink-0" style={{ backgroundColor: getYearColor(t.anio) }} />
@@ -543,7 +546,7 @@ export function TemporalChart({
         )}
         <span className="flex items-center gap-1">
           <span className="h-0.5 w-3 flex-shrink-0" style={{ backgroundColor: SERIES_COLORS.preparaciones }} />
-          Preparaciones
+          Preparaciones / dispensaciones
         </span>
         {showMediaMovil && (
           <span className="flex items-center gap-1">
@@ -710,7 +713,7 @@ function ViaCardUI({
         <div className="flex items-center gap-2">
           <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: meta.color }} />
           <p className="text-sm font-bold leading-tight" style={{ color: meta.color }}>
-            Medicamentos {meta.label}
+            {meta.nombre}
           </p>
         </div>
         <YoyBadge pct={item.variacionYoy} />
@@ -771,7 +774,7 @@ function GrupoCardUI({
         />
       </div>
       <p className="mt-1 text-[11px] text-slate-400">{item.pctGasto.toFixed(1)}% del alcance actual</p>
-      {!via && <ViaSplitBar porVia={item.gastoPorVia} />}
+      {!via && <ViaSplitBar porVia={item.gastoPorVia} grande />}
     </button>
   );
 }
@@ -1664,7 +1667,7 @@ const NIVELES_INFORME: Array<{ nivel: NivelInforme; titulo: string; descripcion:
   {
     nivel: 'ejecutivo',
     titulo: 'Informe ejecutivo',
-    descripcion: 'Resumen para gerencia: KPIs, IV/Oral, evolución, servicios, tipos tumorales y principales medicamentos.',
+    descripcion: 'Resumen para gerencia: KPIs, HDD / FARONC, evolución, servicios, tipos tumorales y principales medicamentos.',
   },
   {
     nivel: 'completo',
@@ -1946,7 +1949,7 @@ export default function AnalisisOncologiaPage() {
   if (viaSel) {
     chips.push({
       key: 'via',
-      label: `Vía ${VIA_META[viaSel].label}`,
+      label: VIA_META[viaSel].nombre,
       color: VIA_META[viaSel].color,
       onRemove: () => updateNav({ via: null }),
     });
@@ -2186,7 +2189,7 @@ export default function AnalisisOncologiaPage() {
             <div>
               <h2 className="text-sm font-semibold text-slate-700">Tipos tumorales</h2>
               <p className="text-xs text-slate-400">
-                Clasificación tumoral sobre el servicio y la vía seleccionados. La barra inferior muestra el reparto del gasto IV / Oral.
+                Clasificación tumoral sobre el servicio y la vía seleccionados. La barra inferior muestra el reparto del gasto entre Hospital de Día (HDD) y Consulta Farmacia (FARONC).
               </p>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
@@ -2204,9 +2207,9 @@ export default function AnalisisOncologiaPage() {
 
           <div className="space-y-3">
             <div>
-              <h2 className="text-sm font-semibold text-slate-700">Medicamentos IV y orales</h2>
+              <h2 className="text-sm font-semibold text-slate-700">Hospital de Día y Consulta Farmacia</h2>
               <p className="text-xs text-slate-400">
-                Sobre el servicio y el tipo tumoral seleccionados. Haz clic para analizar solo una vía.
+                HDD: medicamentos IV · FARONC: medicamentos orales. Sobre el servicio y el tipo tumoral seleccionados; haz clic para analizar solo uno.
               </p>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -2224,10 +2227,11 @@ export default function AnalisisOncologiaPage() {
           <div className={`grid gap-4 ${showWeekly ? 'grid-cols-1 xl:grid-cols-2' : 'grid-cols-1'}`}>
             <TemporalChart
               data={datos.temporalHistorico}
-              title="Evolución mensual del alcance actual"
+              title="Evolutivo mensual"
               emptyHint="Sin consumo mensual para el rango seleccionado."
               showGrupoBreakdown
               showMediaMovil
+              mostrarCajas={false}
             />
             {showWeekly && (
               <TemporalChart
