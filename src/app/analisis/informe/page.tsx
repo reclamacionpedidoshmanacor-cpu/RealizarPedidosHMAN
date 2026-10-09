@@ -602,6 +602,7 @@ function Informe({ datos, nivel }: { datos: AnalisisDatos; nivel: NivelInforme }
           showMediaMovil
           mostrarCajas={false}
           anchoFijo={ANCHO_GRAFICO}
+          altoFijo={210}
         />
       </Seccion>
 

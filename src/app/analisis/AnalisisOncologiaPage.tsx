@@ -384,6 +384,7 @@ export function TemporalChart({
   showMediaMovil = false,
   mostrarCajas = true,
   anchoFijo,
+  altoFijo,
 }: {
   data: TemporalPoint[];
   title: string;
@@ -393,6 +394,8 @@ export function TemporalChart({
   mostrarCajas?: boolean;
   /** Ancho en px sin animaciones: para impresión, donde el contenedor no debe re-medirse. */
   anchoFijo?: number;
+  /** Alto en px del gráfico (por defecto 280). Útil para que el PDF encaje sin saltos de página. */
+  altoFijo?: number;
 }) {
   const animar = anchoFijo == null;
   // Grupos con gasto > 0 en el período (para no renderizar barras vacías)
@@ -452,7 +455,7 @@ export function TemporalChart({
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <h3 className="text-sm font-semibold text-slate-700 mb-4">{title}</h3>
-      <ResponsiveContainer width={anchoFijo ?? '100%'} height={280}>
+      <ResponsiveContainer width={anchoFijo ?? '100%'} height={altoFijo ?? 280}>
         <ComposedChart data={chartData} margin={{ top: 10, right: 16, left: 0, bottom: 24 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
           <XAxis
