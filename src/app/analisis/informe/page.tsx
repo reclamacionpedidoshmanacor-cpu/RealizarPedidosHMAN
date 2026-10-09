@@ -593,10 +593,10 @@ function Informe({ datos, nivel }: { datos: AnalisisDatos; nivel: NivelInforme }
         </ul>
       </Seccion>
 
-      <Seccion titulo="Evolutivo mensual" subtitulo="Gasto apilado por tipo tumoral; el fondo distingue cada año. El mes en curso está incompleto.">
+      <Seccion titulo="CONSUMO: Evolutivo mensual" subtitulo="Gasto apilado por tipo tumoral; el fondo distingue cada año. El mes en curso está incompleto.">
         <TemporalChart
           data={datos.temporalHistorico}
-          title="Evolutivo mensual"
+          title="CONSUMO: Evolutivo mensual"
           emptyHint="Sin consumo mensual para el rango seleccionado."
           showGrupoBreakdown
           showMediaMovil
@@ -607,7 +607,7 @@ function Informe({ datos, nivel }: { datos: AnalisisDatos; nivel: NivelInforme }
       </Seccion>
 
       <Seccion
-        titulo="Evolutivo Hospital de Día y Consulta Farmacia"
+        titulo="CONSUMO: Evolutivo Hospital de Día y Consulta Farmacia"
         subtitulo={`Barras: gasto ${ambito.semanal ? 'semanal' : 'mensual'} de cada ámbito. Líneas: preparaciones en HDD y dispensaciones en FARONC.`}
       >
         <AmbitoTemporalChart {...ambito} via={via} anchoFijo={ANCHO_GRAFICO} />

@@ -531,7 +531,7 @@ export function TemporalChart({
             <Line
               yAxisId="right"
               dataKey="__mm3"
-              name="Media móvil 3 meses (gasto)"
+              name="Media móvil 3 meses (consumo)"
               stroke={SERIES_COLORS.surface}
               strokeWidth={2}
               strokeDasharray="6 3"
@@ -588,7 +588,7 @@ export function TemporalChart({
         {showMediaMovil && (
           <span className="flex items-center gap-1">
             <span className="w-3 flex-shrink-0 border-t-2 border-dashed" style={{ borderColor: SERIES_COLORS.surface }} />
-            Media móvil 3 meses del gasto
+            Media móvil 3 meses de consumo
           </span>
         )}
       </div>
@@ -938,7 +938,7 @@ export function AmbitoTemporalChart({
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <h3 className="mb-4 text-sm font-semibold text-slate-700">
-        Evolutivo {semanal ? 'semanal' : 'mensual'} Hospital de Día y Consulta Farmacia
+        CONSUMO: Evolutivo {semanal ? 'semanal' : 'mensual'} Hospital de Día y Consulta Farmacia
       </h3>
       <ResponsiveContainer width={anchoFijo ?? '100%'} height={280}>
         <ComposedChart data={chartData} margin={{ top: 10, right: 16, left: 0, bottom: 24 }} barGap={1}>
@@ -2661,7 +2661,7 @@ export default function AnalisisOncologiaPage() {
 
           <TemporalChart
             data={datos.temporalHistorico}
-            title="Evolutivo mensual"
+            title="CONSUMO: Evolutivo mensual"
             emptyHint="Sin consumo mensual para el rango seleccionado."
             showGrupoBreakdown
             showMediaMovil
