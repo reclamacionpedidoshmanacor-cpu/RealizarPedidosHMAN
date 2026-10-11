@@ -2575,6 +2575,9 @@ export type CompraConsumoMedicamento = {
   comprasCajas: number;
   pedidosRecibidos: number;
   servicios: string[];
+  temporalMensual: MedicamentoTemporalPoint[];
+  /** Vacío si el período supera los 6 meses. */
+  temporalSemanal: MedicamentoTemporalPoint[];
 };
 
 export type TotalesCompraConsumo = Pick<
@@ -2816,6 +2819,18 @@ export async function getComprasConsumoDatos(
       consumoComparableCajas = 0;
     }
     const comprasUnidades = compras.reduce((s, c) => s + c.unidades, 0);
+    const mensual = mergeMedicamentoTemporalMensual(
+      buildCompleteMonthlyTemporal(medRows, desde, hasta),
+      buildComprasMensuales(compras, unidadesPorCaja, precioUnidad),
+    );
+    const semanalMed = semanal
+      ? sumarSeriesSemanales([mergeMedicamentoTemporalSemanal(
+        buildWeeklyTemporal(medRows),
+        buildComprasSemanales(compras, unidadesPorCaja, precioUnidad),
+      )], desde, hasta)
+      : [];
+    seriesMensuales.push(mensual);
+    if (semanal) seriesSemanales.push(semanalMed);
 
     medicamentos.push({
       cn,
@@ -2832,18 +2847,9 @@ export async function getComprasConsumoDatos(
       comprasCajas: comprasUnidades / unidadesPorCaja,
       pedidosRecibidos: compras.length,
       servicios: [...gastoPorServicio.entries()].sort(([, a], [, b]) => b - a).map(([s]) => s),
+      temporalMensual: mensual,
+      temporalSemanal: semanalMed,
     });
-
-    seriesMensuales.push(mergeMedicamentoTemporalMensual(
-      buildCompleteMonthlyTemporal(medRows, desde, hasta),
-      buildComprasMensuales(compras, unidadesPorCaja, precioUnidad),
-    ));
-    if (semanal) {
-      seriesSemanales.push(mergeMedicamentoTemporalSemanal(
-        buildWeeklyTemporal(medRows),
-        buildComprasSemanales(compras, unidadesPorCaja, precioUnidad),
-      ));
-    }
   }
 
   medicamentos.sort((a, b) => b.consumoGasto - a.consumoGasto);

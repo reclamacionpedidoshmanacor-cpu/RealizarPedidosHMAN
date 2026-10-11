@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { GRUPO_COLORS, GRUPO_LABELS } from '@/lib/diagnostico-grupos';
 import type { AnalisisDatos, MedicamentoDetalle, Via } from '@/lib/analisis-neon';
 import {
@@ -23,9 +23,20 @@ import {
   vistaAmbito,
   type NivelInforme,
 } from '../AnalisisOncologiaPage';
+import {
+  ANCHO_GRAFICO,
+  CabeceraInforme,
+  EstilosImpresion,
+  Kpi,
+  Seccion,
+  TD,
+  TDR,
+  TH,
+  THR,
+  Tabla,
+  ViaTag,
+} from './componentes';
 
-/** Ancho útil de A4 con márgenes de 12 mm (186 mm ≈ 703 px) menos el padding de la tarjeta. */
-const ANCHO_GRAFICO = 660;
 const COMPRAS_REGISTRO_DESDE = '2026-05-05';
 
 const MESES_CORTOS = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
@@ -135,67 +146,6 @@ function construirResumen(datos: AnalisisDatos): string[] {
   }
 
   return frases;
-}
-
-function Seccion({
-  titulo,
-  subtitulo,
-  children,
-  partible = false,
-}: {
-  titulo: string;
-  subtitulo?: string;
-  children: ReactNode;
-  /** Tablas largas: se permite el salto de página dentro de la sección. */
-  partible?: boolean;
-}) {
-  return (
-    <section className={`mt-6 ${partible ? '' : 'break-inside-avoid'}`}>
-      <h2 className="border-b border-slate-300 pb-1 text-[13px] font-bold uppercase tracking-wide text-[#1e3a5f] break-after-avoid">
-        {titulo}
-      </h2>
-      {subtitulo && <p className="mt-1 text-[10px] text-slate-500">{subtitulo}</p>}
-      <div className="mt-2">{children}</div>
-    </section>
-  );
-}
-
-function Kpi({ label, value, sub, pct }: { label: string; value: string; sub?: ReactNode; pct?: number | null }) {
-  return (
-    <div className="break-inside-avoid rounded-lg border border-slate-200 px-3 py-2">
-      <p className="text-[9px] font-semibold uppercase tracking-wider text-slate-500">{label}</p>
-      <p className="mt-0.5 text-[17px] font-bold tabular-nums text-slate-900">{value}</p>
-      <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10px] leading-tight text-slate-500">
-        {pct !== undefined && <YoyBadge pct={pct} />}
-        {sub && <span>{sub}</span>}
-      </div>
-    </div>
-  );
-}
-
-const TH = 'px-2 py-1 text-left text-[9px] font-semibold uppercase tracking-wide text-slate-500';
-const THR = `${TH} text-right`;
-const TD = 'px-2 py-1 align-top';
-const TDR = `${TD} text-right tabular-nums`;
-
-function Tabla({ cabecera, children }: { cabecera: ReactNode; children: ReactNode }) {
-  return (
-    <table className="w-full border-collapse text-[10px] text-slate-700">
-      <thead className="bg-slate-100">{cabecera}</thead>
-      <tbody className="[&>tr]:break-inside-avoid [&>tr]:border-b [&>tr]:border-slate-100">{children}</tbody>
-    </table>
-  );
-}
-
-function ViaTag({ via }: { via: keyof typeof VIA_META }) {
-  return (
-    <span
-      className="rounded px-1 py-px text-[8px] font-bold text-white"
-      style={{ backgroundColor: VIA_META[via].texto }}
-    >
-      {VIA_META[via].label}
-    </span>
-  );
 }
 
 function ServiciosBarras({ datos }: { datos: AnalisisDatos }) {
@@ -524,28 +474,17 @@ function Informe({ datos, nivel }: { datos: AnalisisDatos; nivel: NivelInforme }
 
   return (
     <article className="mx-auto w-[186mm] max-w-full bg-white text-slate-800">
-      <header className="flex items-start justify-between gap-4 border-b-2 border-[#1e3a5f] pb-3">
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">
-            Servicio de Farmacia · Hospital de Manacor
-          </p>
-          <h1 className="mt-0.5 text-[20px] font-bold leading-tight text-[#1e3a5f]">
-            Informe de análisis de Oncología
-            <span className="ml-2 align-middle text-[11px] font-semibold text-slate-500">
-              {completo ? 'Completo' : 'Ejecutivo'}
-            </span>
-          </h1>
-          <p className="mt-1 text-[11px] text-slate-700">
+      <CabeceraInforme
+        titulo="Informe de análisis de Oncología"
+        etiqueta={completo ? 'Completo' : 'Ejecutivo'}
+        lineas={[
+          <>
             Período <strong>{fmtDate(datos.periodo.desde)} – {fmtDate(datos.periodo.hasta)}</strong>
             {' · '}Comparativa: {datos.comparativa.etiqueta}
-          </p>
-          <p className="text-[11px] text-slate-700">
-            {filtros.length > 0 ? filtros.join(' · ') : 'Vista global del área de Oncología'}
-          </p>
-        </div>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/Logo-Hospital-neg-MANACOR.jpg" alt="Hospital de Manacor" className="h-12 w-auto flex-shrink-0 rounded" />
-      </header>
+          </>,
+          filtros.length > 0 ? filtros.join(' · ') : 'Vista global del área de Oncología',
+        ]}
+      />
 
       <Seccion titulo="Indicadores clave">
         <div className="grid grid-cols-4 gap-2">
@@ -720,18 +659,7 @@ export default function InformeAnalisisPage() {
 
   return (
     <div className="bg-slate-100 print:bg-white">
-      <style>{`
-        @page {
-          size: A4;
-          margin: 12mm 12mm 14mm;
-          @bottom-left { content: "Farmacia · Hospital de Manacor"; font-size: 8pt; color: #64748b; }
-          @bottom-right { content: "Página " counter(page) " de " counter(pages); font-size: 8pt; color: #64748b; }
-        }
-        @media print {
-          html, body { background: #fff !important; }
-          * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-        }
-      `}</style>
+      <EstilosImpresion />
 
       <div className="sticky top-0 z-10 mb-4 flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-4 py-2 shadow-sm print:hidden">
         <button

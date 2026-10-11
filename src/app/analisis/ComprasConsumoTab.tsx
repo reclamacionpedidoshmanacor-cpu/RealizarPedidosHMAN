@@ -32,8 +32,32 @@ import {
   periodoAntesDeCompras,
 } from './AnalisisOncologiaPage';
 
-type Fila = MedicamentoTemporalPoint & { sinRegistro: boolean; acumulado: number | null };
+export type FilaCompraConsumo = MedicamentoTemporalPoint & { sinRegistro: boolean; acumulado: number | null };
+type Fila = FilaCompraConsumo;
 type Unidad = 'eur' | 'cajas';
+
+/** Marca los periodos sin registro de compras y acumula compra − consumo en cajas desde el inicio del registro. */
+export function filasCompraConsumo(serie: MedicamentoTemporalPoint[], registroDesde: string | null): FilaCompraConsumo[] {
+  let acumulado = 0;
+  return serie.map((p) => {
+    const sinRegistro = registroDesde != null && periodoAntesDeCompras(p, registroDesde);
+    if (!sinRegistro) acumulado += p.comprasCajas - p.consumoCajas;
+    return { ...p, sinRegistro, acumulado: sinRegistro ? null : acumulado };
+  });
+}
+
+/** Etiqueta del primer periodo del tramo final sin consumo cargado; null si el último periodo tiene consumo. */
+export function inicioSinConsumoFinal(filas: FilaCompraConsumo[]): string | null {
+  let i = filas.length;
+  while (i > 0 && filas[i - 1]!.consumoGasto === 0) i--;
+  return i < filas.length && i > 0 ? filas[i]!.label : null;
+}
+
+/** Con HDD incluido, la vista semanal solo es completa si el período empieza cuando HDD ya registra por semanas. */
+export function vistaPorDefecto(datos: ComprasConsumoDatos, desde: string): 'mensual' | 'semanal' {
+  const hayHdd = datos.medicamentos.some((m) => m.via === 'IV');
+  return datos.temporalSemanal.length > 0 && (!hayHdd || desde >= INICIO_SEMANAS_HDD) ? 'semanal' : 'mensual';
+}
 
 const MAX_RESULTADOS_BUSCADOR = 40;
 
@@ -193,7 +217,20 @@ function CompraConsumoTooltip({
   );
 }
 
-function GraficoCompraConsumo({ filas, unidad, titulo }: { filas: Fila[]; unidad: Unidad; titulo: string }) {
+export function GraficoCompraConsumo({
+  filas,
+  unidad,
+  titulo,
+  anchoFijo,
+  altoFijo,
+}: {
+  filas: Fila[];
+  unidad: Unidad;
+  titulo: string;
+  /** Para impresión: el contenedor no debe re-medirse. */
+  anchoFijo?: number;
+  altoFijo?: number;
+}) {
   const tramosAnio = useMemo(() => {
     const tramos: Array<{ anio: number; x1: string; x2: string }> = [];
     for (const p of filas) {
@@ -210,7 +247,7 @@ function GraficoCompraConsumo({ filas, unidad, titulo }: { filas: Fila[]; unidad
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
       <h3 className="mb-4 text-sm font-semibold text-slate-700">{titulo}</h3>
-      <ResponsiveContainer width="100%" height={300}>
+      <ResponsiveContainer width={anchoFijo ?? '100%'} height={altoFijo ?? 300}>
         <ComposedChart data={filas} margin={{ top: 10, right: 16, left: 0, bottom: 24 }} barGap={1}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
           <XAxis
@@ -420,20 +457,19 @@ export default function ComprasConsumoTab({
 
   const hayHdd = datos?.medicamentos.some((m) => m.via === 'IV') ?? false;
   const semanalDisponible = (datos?.temporalSemanal.length ?? 0) > 0;
-  const modoDefecto = semanalDisponible && (!hayHdd || desde >= INICIO_SEMANAS_HDD) ? 'semanal' : 'mensual';
-  const modo = semanalDisponible ? modoElegido ?? modoDefecto : 'mensual';
+  const modo = datos && semanalDisponible ? modoElegido ?? vistaPorDefecto(datos, desde) : 'mensual';
 
   const filas = useMemo<Fila[]>(() => {
     if (!datos) return [];
-    const serie = modo === 'semanal' ? datos.temporalSemanal : datos.temporalMensual;
-    const registro = datos.comprasRegistroDesde;
-    let acumulado = 0;
-    return serie.map((p) => {
-      const sinRegistro = registro != null && periodoAntesDeCompras(p, registro);
-      if (!sinRegistro) acumulado += p.comprasCajas - p.consumoCajas;
-      return { ...p, sinRegistro, acumulado: sinRegistro ? null : acumulado };
-    });
+    return filasCompraConsumo(modo === 'semanal' ? datos.temporalSemanal : datos.temporalMensual, datos.comprasRegistroDesde);
   }, [datos, modo]);
+
+  const sinConsumoDesde = inicioSinConsumoFinal(filas);
+
+  function exportarPdf() {
+    const p = new URLSearchParams({ desde, hasta, cns: cns.join(','), vista: modo });
+    window.open(`/analisis/informe/compras?${p}`, '_blank');
+  }
 
   const t = datos?.totales;
   const comparableDesde = datos?.comparableDesde ?? null;
@@ -531,6 +567,18 @@ export default function ComprasConsumoTab({
             {!semanalDisponible && (
               <span className="text-[11px] text-slate-500">Vista por semanas disponible para períodos de 6 meses o menos.</span>
             )}
+            {sinConsumoDesde && (
+              <span className="text-[11px] text-amber-700">
+                Sin consumo cargado desde {modo === 'semanal' ? 'la semana del ' : ''}{sinConsumoDesde}: ahí el acumulado solo suma compras.
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={exportarPdf}
+              className="ml-auto rounded-lg border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-medium text-teal-700 shadow-sm hover:bg-teal-100"
+            >
+              Exportar PDF
+            </button>
           </div>
 
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
