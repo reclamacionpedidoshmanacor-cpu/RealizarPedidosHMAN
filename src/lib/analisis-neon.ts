@@ -527,12 +527,14 @@ async function getAnalisisRaw(
   area: string,
   desde: string,
   hasta: string,
+  cns: string[] = [],
 ): Promise<ClassifiedRow[]> {
   const sql = getDb();
   const { y: yD, m: mD } = isoToYM(desde);
   const { y: yH, m: mH } = isoToYM(hasta);
   const ymDesde = ymKey(yD, mD);
   const ymHasta = ymKey(yH, mH);
+  const todosCns = cns.length === 0;
 
   const rows = (await sql`
     SELECT
@@ -573,6 +575,7 @@ async function getAnalisisRaw(
       AND (cr.anio * 100 + cr.mes) >= ${ymDesde}
       AND (cr.anio * 100 + cr.mes) <= ${ymHasta}
       AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
+      AND (${todosCns} OR cr.cn::text = ANY(${cns}::text[]))
     GROUP BY cr.anio, cr.mes, cr.semana_iso, cr.servicio, cr.diagnostico, cr.indicacion, cr.protocolo, cr.cn, lunes_disp
     ORDER BY cr.anio, cr.mes, cr.semana_iso, cr.servicio, cr.cn
   `) as Array<{
@@ -2541,5 +2544,328 @@ export async function getAnalisisExport(
     comprasVsConsumo,
     comprasRegistroDesde,
     comprasComparadasDesde,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Compras vs consumo por medicamento: los pedidos no llevan servicio, así que
+// la comparación solo se hace por CN y sin filtros de servicio, tipo tumoral ni vía.
+// ---------------------------------------------------------------------------
+export type MedicamentoOpcionCompras = {
+  cn: string;
+  principioActivo: string;
+  nombre: string;
+  via: Via;
+  consumoGasto: number;
+};
+
+export type CompraConsumoMedicamento = {
+  cn: string;
+  principioActivo: string;
+  nombre: string;
+  via: Via;
+  unidadesPorCaja: number;
+  precioUnidad: number;
+  consumoGasto: number;
+  consumoCajas: number;
+  /** Consumo desde el inicio del registro de compras: base de la diferencia y la cobertura. */
+  consumoComparableGasto: number;
+  consumoComparableCajas: number;
+  comprasGasto: number;
+  comprasCajas: number;
+  pedidosRecibidos: number;
+  servicios: string[];
+};
+
+export type TotalesCompraConsumo = Pick<
+  CompraConsumoMedicamento,
+  | 'consumoGasto'
+  | 'consumoCajas'
+  | 'consumoComparableGasto'
+  | 'consumoComparableCajas'
+  | 'comprasGasto'
+  | 'comprasCajas'
+  | 'pedidosRecibidos'
+>;
+
+export type ComprasConsumoDatos = {
+  periodo: { desde: string; hasta: string };
+  comprasRegistroDesde: string | null;
+  /** Inicio de la comparación; null si el período termina antes del registro de compras. */
+  comparableDesde: string | null;
+  opciones: MedicamentoOpcionCompras[];
+  medicamentos: CompraConsumoMedicamento[];
+  totales: TotalesCompraConsumo;
+  serviciosConsumo: Array<{ servicio: string; servicioKey: string; gasto: number; pct: number }>;
+  temporalMensual: MedicamentoTemporalPoint[];
+  /** Vacío si el período supera los 6 meses. */
+  temporalSemanal: MedicamentoTemporalPoint[];
+};
+
+const MAX_DIAS_SEMANAL_COMPRAS = 186;
+
+async function loadOpcionesComprasConsumo(area: string, desde: string, hasta: string): Promise<MedicamentoOpcionCompras[]> {
+  const sql = getDb();
+  const { y: yD, m: mD } = isoToYM(desde);
+  const { y: yH, m: mH } = isoToYM(hasta);
+  const rows = (await sql`
+    SELECT
+      cr.cn::text                                                             AS cn,
+      MAX(COALESCE(m.principio_activo, cr.componente, ''))                    AS principio_activo,
+      MAX(COALESCE(m.nombre,           cr.medicamento, ''))                   AS nombre,
+      SUM(cr.viales_dispensados * COALESCE(m.precio_unidad, 0))::float       AS gasto,
+      BOOL_OR(
+        upper(COALESCE(m.via, '')) = 'ORAL'
+        OR lower(COALESCE(cr.tipo_terapia, '')) LIKE 'oral%'
+      )                                                                       AS es_oral
+    FROM consumo_registros cr
+    JOIN importaciones_consumo ic ON ic.id = cr.importacion_id
+    JOIN medicamentos m ON m.cn = cr.cn AND m.area = ${area}
+    WHERE ic.area = ${area}
+      AND (cr.anio * 100 + cr.mes) >= ${ymKey(yD, mD)}
+      AND (cr.anio * 100 + cr.mes) <= ${ymKey(yH, mH)}
+      AND lower(COALESCE(cr.tipo_componente, '')) NOT IN ('fungible', 'fluido')
+    GROUP BY cr.cn
+    ORDER BY gasto DESC
+  `) as Array<{ cn: string; principio_activo: string; nombre: string; gasto: number; es_oral: boolean | null }>;
+  return rows.map((r) => ({
+    cn: r.cn,
+    principioActivo: r.principio_activo,
+    nombre: r.nombre,
+    via: r.es_oral ? 'ORAL' : 'IV',
+    consumoGasto: Number(r.gasto),
+  }));
+}
+
+type CatalogoCn = { principioActivo: string; nombre: string; unidadesPorCaja: number; precioUnidad: number; via: Via };
+
+async function loadCatalogoCns(area: string, cns: string[]): Promise<Map<string, CatalogoCn>> {
+  const sql = getDb();
+  const rows = (await sql`
+    SELECT
+      cn::text                                            AS cn,
+      COALESCE(principio_activo, '')                      AS principio_activo,
+      COALESCE(nombre, '')                                AS nombre,
+      COALESCE(NULLIF(unidades_por_caja, 0), 1)::float    AS unidades_por_caja,
+      COALESCE(precio_unidad, 0)::float                   AS precio_unidad,
+      upper(COALESCE(via, '')) = 'ORAL'                   AS es_oral
+    FROM medicamentos
+    WHERE area = ${area} AND cn::text = ANY(${cns}::text[])
+  `) as Array<{ cn: string; principio_activo: string; nombre: string; unidades_por_caja: number; precio_unidad: number; es_oral: boolean }>;
+  return new Map(rows.map((r) => [r.cn, {
+    principioActivo: r.principio_activo,
+    nombre: r.nombre,
+    unidadesPorCaja: Number(r.unidades_por_caja) > 0 ? Number(r.unidades_por_caja) : 1,
+    precioUnidad: Number(r.precio_unidad),
+    via: r.es_oral ? 'ORAL' : 'IV',
+  }]));
+}
+
+async function loadPedidosRecibidosPorCn6(
+  cn6s: string[],
+  desde: string,
+  hasta: string,
+): Promise<Map<string, Array<{ fecha: string; unidades: number }>>> {
+  const out = new Map<string, Array<{ fecha: string; unidades: number }>>();
+  if (!cn6s.length || desde > hasta) return out;
+  const sql = getPedidosReadonlyClient();
+  const rows = (await sql`
+    SELECT
+      lpad(right(regexp_replace(n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') AS cn6,
+      recibido_at::text AS recibido_at,
+      fecha_documento::text AS fecha_documento,
+      por_entregar_cantidad::text AS por_entregar_cantidad,
+      cantidad_recibida::text AS cantidad_recibida,
+      cantidad_pedido::text AS cantidad_pedido
+    FROM public.orders
+    WHERE anulado = FALSE
+      AND recibido_at IS NOT NULL
+      AND recibido_at::date >= ${desde}::date
+      AND recibido_at::date <= ${hasta}::date
+      AND n_mate_prov IS NOT NULL
+      AND lpad(right(regexp_replace(n_mate_prov::text, '[^0-9]', '', 'g'), 6), 6, '0') = ANY(${cn6s}::text[])
+    ORDER BY recibido_at ASC
+  `) as Array<{ cn6: string } & PedidoRecibidoRaw>;
+  for (const row of rows) {
+    const lista = out.get(row.cn6) ?? [];
+    lista.push({
+      fecha: (row.recibido_at || row.fecha_documento).slice(0, 10),
+      unidades: cantidadUdsDesdePedido({
+        recibido: true,
+        por_entregar_cantidad: row.por_entregar_cantidad,
+        cantidad_recibida: row.cantidad_recibida,
+        cantidad_pedido: row.cantidad_pedido,
+      }),
+    });
+    out.set(row.cn6, lista);
+  }
+  return out;
+}
+
+function puntoMedVacio(anio: number, mes: number, semana: number | null, label: string, lunesRef: string | null): MedicamentoTemporalPoint {
+  return {
+    anio, mes, semana, label, lunesRef,
+    consumoCajas: 0, consumoUnidades: 0, consumoGasto: 0,
+    comprasCajas: 0, comprasUnidades: 0, comprasGasto: 0,
+    preparaciones: 0,
+  };
+}
+
+function acumularPuntoMed(dst: MedicamentoTemporalPoint, src: MedicamentoTemporalPoint): void {
+  dst.consumoCajas += src.consumoCajas;
+  dst.consumoUnidades += src.consumoUnidades;
+  dst.consumoGasto += src.consumoGasto;
+  dst.comprasCajas += src.comprasCajas;
+  dst.comprasUnidades += src.comprasUnidades;
+  dst.comprasGasto += src.comprasGasto;
+  dst.preparaciones += src.preparaciones;
+}
+
+function sumarSeriesMensuales(series: MedicamentoTemporalPoint[][], desde: string, hasta: string): MedicamentoTemporalPoint[] {
+  const puntos = monthsInRange(desde, hasta).map(({ anio, mes, label }) => puntoMedVacio(anio, mes, null, label, null));
+  const porMes = new Map(puntos.map((p) => [ymKey(p.anio, p.mes), p]));
+  for (const serie of series) {
+    for (const p of serie) {
+      const dst = porMes.get(ymKey(p.anio, p.mes));
+      if (dst) acumularPuntoMed(dst, p);
+    }
+  }
+  return puntos;
+}
+
+function sumarSeriesSemanales(series: MedicamentoTemporalPoint[][], desde: string, hasta: string): MedicamentoTemporalPoint[] {
+  const primero = weekRefFromIsoDate(desde).lunesRef;
+  const ultimo = weekRefFromIsoDate(hasta).lunesRef;
+  if (!primero || !ultimo) return [];
+  const puntos: MedicamentoTemporalPoint[] = [];
+  for (let lunes = primero; lunes <= ultimo; lunes = addDays(lunes, 7)) {
+    const ref = weekRefFromIsoDate(lunes);
+    puntos.push(puntoMedVacio(Number(lunes.slice(0, 4)), Number(lunes.slice(5, 7)), ref.semana, ref.label, lunes));
+  }
+  const porLunes = new Map(puntos.map((p) => [p.lunesRef!, p]));
+  for (const serie of series) {
+    for (const p of serie) {
+      const dst = p.lunesRef ? porLunes.get(p.lunesRef) : undefined;
+      if (dst) acumularPuntoMed(dst, p);
+    }
+  }
+  return puntos;
+}
+
+export async function getComprasConsumoDatos(
+  area: string,
+  desde: string,
+  hasta: string,
+  cnsSeleccionados: string[],
+): Promise<ComprasConsumoDatos> {
+  const cns = [...new Set(cnsSeleccionados.map((c) => c.trim()).filter(Boolean))];
+  const [opciones, registroDesde, rows, catalogo] = await Promise.all([
+    loadOpcionesComprasConsumo(area, desde, hasta),
+    loadInicioRegistroCompras().catch(() => null),
+    cns.length ? getAnalisisRaw(area, desde, hasta, cns) : Promise.resolve([] as ClassifiedRow[]),
+    cns.length ? loadCatalogoCns(area, cns) : Promise.resolve(new Map<string, CatalogoCn>()),
+  ]);
+
+  const comprasDesde = registroDesde ? maxIsoDate(desde, registroDesde) : desde;
+  const comparableDesde = comprasDesde <= hasta ? comprasDesde : null;
+  // Si el registro empieza dentro del período, el consumo comparable arranca en esa semana.
+  const inicioConsumoComparable = comparableDesde && comparableDesde > desde
+    ? weekRefFromIsoDate(comparableDesde).lunesRef || comparableDesde
+    : null;
+
+  const cn6PorCn = new Map<string, string>();
+  for (const cn of cns) {
+    const cn6 = cnClavePedidos(cn);
+    if (cn6) cn6PorCn.set(cn, cn6);
+  }
+  const pedidos = comparableDesde
+    ? await loadPedidosRecibidosPorCn6([...new Set(cn6PorCn.values())], comparableDesde, hasta)
+    : new Map<string, Array<{ fecha: string; unidades: number }>>();
+
+  const semanal = daysBetweenIso(desde, hasta) <= MAX_DIAS_SEMANAL_COMPRAS;
+  const seriesMensuales: MedicamentoTemporalPoint[][] = [];
+  const seriesSemanales: MedicamentoTemporalPoint[][] = [];
+  const medicamentos: CompraConsumoMedicamento[] = [];
+  const servicios = new Map<string, { servicio: string; servicioKey: string; gasto: number }>();
+
+  for (const cn of cns) {
+    const medRows = rows.filter((r) => r.cn === cn);
+    const cat = catalogo.get(cn);
+    const sample = medRows[0];
+    if (!cat && !sample) continue;
+    const unidadesPorCaja = cat?.unidadesPorCaja ?? sample!.unidadesPorCaja;
+    const precioUnidad = cat?.precioUnidad ?? sample!.precioUnidad;
+    const compras = pedidos.get(cn6PorCn.get(cn) ?? '') ?? [];
+
+    let consumoGasto = 0, consumoCajas = 0, consumoComparableGasto = 0, consumoComparableCajas = 0;
+    const gastoPorServicio = new Map<string, number>();
+    for (const r of medRows) {
+      consumoGasto += r.gasto;
+      consumoCajas += r.viales;
+      if (!inicioConsumoComparable || (r.lunes_disp ?? r.fecha_min) >= inicioConsumoComparable) {
+        consumoComparableGasto += r.gasto;
+        consumoComparableCajas += r.viales;
+      }
+      gastoPorServicio.set(r.servicio, (gastoPorServicio.get(r.servicio) ?? 0) + r.gasto);
+      const svc = servicios.get(r.servicioKey) ?? { servicio: r.servicio, servicioKey: r.servicioKey, gasto: 0 };
+      svc.gasto += r.gasto;
+      servicios.set(r.servicioKey, svc);
+    }
+    if (!comparableDesde) {
+      consumoComparableGasto = 0;
+      consumoComparableCajas = 0;
+    }
+    const comprasUnidades = compras.reduce((s, c) => s + c.unidades, 0);
+
+    medicamentos.push({
+      cn,
+      principioActivo: sample?.principio_activo || cat?.principioActivo || '',
+      nombre: sample?.nombre || cat?.nombre || '',
+      via: sample?.via ?? cat!.via,
+      unidadesPorCaja,
+      precioUnidad,
+      consumoGasto,
+      consumoCajas,
+      consumoComparableGasto,
+      consumoComparableCajas,
+      comprasGasto: comprasUnidades * precioUnidad,
+      comprasCajas: comprasUnidades / unidadesPorCaja,
+      pedidosRecibidos: compras.length,
+      servicios: [...gastoPorServicio.entries()].sort(([, a], [, b]) => b - a).map(([s]) => s),
+    });
+
+    seriesMensuales.push(mergeMedicamentoTemporalMensual(
+      buildCompleteMonthlyTemporal(medRows, desde, hasta),
+      buildComprasMensuales(compras, unidadesPorCaja, precioUnidad),
+    ));
+    if (semanal) {
+      seriesSemanales.push(mergeMedicamentoTemporalSemanal(
+        buildWeeklyTemporal(medRows),
+        buildComprasSemanales(compras, unidadesPorCaja, precioUnidad),
+      ));
+    }
+  }
+
+  medicamentos.sort((a, b) => b.consumoGasto - a.consumoGasto);
+  const totales: TotalesCompraConsumo = {
+    consumoGasto: 0, consumoCajas: 0, consumoComparableGasto: 0, consumoComparableCajas: 0,
+    comprasGasto: 0, comprasCajas: 0, pedidosRecibidos: 0,
+  };
+  for (const m of medicamentos) {
+    for (const k of Object.keys(totales) as Array<keyof TotalesCompraConsumo>) totales[k] += m[k];
+  }
+
+  return {
+    periodo: { desde, hasta },
+    comprasRegistroDesde: registroDesde,
+    comparableDesde,
+    opciones,
+    medicamentos,
+    totales,
+    serviciosConsumo: [...servicios.values()]
+      .sort((a, b) => b.gasto - a.gasto)
+      .map((s) => ({ ...s, pct: totales.consumoGasto > 0 ? (s.gasto / totales.consumoGasto) * 100 : 0 })),
+    temporalMensual: sumarSeriesMensuales(seriesMensuales, desde, hasta),
+    temporalSemanal: semanal ? sumarSeriesSemanales(seriesSemanales, desde, hasta) : [],
   };
 }

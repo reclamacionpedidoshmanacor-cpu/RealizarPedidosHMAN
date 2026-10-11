@@ -40,6 +40,7 @@ import type {
   Via,
   ViaCard,
 } from '@/lib/analisis-neon';
+import ComprasConsumoTab from './ComprasConsumoTab';
 
 type Preset = { label: string; desde: string; hasta: string };
 
@@ -146,7 +147,7 @@ export function compraValorizadaNota(compras: ComprasArea | null, desde: string,
   return notas.length ? notas.join(' · ') : undefined;
 }
 
-const SERIES_COLORS = {
+export const SERIES_COLORS = {
   consumo:      '#0d9488',  // teal-600: consumo cajas (gráfico evolución)
   consumoSoft:  '#14b8a6',
   gasto:        '#1d4f91',  // azul institucional oscuro (gráficos valorizado)
@@ -271,7 +272,7 @@ export function ViaSplitBar({ porVia, grande = false }: { porVia?: GastoPorVia; 
   );
 }
 
-function KpiCard({
+export function KpiCard({
   label,
   value,
   sub,
@@ -641,13 +642,13 @@ function AmbitoTooltip({
 
 type FilaGraficaMed = MedicamentoTemporalPoint & { sinRegistro: boolean; acumulado: number | null };
 
-function fmtCajasSigno(n: number): string {
+export function fmtCajasSigno(n: number): string {
   const r = Math.round(n * 10) / 10;
   return `${r > 0 ? '+' : r < 0 ? '−' : ''}${fmtQty(Math.abs(r))}`;
 }
 
 /** El período del punto termina antes de que empiece el registro de compras. */
-function periodoAntesDeCompras(p: MedicamentoTemporalPoint, registroDesde: string): boolean {
+export function periodoAntesDeCompras(p: MedicamentoTemporalPoint, registroDesde: string): boolean {
   if (p.lunesRef) {
     const domingo = new Date(`${p.lunesRef}T12:00:00Z`);
     domingo.setUTCDate(domingo.getUTCDate() + 6);
@@ -2091,6 +2092,23 @@ function apiParams(nav: NavState): URLSearchParams {
   return params;
 }
 
+type Pestana = 'consumo' | 'compras';
+
+const PESTANAS: Array<{ id: Pestana; label: string }> = [
+  { id: 'consumo', label: 'Consumo' },
+  { id: 'compras', label: 'Compras vs Consumo' },
+];
+
+function initialPestana(): Pestana {
+  if (typeof window === 'undefined') return 'consumo';
+  return new URLSearchParams(window.location.search).get('pestana') === 'compras' ? 'compras' : 'consumo';
+}
+
+function initialCnsComparar(): string[] {
+  if (typeof window === 'undefined') return [];
+  return (new URLSearchParams(window.location.search).get('cns') ?? '').split(',').map((c) => c.trim()).filter(Boolean);
+}
+
 export type NivelInforme = 'ejecutivo' | 'completo';
 
 const NIVELES_INFORME: Array<{ nivel: NivelInforme; titulo: string; descripcion: string }> = [
@@ -2184,6 +2202,8 @@ export default function AnalisisOncologiaPage() {
   const [soloSeleccionado, setSoloSeleccionado] = useState(false);
   const [menuPdfAbierto, setMenuPdfAbierto] = useState(false);
   const [medQuery, setMedQuery] = useState('');
+  const [pestana, setPestana] = useState<Pestana>(initialPestana);
+  const [cnsComparar, setCnsComparar] = useState<string[]>(initialCnsComparar);
   const [datos, setDatos] = useState<AnalisisDatos | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2225,13 +2245,18 @@ export default function AnalisisOncologiaPage() {
   });
 
   useEffect(() => {
-    const qs = navToParams(nav).toString();
-    window.history.replaceState(window.history.state, '', `${window.location.pathname}?${qs}`);
-  }, [nav]);
+    const params = navToParams(nav);
+    if (pestana === 'compras') {
+      params.set('pestana', 'compras');
+      if (cnsComparar.length) params.set('cns', cnsComparar.join(','));
+    }
+    window.history.replaceState(window.history.state, '', `${window.location.pathname}?${params}`);
+  }, [nav, pestana, cnsComparar]);
 
   const apiQuery = useMemo(() => apiParams(nav).toString(), [nav]);
 
   useEffect(() => {
+    if (pestana !== 'consumo') return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -2254,7 +2279,7 @@ export default function AnalisisOncologiaPage() {
     return () => {
       cancelled = true;
     };
-  }, [apiQuery]);
+  }, [apiQuery, pestana]);
 
   useEffect(() => {
     if (!datos || !cnSel) return;
@@ -2429,7 +2454,7 @@ export default function AnalisisOncologiaPage() {
               Consumo valorizado y compras recibidas con servicio real de base de datos y métricas en cajas equivalentes.
             </p>
           </div>
-          <div className="flex flex-wrap gap-2">
+          {pestana === 'consumo' && <div className="flex flex-wrap gap-2">
             <div className="relative">
               <button
                 type="button"
@@ -2472,7 +2497,26 @@ export default function AnalisisOncologiaPage() {
             >
               Exportar Excel
             </button>
-          </div>
+          </div>}
+        </div>
+
+        <div role="tablist" aria-label="Vistas del análisis" className="flex gap-1 border-b border-slate-200">
+          {PESTANAS.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              role="tab"
+              aria-selected={pestana === p.id}
+              onClick={() => setPestana(p.id)}
+              className={`-mb-px rounded-t-lg border px-4 py-2 text-sm font-semibold transition-colors ${
+                pestana === p.id
+                  ? 'border-slate-200 border-b-white bg-white text-teal-700'
+                  : 'border-transparent text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
         </div>
 
         <div className="rounded-xl border border-slate-200 bg-white p-3 flex flex-col gap-3">
@@ -2509,13 +2553,22 @@ export default function AnalisisOncologiaPage() {
                 className="rounded-lg border border-slate-200 px-2 py-1 text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-teal-400"
               />
             </div>
-            <p className="text-xs text-slate-500">
-              Comparativa automática: <span className="font-medium text-slate-700">{datos?.comparativa.etiqueta ?? 'periodo anterior equivalente'}</span>
-            </p>
+            {pestana === 'consumo' ? (
+              <p className="text-xs text-slate-500">
+                Comparativa automática: <span className="font-medium text-slate-700">{datos?.comparativa.etiqueta ?? 'periodo anterior equivalente'}</span>
+              </p>
+            ) : (
+              <p className="text-xs text-slate-500">Comparación por medicamento: sin filtros de servicio, tipo tumoral ni ámbito.</p>
+            )}
           </div>
         </div>
       </div>
 
+      {pestana === 'compras' && (
+        <ComprasConsumoTab desde={desde} hasta={hasta} cns={cnsComparar} onChangeCns={setCnsComparar} />
+      )}
+
+      {pestana === 'consumo' && <>
       <FiltrosActivosBar
         chips={chips}
         periodoLabel={periodoLabel}
@@ -2719,6 +2772,7 @@ export default function AnalisisOncologiaPage() {
           </div>
         </>
       )}
+      </>}
     </div>
   );
 }
